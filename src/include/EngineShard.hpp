@@ -15,6 +15,7 @@ public:
     static EngineShard* tlocal() { return shard_; } // 获取当前线程绑定的 EngineShard 实例。
     bool IsMyThread() const { return this == shard_;}
     ShardId shard_id() const { return shard_id_; } 
+    PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
     TaskQueue* GetFiberQueue() { return &queue_; }
     TaskQueue* GetSecondaryQueue() { return &queue2_; }  
     IntentLock* shard_lock() { return &shard_lock_; }    
@@ -33,7 +34,8 @@ private:
 
     bool is_replica_ = false;  // 是否为副本节点（不主动淘汰）
     bool journal_ = false;      // 是否启用 Journal（复制日志）  
-    
+    MiMemoryResource mi_resource_;
+
     IntentLock shard_lock_;  
     static __thread EngineShard* shard_;      
 };
