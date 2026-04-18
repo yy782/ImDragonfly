@@ -53,31 +53,38 @@ class DbSlice
     };
     DbSlice(const DbSlice&) = delete;
     void operator=(const DbSlice&) = delete;
+
+    void PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async = false); // 实际的删除函数
+
     ItAndUpdater FindMutable(std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
     ConstIterator FindReadOnly(std::string_view key) const; // 查找 key，返回只读迭代器
-    OpResult<ItAndUpdater> AddOrFind(std::string_view key, 
+    OpResult<ItAndUpdater> AddOrFind(const Context& cntx, std::string_view key, 
                                     std::optional<unsigned> req_obj_type); // 如果 key 存在就返回它，不存在就创建空值并返回。
-    OpResult<ItAndUpdater> AddOrUpdate(std::string_view key, PrimeValue obj,
+    OpResult<ItAndUpdater> AddOrUpdate(const Context& cntx, std::string_view key, PrimeValue obj,
                                         uint64_t expire_at_ms);
-    OpResult<ItAndUpdater> AddNew(std::string_view key, PrimeValue obj,
+    OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
                                     uint64_t expire_at_ms);
 
-  void Del(Iterator it, DbTable* db_table = nullptr, bool async = false);
-  void DelMutable(ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
+  void Del(Context cntx, Iterator it, DbTable* db_table = nullptr, bool async = false);
+  void DelMutable(Context cntx, ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
   bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
 private:
     enum class UpdateStatsMode : uint8_t {
         kReadStats,
         kMutableStats,
     };
-    OpResult<ItAndUpdater> AddOrFindInternal(std::string_view key,
-                                            std::optional<unsigned> req_obj_type);
+    OpResult<ItAndUpdater> AddOrFindInternal(const Context& cntx, std::string_view key,
+                                            std::optional<unsigned> req_obj_type); // 获取或创建一个 key
 
     OpResult<PrimeIterator> FindInternal(const Context& cntx, std::string_view key,
                                         std::optional<unsigned> req_obj_type,
                                         UpdateStatsMode stats_mode) const;
     OpResult<ItAndUpdater> FindMutableInternal(const Context& cntx, std::string_view key,
-                                             std::optional<unsigned> req_obj_type); 
+                                             std::optional<unsigned> req_obj_type);
+    OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
+                                                                std::string_view key, PrimeValue obj,
+                                                                uint64_t expire_at_ms,
+                                                                bool force_update);                                              
     EngineShard* owner_;
     DbTableArray db_arr_;
 };
