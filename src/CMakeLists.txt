@@ -16,6 +16,8 @@ add_library(storage_core STATIC ${STORAGE_SOURCES} ${STORAGE_HEADERS})
 # 包含目录
 target_include_directories(storage_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/helio
 )
 
 # 链接库

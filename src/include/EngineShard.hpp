@@ -1,8 +1,13 @@
+#pragma once
 #include <cstdint>
 #include <mimalloc.h> 
-#include "task_queue.hpp"
-#include "intent_lock.hpp"
+#include "detail/task_queue.hpp"
+#include "detail/intent_lock.hpp"
 #include "util/sliding_counter.h"
+#include "memory/mi_memory_resource.hpp"
+
+namespace dfly {
+
 using ShardId = uint16_t;
 
 class EngineShard 
@@ -39,3 +44,5 @@ private:
     IntentLock shard_lock_;  
     static __thread EngineShard* shard_;      
 };
+
+}  // namespace dfly

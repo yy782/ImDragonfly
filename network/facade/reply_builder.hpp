@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+namespace dfly{
+
 inline std::string BuildNull() {
     return "$-1\r\n";
 }
@@ -30,4 +32,5 @@ inline std::string BuildArray(const std::vector<std::string>& items) {
         res += BulkString(item);
     }
     return res;
+}
 }

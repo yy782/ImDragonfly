@@ -10,6 +10,8 @@
 #include "facade/redis_parser.hpp"
 #include "facade/reply_builder.hpp"
 
+namespace dfly{
+
 inline ShardId Shard(std::string_view key, ShardId shard_num) {
     size_t hash = 0x811c9dc5;
     for (char c : key) {
@@ -177,3 +179,5 @@ private:
     asio::streambuf buffer_;
     EngineShardSet* shard_set_;
 };
+
+}

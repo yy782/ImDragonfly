@@ -1,3 +1,6 @@
 [submodule "helio"]
 	path = helio
 	url = git@github.com:romange/helio.git
+[submodule "_deps/expected-src"]
+	path = _deps/expected-src
+	url = git@github.com:martinmoene/expected-lite.git

@@ -1,6 +1,6 @@
 #include "db_slice.hpp"
-
-
+#include <optional>
+namespace dfly{ 
 DbSlice::ItAndUpdater DbSlice::FindMutable(const Context& cntx, std::string_view key) {
   return std::move(FindMutableInternal(cntx, key, std::nullopt).value());
 }
@@ -8,7 +8,7 @@ DbSlice::ConstIterator DbSlice::FindReadOnly(const Context& cntx, std::string_vi
     auto res = FindInternal(cntx, key, std::nullopt, UpdateStatsMode::kReadStats);
     return {*res, StringOrView::FromView(key)};
 }
-OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx, string_view key,
+OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx, std::string_view key,
                                                              std::optional<unsigned> req_obj_type) {
     auto res = FindInternal(cntx, key, req_obj_type, UpdateStatsMode::kMutableStats);
     if (!res.ok()) {
@@ -20,31 +20,26 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
     // PreUpdate() might have caused a deletion of `it`
     if (res->IsOccupied()) {
         // 有效，继续
-        return {{it, AutoUpdater{cntx.db_index, key, it, this}}};
+        return {{it}};
     } else {
         return OpStatus::KEY_NOTFOUND;
     }
 }
-auto DbSlice::FindInternal(const Context& cntx, string_view key, optional<unsigned> req_obj_type,
+auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optional<unsigned> req_obj_type,
                            UpdateStatsMode stats_mode) const -> OpResult<PrimeIterator> {
     if (!IsDbValid(cntx.db_index)) {  // Can it even happen?
-        LOG(DFATAL) << "Invalid db index " << cntx.db_index;
         return OpStatus::KEY_NOTFOUND;
     }
 
     auto& db = *db_arr_[cntx.db_index];
-    PrimeIterator it = db.prime.Find(key);
+    PrimeIterator it = db.prime_.Find(key);
     int miss_weight = (stats_mode == UpdateStatsMode::kReadStats);
 
     if (!IsValid(it)) {
-        events_.misses += miss_weight;
-        db.stats.events.misses += miss_weight;
         return OpStatus::KEY_NOTFOUND;
     }
 
     if (req_obj_type.has_value() && it->second.ObjType() != req_obj_type.value()) {
-        events_.misses += miss_weight;
-        db.stats.events.misses += miss_weight;
         return OpStatus::WRONG_TYPE;
     }
     auto& pv = it->second;
@@ -52,23 +47,23 @@ auto DbSlice::FindInternal(const Context& cntx, string_view key, optional<unsign
 }
 
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, string_view key,
+OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, std::string_view key,
                                                    std::optional<unsigned> req_obj_type) {
   return AddOrFindInternal(cntx, key, req_obj_type);
 }
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, string_view key,
+OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, std::string_view key,
                                                      PrimeValue obj, uint64_t expire_at_ms) {
     return AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms, true);
 }
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, string_view key,
+OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std::string_view key,
                                                 PrimeValue obj, uint64_t expire_at_ms) {
     auto op_result = AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms, false);
     auto& res = *op_result;
     return DbSlice::ItAndUpdater{.it = res.it};
 }
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, string_view key,
+OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, std::string_view key,
                                                            std::optional<unsigned> req_obj_type) {
 
     DbTable& db = *db_arr_[cntx.db_index];
@@ -87,7 +82,7 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, 
     auto status = res.status();
     PrimeIterator it;
     try {
-        it = db.prime.InsertNew(key, PrimeValue{});
+        it = db.prime_.InsertNew(key, PrimeValue{});
     } catch (std::bad_alloc& e) {
         return OpStatus::OUT_OF_MEMORY;
     }
@@ -132,11 +127,11 @@ void DbSlice::DelMutable(Context cntx, ItAndUpdater it_updater) {
 }
 
 void DbSlice::PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async) {
-    FiberAtomicGuard guard; // 确保删除操作在纤程中是原子的
-    table->prime.Erase(del_it.GetInnerIt()); // 执行实际删除
+    util::FiberAtomicGuard guard; // 确保删除操作在纤程中是原子的
+    table->prime_.Erase(del_it.GetInnerIt()); // 执行实际删除
 }
 
-
+}  // namespace dfly
 
 
 

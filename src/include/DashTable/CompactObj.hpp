@@ -5,6 +5,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+
+namespace dfly{
+
 namespace detail
 {
 
@@ -252,4 +255,5 @@ struct CompactValue : public CompactObj {
 };
 using PrimeKey = CompactKey;
 using PrimeValue = CompactValue;
+}
 }

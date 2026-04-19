@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
-
+namespace dfly{
 namespace cmn {
 
 class StringOrView {
@@ -86,3 +86,4 @@ class StringOrView {
 };
 
 }  // namespace cmn
+}  // namespace dfly
