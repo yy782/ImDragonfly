@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <mimalloc.h> 
-#include "task_queue.hpp"
-#include "intent_lock.hpp"
+#include "detail/task_queue.hpp"
+#include "detail/intent_lock.hpp"
 #include "util/sliding_counter.h"
 using ShardId = uint16_t;
 

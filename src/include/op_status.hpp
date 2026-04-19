@@ -1,4 +1,4 @@
-
+#pragma once
 enum class OpStatus : uint16_t {
     OK,
     KEY_NOTFOUND,
