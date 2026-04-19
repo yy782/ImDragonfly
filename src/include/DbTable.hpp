@@ -10,7 +10,13 @@ using PrimeValue = detail::PrimeValue;
 using PrimeTable = DashTable<PrimeKey, PrimeValue>;
 using PrimeIterator = PrimeTable::iterator;
 using PrimeConstIterator = PrimeTable::const_iterator;
+inline bool IsValid(PrimeIterator it) {
+  return !it.is_done();
+}
 
+inline bool IsValid(PrimeConstIterator it) {
+  return !it.is_done();
+}
 using DbIndex = uint16_t;
 uint32_t thread_index;
 

@@ -399,3 +399,113 @@ private:
 
 
 
+// 判断迭代器是否结束
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+bool DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::is_done() const {
+    if (IsSingleBucket) {
+        // 单桶迭代器：只需要检查是否还在当前桶内
+        return bucket_id_ >= kTotalBuckets || slot_id_ >= kSlotNum;
+    } else {
+        // 全表迭代器：检查是否遍历完所有桶
+        return bucket_id_ >= kTotalBuckets;
+    }
+}
+
+// 检查槽位是否被占用
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+bool DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::IsOccupied() const {
+    if (is_done()) return false;
+    return owner_->buckets_[bucket_id_].GetBusyMask() & (1u << slot_id_);
+}
+
+// 获取版本号（简化版：始终返回 0，因为未实现版本控制）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+uint64_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetVersion() const {
+    return 0;
+}
+
+// 获取 key（const 版本）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+const _Key& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() const {
+    static _Key empty_key{};
+    if (is_done() || !IsOccupied()) return empty_key;
+    return owner_->buckets_[bucket_id_].GetKey(slot_id_);
+}
+
+// 获取 value（const 版本）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+const _Value& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() const {
+    static _Value empty_value{};
+    if (is_done() || !IsOccupied()) return empty_value;
+    return owner_->buckets_[bucket_id_].GetValue(slot_id_);
+}
+
+// 获取 key（非 const 版本，仅当 IsConst=false）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+typename std::enable_if<!IsConst, _Key&>::type 
+DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() {
+    static _Key empty_key{};
+    if (is_done() || !IsOccupied()) return empty_key;
+    return owner_->buckets_[bucket_id_].GetKey(slot_id_);
+}
+
+// 获取 value（非 const 版本，仅当 IsConst=false）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+typename std::enable_if<!IsConst, _Value&>::type 
+DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() {
+    static _Value empty_value{};
+    if (is_done() || !IsOccupied()) return empty_value;
+    return owner_->buckets_[bucket_id_].GetValue(slot_id_);
+}
+
+// 获取 owner（用于重新查找）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+DashTable<_Key, _Value>& 
+DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::owner() const {
+    return *owner_;
+}
+
+// 获取 Segment（简化版：返回 owner 的引用，因为只有一个 segment）
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+auto DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSegment() 
+    -> decltype(owner_->buckets_[0])& {
+    return owner_->buckets_[0];
+}
+
+// 获取桶 ID
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+uint8_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetBucketId() const {
+    return bucket_id_;
+}
+//
+// 获取槽位 ID
+template<typename _Key, typename _Value>
+template<bool IsConst, bool IsSingleBucket>
+uint8_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSlotId() const {
+    return slot_id_;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

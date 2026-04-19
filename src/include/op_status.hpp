@@ -1,31 +1,24 @@
+
+enum class OpStatus : uint16_t {
+    OK,
+    KEY_NOTFOUND,
+    WRONG_TYPE,
+    OUT_OF_MEMORY,
+};
+
 // 简化版 OpResult
 template<typename T>
 class OpResult {
 public:
-    enum class Status {
-        OK,
-        KEY_NOTFOUND,
-        WRONG_TYPE,
-        OUT_OF_MEMORY,
-    };
+
     
     // 错误构造
-    OpResult(Status status) : 
-    status_(status), 
-    has_value_(false) 
-    {}
+    OpResult(Status status) : status_(status), has_value_(false) {}
     
     // 值构造
-    OpResult(T&& value) : 
-    value_(std::move(value)), 
-    status_(Status::OK), 
-    has_value_(true) 
-    {}
-    OpResult(const T& value) : 
-    value_(value), 
-    status_(Status::OK), 
-    has_value_(true) 
-    {}
+    OpResult(T&& value) : value_(std::move(value)), status_(Status::OK), has_value_(true) {}
+    OpResult(const T& value) : value_(value), status_(Status::OK), has_value_(true) {}
+    
     bool ok() const { return status_ == Status::OK && has_value_; }
     Status status() const { return status_; }
     
@@ -43,6 +36,6 @@ public:
     
 private:
     T value_{};
-    Status status_ = Status::OK;
+    OpStatus status_ = Status::OK;
     bool has_value_ = false;
 };
