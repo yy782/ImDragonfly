@@ -1,9 +1,10 @@
+#pragma once
 #include "DashTable/dash_table.hpp"
 #include "DashTable/CompactObj.hpp"
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
-
+namespace dfly{
 using PrimeKey = detail::PrimeKey;
 using PrimeValue = detail::PrimeValue;
 
@@ -30,3 +31,4 @@ void Clear();
 size_t table_memory();
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
+}  // namespace dfly

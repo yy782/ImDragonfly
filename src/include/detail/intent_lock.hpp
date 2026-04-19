@@ -7,7 +7,7 @@
 
 #pragma once
 
-
+namespace dfly {
 
 // SHARED - can be acquired multiple times as long as other intents are absent.
 // EXCLUSIVE - is acquired only if it's the only lock recorded.
@@ -67,5 +67,7 @@ class IntentLock {
  private:
   unsigned cnt_[2] = {0, 0};
 };
+
+}  // namespace dfly
 
 

@@ -8,6 +8,7 @@
 
 #include "base/pmr/memory_resource.h"
 
+namespace dfly {
 
 // Per thread memory resource that uses mimalloc.
 class MiMemoryResource : public PMR_NS::memory_resource {
@@ -35,5 +36,7 @@ class MiMemoryResource : public PMR_NS::memory_resource {
   mi_heap_t* heap_;
   size_t used_ = 0;
 };
+
+}  // namespace dfly
 
 

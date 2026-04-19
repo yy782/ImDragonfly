@@ -4,7 +4,7 @@
 #include "mi_memory_resource.h"
 
 #include <sys/mman.h>
-
+namespace dfly{ 
 //#include "base/logging.h"
 
 void* MiMemoryResource::do_allocate(size_t size, size_t align) {
@@ -28,3 +28,4 @@ void MiMemoryResource::do_deallocate(void* ptr, size_t size, size_t align) {
 }
 
 
+}  // namespace dfly

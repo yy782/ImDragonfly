@@ -5,7 +5,9 @@
 #include "helio/util/fibers/fiberqueue_threadpool.h"
 #include "helio/util/fibers/fibers.h"
 
-using namespace  util::fb2;
+namespace dfly {
+
+using namespace util::fb2;
 
 class TaskQueue {
 public:
@@ -69,3 +71,5 @@ private:
 
     static __thread unsigned blocked_submitters_;
 };
+
+}  // namespace dfly

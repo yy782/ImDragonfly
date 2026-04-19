@@ -1,8 +1,8 @@
-
+#pragma once
 #include "EngineShard.hpp"
 #include "util/proactor_pool.h"
 
-
+namespace dfly{
 class TieredStorage;
 class ShardDocIndices;
 class BlockingController;
@@ -140,5 +140,6 @@ inline uint64_t GetCurrentTimeNs() {
 }
 
 extern EngineShardSet* shard_set;
+}  // namespace dfly
 
 

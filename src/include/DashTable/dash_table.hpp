@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
-
+#include "dash_internal.hpp"
 
 namespace dfly{
 inline size_t HashString(const std::string& s) {
@@ -245,7 +245,12 @@ public:
     }
     
     // 查找键，返回指针（nullptr 表示不存在）
-    _Value* Find(const _Key& key) {
+    template <typename U>
+    const_iterator Find(U&& key) const {
+        return Find(std::forward<U>(key));
+    }
+    template <typename U>
+    iterator Find(U&& key) {
         size_t hash = HashString(key);
         uint8_t fingerprint = hash & kFingerprintMask;
         size_t home_idx = (hash >> kFingerprintBits) % kBucketNum;
@@ -253,20 +258,23 @@ public:
         
         // 1. 检查主桶
         int slot = FindInBucket(buckets_[home_idx], key);
-        if (slot >= 0) return &buckets_[home_idx].GetValue(slot);
+        if (slot >= 0) 
+            return iterator(this, 0, home_idx, slot);
         
         // 2. 检查邻居桶
         slot = FindInBucket(buckets_[next_idx], key);
-        if (slot >= 0) return &buckets_[next_idx].GetValue(slot);
+        if (slot >= 0) 
+            return iterator(this, 0, next_idx, slot);
         
         // 3. 检查 Stash 桶
         for (size_t i = 0; i < kStashBucketNum; i++) {
             size_t stash_idx = kBucketNum + i;
             slot = FindInBucket(buckets_[stash_idx], key);
-            if (slot >= 0) return &buckets_[stash_idx].GetValue(slot);
+            if (slot >= 0) 
+                return iterator(this, 0, next_idx, slot);
         }
         
-        return nullptr;
+        return iterator();
     }
     
     // 删除键
@@ -331,9 +339,7 @@ public:
                 func(key, val);
             });
         }
-    }
-    using const_iterator = Iterator<true>;
-    using iterator = Iterator<false>;    
+    }  
 private:
     static size_t NextBucket(size_t idx) {
         return (idx + 1) % kBucketNum;
@@ -360,7 +366,18 @@ private:
 template <typename _Key, typename _Value>
 template <bool IsConst, bool IsSingleBucket>
 class DashTable<_Key, _Value>::Iterator {
+
 public:
+    Iterator()=default;
+    template <bool TIsConst = IsConst, bool TIsSingleB>
+    requires TIsConst Iterator(const Iterator<!TIsConst, TIsSingleB>& other)
+    noexcept : 
+        owner_(other.owner_),
+        seg_id_(other.seg_id_),
+        bucket_id_(other.bucket_id_),
+        slot_id_(other.slot_id_) {
+  }
+
     // 判断迭代器是否结束
     bool is_done() const;
     
@@ -371,15 +388,15 @@ public:
     uint64_t GetVersion() const;
     
     // 访问 key 和 value
-    const KeyType& first() const;
-    const ValueType& second() const;
+    const _Key& first() const;
+    const _Value& second() const;
     
     // 非 const 版本（仅当 IsConst=false 时可用）
-    KeyType& first();
-    ValueType& second();
+    _Key& first();
+    _Value& second();
     
     // 获取底层 Segment 和 Bucket
-    Segment& GetSegment();
+    //Segment& GetSegment();
     uint8_t GetBucketId() const;
     uint8_t GetSlotId() const;
     
@@ -387,9 +404,15 @@ public:
     DashTable& owner() const;
     
 private:
+    friend class DashTable;
+    Iterator(DashTable* me, uint32_t seg_id, detail::PhysicalBid bid, uint8_t sid) : 
+    owner_(me), 
+    seg_id_(seg_id), 
+    bucket_id_(bid), 
+    slot_id_(sid) { }    
     // 迭代器的位置信息
     DashTable* owner_;      // 所属的 DashTable
-    uint32_t segment_id_;   // 当前 segment 索引
+    uint32_t seg_id_;   // 当前 segment 索引
     uint8_t bucket_id_;     // 当前 bucket 索引（0-67）
     uint8_t slot_id_;       // 当前槽位索引（0-13）
     
@@ -430,7 +453,8 @@ uint64_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetVersion(
 // 获取 key（const 版本）
 template<typename _Key, typename _Value>
 template<bool IsConst, bool IsSingleBucket>
-const _Key& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() const {
+const _Key& 
+ DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() const {
     static _Key empty_key{};
     if (is_done() || !IsOccupied()) return empty_key;
     return owner_->buckets_[bucket_id_].GetKey(slot_id_);
@@ -439,7 +463,8 @@ const _Key& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() 
 // 获取 value（const 版本）
 template<typename _Key, typename _Value>
 template<bool IsConst, bool IsSingleBucket>
-const _Value& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() const {
+const _Value& 
+DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() const {
     static _Value empty_value{};
     if (is_done() || !IsOccupied()) return empty_value;
     return owner_->buckets_[bucket_id_].GetValue(slot_id_);
@@ -448,7 +473,7 @@ const _Value& DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second
 // 获取 key（非 const 版本，仅当 IsConst=false）
 template<typename _Key, typename _Value>
 template<bool IsConst, bool IsSingleBucket>
-typename std::enable_if<!IsConst, _Key&>::type 
+_Key& 
 DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() {
     static _Key empty_key{};
     if (is_done() || !IsOccupied()) return empty_key;
@@ -458,7 +483,7 @@ DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() {
 // 获取 value（非 const 版本，仅当 IsConst=false）
 template<typename _Key, typename _Value>
 template<bool IsConst, bool IsSingleBucket>
-typename std::enable_if<!IsConst, _Value&>::type 
+_Value&
 DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() {
     static _Value empty_value{};
     if (is_done() || !IsOccupied()) return empty_value;
@@ -473,13 +498,13 @@ DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::owner() const {
     return *owner_;
 }
 
-// 获取 Segment（简化版：返回 owner 的引用，因为只有一个 segment）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-auto DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSegment() 
-    -> decltype(owner_->buckets_[0])& {
-    return owner_->buckets_[0];
-}
+// // 获取 Segment（简化版：返回 owner 的引用，因为只有一个 segment）
+// template<typename _Key, typename _Value>
+// template<bool IsConst, bool IsSingleBucket>
+// auto DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSegment() 
+//     -> decltype(owner_->buckets_[0])& {
+//     return owner_->buckets_[0];
+// }
 
 // 获取桶 ID
 template<typename _Key, typename _Value>

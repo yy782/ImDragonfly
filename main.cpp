@@ -4,7 +4,7 @@
 #include <signal.h>
 #include "network/redis_server.hpp"
 #include <memory>
-
+using namespace dfly;
 std::unique_ptr<EngineShardSet> g_shard_set;
 std::unique_ptr<RedisServer> g_server;
 std::unique_ptr<asio::io_context> g_io_context;

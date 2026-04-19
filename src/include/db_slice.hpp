@@ -2,6 +2,10 @@
 #include "op_status.hpp"
 #include "detail/string_or_view.hpp"
 #include "detail/tx_base.hpp"
+
+#include "util/fibers/fibers.h"
+#include "util/fibers/synchronization.h"
+namespace dfly{
 using namespace cmn;
 class EngineShard;
 class DbSlice 
@@ -56,8 +60,8 @@ class DbSlice
 
     void PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async = false); // 实际的删除函数
 
-    ItAndUpdater FindMutable(std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
-    ConstIterator FindReadOnly(std::string_view key) const; // 查找 key，返回只读迭代器
+    ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
+    ConstIterator FindReadOnly(const Context& cntx, std::string_view key) const; // 查找 key，返回只读迭代器
     OpResult<ItAndUpdater> AddOrFind(const Context& cntx, std::string_view key, 
                                     std::optional<unsigned> req_obj_type); // 如果 key 存在就返回它，不存在就创建空值并返回。
     OpResult<ItAndUpdater> AddOrUpdate(const Context& cntx, std::string_view key, PrimeValue obj,
@@ -81,7 +85,7 @@ private:
                                         UpdateStatsMode stats_mode) const;
     OpResult<ItAndUpdater> FindMutableInternal(const Context& cntx, std::string_view key,
                                              std::optional<unsigned> req_obj_type);
-    OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
+    OpResult<DbSlice::ItAndUpdater> AddOrUpdateInternal(const Context& cntx,
                                                                 std::string_view key, PrimeValue obj,
                                                                 uint64_t expire_at_ms,
                                                                 bool force_update);                                              
@@ -107,3 +111,4 @@ void DbSlice::IteratorT<T>::LaunderIfNeeded() const {
         fiber_epoch_ = current_epoch;
     }
 }
+}  // namespace dfly

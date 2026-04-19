@@ -1,4 +1,7 @@
 #pragma once
+
+namespace dfly {
+
 enum class OpStatus : uint16_t {
     OK,
     KEY_NOTFOUND,
@@ -6,36 +9,92 @@ enum class OpStatus : uint16_t {
     OUT_OF_MEMORY,
 };
 
-// 简化版 OpResult
-template<typename T>
-class OpResult {
-public:
+class OpResultBase {
+ public:
+    OpResultBase(OpStatus st = OpStatus::OK) : st_(st) {
+    }
 
-    
-    // 错误构造
-    OpResult(Status status) : status_(status), has_value_(false) {}
-    
-    // 值构造
-    OpResult(T&& value) : value_(std::move(value)), status_(Status::OK), has_value_(true) {}
-    OpResult(const T& value) : value_(value), status_(Status::OK), has_value_(true) {}
-    
-    bool ok() const { return status_ == Status::OK && has_value_; }
-    Status status() const { return status_; }
-    
-    T& value() { 
-        if (!ok()) throw std::runtime_error("No value");
-        return value_; 
+    constexpr explicit operator bool() const {
+        return st_ == OpStatus::OK;
     }
-    
-    T value_or(T default_val) const {
-        return ok() ? value_ : default_val;
+
+    OpStatus status() const {
+        return st_;
     }
-    
-    T* operator->() { return &value(); }
-    T& operator*() { return value(); }
-    
+
+    bool operator==(OpStatus st) const {
+        return st_ == st;
+    }
+
+    bool ok() const {
+        return st_ == OpStatus::OK;
+    }
+
+    const char* DebugFormat() const;
+
 private:
-    T value_{};
-    OpStatus status_ = Status::OK;
-    bool has_value_ = false;
+    OpStatus st_;
 };
+
+template <typename V> 
+class OpResult : public OpResultBase {
+public:
+    using Type = V;
+
+    OpResult(V&& v) : v_(std::move(v)) {
+    }
+
+    OpResult(const V& v) : v_(v) {
+    }
+
+    using OpResultBase::OpResultBase;
+
+    const V& value() const {
+        return v_;
+    }
+
+    V& value() {
+        return v_;
+    }
+
+    V value_or(V v) const {
+        return status() == OpStatus::OK ? v_ : v;
+    }
+
+    V* operator->() {
+        return &v_;
+    }
+
+    V& operator*() & {
+        return v_;
+    }
+
+    V&& operator*() && {
+        return std::move(v_);
+    }
+
+    const V* operator->() const {
+        return &v_;
+    }
+
+    const V& operator*() const& {
+        return v_;
+    }
+
+private:
+    V v_{};
+};
+
+template <>
+class OpResult<void> : public OpResultBase {
+public:
+    using OpResultBase::OpResultBase;
+};
+
+inline bool operator==(OpStatus st, const OpResultBase& ob) {
+    return ob.operator==(st);
+}
+
+std::string_view StatusToMsg(OpStatus status);
+
+}  // namespace facade
