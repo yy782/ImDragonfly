@@ -1,6 +1,7 @@
 #pragma once
 #include "DashTable/dash_table.hpp"
 #include "DashTable/CompactObj.hpp"
+#include "DashTable/table_policy.hpp"
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
@@ -8,7 +9,7 @@ namespace dfly{
 using PrimeKey = detail::PrimeKey;
 using PrimeValue = detail::PrimeValue;
 
-using PrimeTable = DashTable<PrimeKey, PrimeValue>;
+using PrimeTable = DashTable<PrimeKey, PrimeValue, detail::PrimeTablePolicy>;
 using PrimeIterator = PrimeTable::iterator;
 using PrimeConstIterator = PrimeTable::const_iterator;
 inline bool IsValid(PrimeIterator it) {

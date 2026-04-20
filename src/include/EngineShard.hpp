@@ -28,7 +28,11 @@ public:
     void set_journal(bool enable) { journal_ = enable; }
     void SetReplica(bool replica) { is_replica_ = replica; }
     bool IsReplica() const { return is_replica_; }   
-    void StopPeriodicFiber(); // 停止后台任务          
+    void StopPeriodicFiber(); // 停止后台任务     
+    
+    
+    
+
 private:
     EngineShard(util::ProactorBase* pb, mi_heap_t* heap);
     void Shutdown(); 

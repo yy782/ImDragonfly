@@ -1,5 +1,11 @@
 #pragma once
 
+
+/*
+incomplete type 类型不完整
+
+*/
+
 #include <atomic>
 #include <cstring>
 #include <functional>
@@ -10,517 +16,692 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
+#include <ranges>
 #include "dash_internal.hpp"
 
 namespace dfly{
-inline size_t HashString(const std::string& s) {
-    // 使用 xxhash 风格的简单哈希
-    size_t hash = 0x811c9dc5;
-    for (char c : s) {
-        hash ^= c;
-        hash *= 0x01000193;
-    }
-    return hash;
-}
 
+// 实现缓存淘汰，分层存储暂缓
 
-constexpr size_t kSlotNum = 14;           // 每个桶的槽位数
-constexpr size_t kBucketNum = 64;         // 普通桶数量
-constexpr size_t kStashBucketNum = 4;     // 溢出桶数量
-constexpr size_t kTotalBuckets = kBucketNum + kStashBucketNum;
-constexpr size_t kFingerprintBits = 8;    // 指纹位数
-constexpr size_t kFingerprintMask = (1 << kFingerprintBits) - 1;
-
-
-class SlotBitmap {
-public:
-    SlotBitmap() : busy_(0), probe_(0), size_(0) {}
-    
-    // 查找空闲槽位
-    int FindEmptySlot() const {
-        if (size_ >= kSlotNum) return -1;
-        
-        uint32_t mask = ~busy_;
-        int slot = __builtin_ctz(mask);  // 找最低位的1
-        return slot < (int)kSlotNum ? slot : -1;
-    }
-    
-    // 设置槽位
-    void SetSlot(int slot, bool probe) {
-        busy_ |= (1u << slot);
-        if (probe) probe_ |= (1u << slot);
-        size_++;
-    }
-    
-    // 清除槽位
-    void ClearSlot(int slot) {
-        busy_ &= ~(1u << slot);
-        probe_ &= ~(1u << slot);
-        size_--;
-    }
-    
-    bool IsBusy(int slot) const { return (busy_ >> slot) & 1; }
-    bool IsProbe(int slot) const { return (probe_ >> slot) & 1; }
-    size_t Size() const { return size_; }
-    bool IsFull() const { return size_ >= kSlotNum; }
-    uint32_t GetBusyMask() const { return busy_; }
-    uint32_t GetProbeMask() const { return probe_; }
-    
-    void Clear() {
-        busy_ = 0;
-        probe_ = 0;
-        size_ = 0;
-    }
-    
-private:
-    uint32_t busy_ = 0;   // 哪些槽位被占用
-    uint32_t probe_ = 0;  // 哪些是探测槽位
-    uint8_t size_ = 0;    // 当前占用数
-};
-// Bucket (64 bytes)
-// ┌─────────────────────────────────────────────────────────────┐
-// │  Slot 0 │ Slot 1 │ Slot 2 │ ... │ Slot 12 │ Slot 13        │
-// ├─────────┼────────┼────────┼─────┼─────────┼────────────────┤
-// │ key[0]  │ key[1] │ key[2] │ ... │ key[12] │ key[13]        │
-// │ value[0]│ value[1]│...                                      │
-// │ fp[0]   │ fp[1]  │ ...                                     │
-// └─────────────────────────────────────────────────────────────┘
-
-template<typename _Key, typename _Value>
-class Bucket {
-public:
-    Bucket() : fingerprints_{0} {
-        std::memset(keys_, 0, sizeof(keys_));
-        std::memset(values_, 0, sizeof(values_));
-    }
-    
-    // 插入到指定槽位
-    void Insert(int slot, const _Key& key, const _Value& value, uint8_t fingerprint, bool probe) {
-        keys_[slot] = key;
-        values_[slot] = value;
-        fingerprints_[slot] = fingerprint;
-        bitmap_.SetSlot(slot, probe);
-    }
-    
-    // 查找指纹匹配的槽位
-    int FindByFingerprint(uint8_t fp) const {
-        uint32_t mask = bitmap_.GetBusyMask();
-        for (int i = 0; i < (int)kSlotNum && mask; i++) {
-            if ((mask & 1) && fingerprints_[i] == fp) {
-                return i;
-            }
-            mask >>= 1;
-        }
-        return -1;
-    }
-    
-    // 根据键查找（精确匹配）
-    int FindByKey(const _Key& key) const {
-        uint32_t mask = bitmap_.GetBusyMask();
-        for (int i = 0; i < (int)kSlotNum && mask; i++) {
-            if ((mask & 1) && keys_[i] == key) {
-                return i;
-            }
-            mask >>= 1;
-        }
-        return -1;
-    }
-    
-    // 尝试插入（返回槽位或-1）
-    int TryInsert(const _Key& key, const _Value& value, uint8_t fingerprint, bool probe) {
-        if (bitmap_.IsFull()) return -1;
-        int slot = bitmap_.FindEmptySlot();
-        if (slot >= 0) {
-            Insert(slot, key, value, fingerprint, probe);
-        }
-        return slot;
-    }
-    
-    // 删除槽位
-    void Delete(int slot) {
-        bitmap_.ClearSlot(slot);
-        keys_[slot] = _Key();
-        values_[slot] = _Value();
-        fingerprints_[slot] = 0;
-    }
-    
-    // 获取键值
-    const _Key& GetKey(int slot) const { return keys_[slot]; }
-    const _Value& GetValue(int slot) const { return values_[slot]; }
-    _Value& GetValue(int slot) { return values_[slot]; }
-    uint8_t GetFingerprint(int slot) const { return fingerprints_[slot]; }
-    
-    bool IsFull() const { return bitmap_.IsFull(); }
-    bool IsEmpty() const { return bitmap_.Size() == 0; }
-    size_t Size() const { return bitmap_.Size(); }
-    
-    void Clear() {
-        bitmap_.Clear();
-        for (int i = 0; i < (int)kSlotNum; i++) {
-            keys_[i] = _Key();
-            values_[i] = _Value();
-            fingerprints_[i] = 0;
-        }
-    }
-    
-    // 遍历所有槽位
-    template<typename Func>
-    void ForEach(Func&& func) const {
-        uint32_t mask = bitmap_.GetBusyMask();
-        for (int i = 0; i < (int)kSlotNum && mask; i++) {
-            if (mask & 1) {
-                func(i, keys_[i], values_[i], bitmap_.IsProbe(i));
-            }
-            mask >>= 1;
-        }
-    }
-    
-private:
-    _Key keys_[kSlotNum];
-    _Value values_[kSlotNum];
-    uint8_t fingerprints_[kSlotNum];
-    SlotBitmap bitmap_;
-};
-
-
-template<typename _Key, typename _Value>
-class DashTable {
+template<typename _Key, typename _Value, typename Policy>
+class DashTable : public detail::DashTableBase{
 public:
     DashTable(const DashTable&) = delete;
     DashTable& operator=(const DashTable&) = delete;
-    using Key_t = _Key;
-    using Value_t = _Value;
+    using Base = detail::DashTableBase;
+    using SegmentType = detail::Segment<_Key, _Value, Policy>;
+    using SegmentIterator = typename SegmentType::Iterator;
+
+    using Key_t = _Key; // not same
+    using Value_t = _Value; 
+    using Segment_t = SegmentType;
+
+
     template <bool IsConst, bool IsSingleBucket = false> 
     class Iterator;
     using const_iterator = Iterator<true>;
     using iterator = Iterator<false>;
+
+    struct BucketSet;
     using const_bucket_iterator = Iterator<true, true>;
     using bucket_iterator = Iterator<false, true>;
+    using Cursor = detail::DashCursor;
 
 
-    DashTable() : size_(0) {}
-    
-    // 插入键值对，返回是否成功（新插入或更新）
-    bool Insert(const _Key& key, const _Value& value) {
-        size_t hash = HashString(key);
-        uint8_t fingerprint = hash & kFingerprintMask;
-        size_t home_idx = (hash >> kFingerprintBits) % kBucketNum;
-        size_t next_idx = NextBucket(home_idx);
+    struct HotBuckets;
+
+
+    struct DefaultEvictionPolicy{
+        static constexpr bool can_gc = false;
+        static constexpr bool can_evict = false; 
         
-        // 1. 先检查是否已存在（更新）
-        int slot;
-        if ((slot = FindInBucket(buckets_[home_idx], key)) >= 0) {
-            buckets_[home_idx].GetValue(slot) = value;
-            return false;  // 更新，不是新插入
-        }
-        if ((slot = FindInBucket(buckets_[next_idx], key)) >= 0) {
-            buckets_[next_idx].GetValue(slot) = value;
-            return false;
-        }
-        
-        // 2. 尝试插入到负载较小的桶
-        Bucket<_Key, _Value>& target = (buckets_[home_idx].Size() <= buckets_[next_idx].Size()) 
-                                ? buckets_[home_idx] : buckets_[next_idx];
-        bool is_probe = (&target == &buckets_[next_idx]);
-        
-        slot = target.TryInsert(key, value, fingerprint, is_probe);
-        if (slot >= 0) {
-            size_++;
+        bool CanGrow(const DashTable&) {
             return true;
         }
-        
-        // 3. 尝试 Stash 桶
-        for (size_t i = 0; i < kStashBucketNum; i++) {
-            size_t stash_idx = kBucketNum + i;
-            slot = buckets_[stash_idx].TryInsert(key, value, fingerprint, false);
-            if (slot >= 0) {
-                // 记录 Stash 指针
-                buckets_[home_idx].SetStashPtr(i, fingerprint);
-                size_++;
-                return true;
-            }
+
+        void OnMove(Cursor source, Cursor dest) {
         }
-        
-        return false;  // 表满了
-    }
+
+        void RecordSplit(SegmentType* segment) {
+        }        
+
+    };
+
+    DashTable(size_t capacity_log = 1, const Policy& policy = Policy{},
+            PMR_NS::memory_resource* mr = PMR_NS::get_default_resource());
+    ~DashTable();
+    template <typename U, typename V> 
+    std::pair<iterator, bool> 
+    Insert(U&& key, V&& value) {
+        DefaultEvictionPolicy policy;
+        return InsertInternal(std::forward<U>(key), std::forward<V>(value), policy,
+                            InsertMode::kInsertIfNotFound);
+    } 
     
-    // 查找键，返回指针（nullptr 表示不存在）
-    template <typename U>
-    const_iterator Find(U&& key) const {
-        return Find(std::forward<U>(key));
+    template <typename U, typename V> 
+    iterator InsertNew(U&& key, V&& value){
+        DefaultEvictionPolicy policy;
+        return InsertNew(std::forward<U>(key), std::forward<V>(value), policy);        
+    }    
+
+    template <typename U, typename V, typename EvictionPolicy>
+    iterator InsertNew(U&& key, V&& value, EvictionPolicy& ev){
+        return InsertInternal(std::forward<U>(key), std::forward<V>(value), ev,
+                            InsertMode::kForceInsert).first;
     }
-    template <typename U>
-    iterator Find(U&& key) {
-        size_t hash = HashString(key);
-        uint8_t fingerprint = hash & kFingerprintMask;
-        size_t home_idx = (hash >> kFingerprintBits) % kBucketNum;
-        size_t next_idx = NextBucket(home_idx);
-        
-        // 1. 检查主桶
-        int slot = FindInBucket(buckets_[home_idx], key);
-        if (slot >= 0) 
-            return iterator(this, 0, home_idx, slot);
-        
-        // 2. 检查邻居桶
-        slot = FindInBucket(buckets_[next_idx], key);
-        if (slot >= 0) 
-            return iterator(this, 0, next_idx, slot);
-        
-        // 3. 检查 Stash 桶
-        for (size_t i = 0; i < kStashBucketNum; i++) {
-            size_t stash_idx = kBucketNum + i;
-            slot = FindInBucket(buckets_[stash_idx], key);
-            if (slot >= 0) 
-                return iterator(this, 0, next_idx, slot);
-        }
-        
-        return iterator();
+
+
+
+    template <typename U> 
+    const_iterator Find(U&& key) const;
+    template <typename U> 
+    iterator Find(U&& key){ 
+        return FindFirst(DoHash(key), EqPred(key)); 
     }
+  
+    template <typename Pred> 
+    iterator FindFirst(uint64_t key_hash, Pred&& pred);    
+
+
+    void Erase(iterator it);
+    size_t Erase(const Key_t& k);
     
-    // 删除键
-    bool Delete(const _Key& key) {
-        size_t hash = HashString(key);
-        uint8_t fingerprint = hash & kFingerprintMask;
-        size_t home_idx = (hash >> kFingerprintBits) % kBucketNum;
-        size_t next_idx = NextBucket(home_idx);
-        
-        // 1. 检查主桶
-        int slot = FindInBucket(buckets_[home_idx], key);
-        if (slot >= 0) {
-            buckets_[home_idx].Delete(slot);
-            size_--;
-            return true;
-        }
-        
-        // 2. 检查邻居桶
-        slot = FindInBucket(buckets_[next_idx], key);
-        if (slot >= 0) {
-            buckets_[next_idx].Delete(slot);
-            size_--;
-            return true;
-        }
-        
-        // 3. 检查 Stash 桶
-        for (size_t i = 0; i < kStashBucketNum; i++) {
-            size_t stash_idx = kBucketNum + i;
-            slot = FindInBucket(buckets_[stash_idx], key);
-            if (slot >= 0) {
-                buckets_[stash_idx].Delete(slot);
-                buckets_[home_idx].ClearStashPtr(i, fingerprint);
-                size_--;
-                return true;
-            }
-        }
-        
-        return false;
+    iterator begin() {
+        iterator it{this, 0, 0, 0};
+        it.Seek2Occupied(); // 将迭代器向前移动到下一个“被占用”的槽位。
+        return it;
     }
-    
-    size_t Size() const { return size_; }
-    bool Empty() const { return size_ == 0; }
-    
-    // 获取内存使用（估算）
-    size_t MemoryUsage() const {
-        return size_ * (sizeof(_Key) + sizeof(_Value) + sizeof(uint8_t)) + sizeof(*this);
+
+    const_iterator cbegin() const {
+        const_iterator it{this, 0, 0, 0};
+        it.Seek2Occupied();
+        return it;
     }
-    
-    // 清空所有数据
-    void Clear() {
-        for (auto& bucket : buckets_) {
-            bucket.Clear();
-        }
-        size_ = 0;
+
+    iterator end() const {
+        return iterator{};
     }
+    const_iterator cend() const {
+        return const_iterator{};
+    }    
+
+    using Base::depth;
+    using Base::Empty;
+    using Base::size;
+    using Base::unique_segments;
+
+    void Clear();
     
-    // 遍历所有键值对
-    template<typename Func>
-    void ForEach(Func&& func) const {
-        for (size_t bid = 0; bid < kTotalBuckets; bid++) {
-            buckets_[bid].ForEach([&](int slot, const _Key& key, const _Value& val, bool is_probe) {
-                func(key, val);
-            });
-        }
+    size_t NextSeg(size_t sid) const {
+        size_t delta = (1u << (global_depth_ - segment_[sid]->local_depth()));
+        return sid + delta;
     }  
+    
+    template <typename U> 
+    uint64_t DoHash(U&& k) const {   // not same
+        return policy_.HashFn(std::forward<U>(k));                       
+    } 
+    
+    
+
+
 private:
-    static size_t NextBucket(size_t idx) {
-        return (idx + 1) % kBucketNum;
+    enum class InsertMode {
+        kInsertIfNotFound,
+        kForceInsert,
+    };    
+
+
+    template <typename U, typename V, typename EvictionPolicy>
+    std::pair<iterator, bool> 
+    InsertInternal(U&& key, V&& value, EvictionPolicy& policy,
+                                            InsertMode mode);
+
+    SegmentType* ConstructSegment(uint8_t depth, uint32_t id);  
+
+
+
+
+    template <typename K> 
+    auto EqPred(const K& key) const {
+        return [p = &policy_, &key](const auto& probe) -> bool { return p->Equal(probe, key); };
     }
-    
-    int FindInBucket(const Bucket<_Key, _Value>& bucket, const _Key& key) const {
-        // 先尝试指纹快速过滤
-        size_t hash = HashString(key);
-        uint8_t fp = hash & kFingerprintMask;
-        int slot = bucket.FindByFingerprint(fp);
-        if (slot >= 0 && bucket.GetKey(slot) == key) {
-            return slot;
-        }
-        // 指纹不匹配，直接精确查找
-        return bucket.FindByKey(key);
-    }
-    
-    Bucket<_Key, _Value> buckets_[kTotalBuckets];
-    size_t size_;
+
+    void IncreaseDepth(unsigned new_depth);
+
+    template <typename EvictionPolicy> 
+    void Split(uint32_t seg_id, EvictionPolicy& ev);
+
+
+    template <typename Cb> 
+    void IterateDistinct(Cb&& cb);
+
+
+    Policy policy_;
+    std::vector<SegmentType*, PMR_NS::polymorphic_allocator<SegmentType*>> segment_;
 
 };
 
 
-template <typename _Key, typename _Value>
+template <typename _Key, typename _Value, typename Policy>
 template <bool IsConst, bool IsSingleBucket>
-class DashTable<_Key, _Value>::Iterator {
-
+class DashTable<_Key, _Value, Policy>::Iterator {
+    using Owner = std::conditional_t<IsConst, const DashTable, DashTable>;
 public:
-    Iterator()=default;
+
+    using iterator_category = std::forward_iterator_tag; // 前向迭代器
+    using difference_type = std::ptrdiff_t;
+    using IteratorPairType =
+        std::conditional_t<IsConst, 
+                            detail::IteratorPair<const Key_t, const Value_t>,
+                            detail::IteratorPair<Key_t, Value_t>>;
     template <bool TIsConst = IsConst, bool TIsSingleB>
     requires TIsConst Iterator(const Iterator<!TIsConst, TIsSingleB>& other)
     noexcept : 
         owner_(other.owner_),
         seg_id_(other.seg_id_),
         bucket_id_(other.bucket_id_),
-        slot_id_(other.slot_id_) {
-  }
+        slot_id_(other.slot_id_) {}
+    template <bool TIsSingle>
+    Iterator(const Iterator<IsConst, TIsSingle>& other) 
+    noexcept : 
+        owner_(other.owner_),
+        seg_id_(other.seg_id_),
+        bucket_id_(other.bucket_id_),
+        slot_id_(IsSingleBucket ? 0 : other.slot_id_)
+        {
 
-    // 判断迭代器是否结束
-    bool is_done() const;
+            if constexpr (IsSingleBucket) {
+                Seek2Occupied();
+            }
+        }
+    Iterator()=default; // not same
+    Iterator(const Iterator& other) = default;
+    Iterator(Iterator&& other) = default;
+    Iterator& operator=(const Iterator& other) = default;
+    Iterator& operator=(Iterator&& other) = default;   
     
-    // 检查槽位是否被占用
-    bool IsOccupied() const;
-    
-    // 获取版本号（用于乐观并发控制）
-    uint64_t GetVersion() const;
-    
-    // 访问 key 和 value
-    const _Key& first() const;
-    const _Value& second() const;
-    
-    // 非 const 版本（仅当 IsConst=false 时可用）
-    _Key& first();
-    _Value& second();
-    
-    // 获取底层 Segment 和 Bucket
-    //Segment& GetSegment();
-    uint8_t GetBucketId() const;
-    uint8_t GetSlotId() const;
-    
-    // 获取 owner（用于重新查找）
-    DashTable& owner() const;
-    
+    Iterator& operator++() {
+        ++slot_id_;
+        Seek2Occupied();
+        return *this;
+    }
+
+    Iterator& operator+=(int delta) {
+        slot_id_ += delta;
+        Seek2Occupied();
+        return *this;
+    }    
+    IteratorPairType operator->() const {
+        auto* seg = owner_->segment_[seg_id_];
+        return {seg->Key(bucket_id_, slot_id_), seg->Value(bucket_id_, slot_id_)};
+    }
+    bool is_done() const {
+        return owner_ == nullptr;
+    }
+
+    bool IsOccupied() const {
+        return (seg_id_ < owner_->segment_.size()) &&
+            ((owner_->segment_[seg_id_]->IsBusy(bucket_id_, slot_id_)));
+    }
+
+    Owner& owner() const {
+        return *owner_;
+    }
+
+    friend bool operator==(const Iterator& lhs, const Iterator& rhs) {
+        if (lhs.owner_ == nullptr && rhs.owner_ == nullptr)
+            return true;
+        return lhs.owner_ == rhs.owner_ && lhs.seg_id_ == rhs.seg_id_ &&
+            lhs.bucket_id_ == rhs.bucket_id_ && lhs.slot_id_ == rhs.slot_id_;
+    }
+
+    friend bool operator!=(const Iterator& lhs, const Iterator& rhs) {
+        return !(lhs == rhs);
+    }
 private:
     friend class DashTable;
-    Iterator(DashTable* me, uint32_t seg_id, detail::PhysicalBid bid, uint8_t sid) : 
+    Iterator(Owner* me, uint32_t seg_id, detail::PhysicalBid bid, uint8_t sid) : 
     owner_(me), 
     seg_id_(seg_id), 
     bucket_id_(bid), 
-    slot_id_(sid) { }    
+    slot_id_(sid) { } 
+
+    void Seek2Occupied();
+
     // 迭代器的位置信息
-    DashTable* owner_;      // 所属的 DashTable
+    Owner* owner_;      // 所属的 DashTable
     uint32_t seg_id_;   // 当前 segment 索引
-    uint8_t bucket_id_;     // 当前 bucket 索引（0-67）
+    detail::PhysicalBid bucket_id_;     // 当前 bucket 索引（0-67）
     uint8_t slot_id_;       // 当前槽位索引（0-13）
     
     // 对于单桶迭代器，bucket_id_ 是固定的
     // 对于全表迭代器，bucket_id_ 会递增
 };
 
+template <typename _Key, typename _Value, typename Policy>
+struct DashTable<_Key, _Value, Policy>::BucketSet { // ？？？？
+    auto buckets() const {
+        bool is_all = limit_ > ids_.size(); // 判断是连续范围还是离散列表
+        return std::views::iota(0u, limit_) | //   生成 0..limit_-1 的整数序列 
+                std::views::transform([*this, is_all](uint8_t i) {
+                uint8_t index = is_all ? i : ids_[i];// 根据模式选择桶 ID
+                return bucket_iterator{owner_, seg_id_, index}; // 生成指向该桶的迭代器
+            });
+    }
+
+    bool operator==(const BucketSet& other) const {
+        return owner_ == other.owner_ && seg_id_ == other.seg_id_ && limit_ == other.limit_ &&
+            ids_[0] == other.ids_[0] && ids_[1] == other.ids_[1];
+    }
+
+private:
+    friend class DashTable;
+
+    BucketSet(DashTable* owner, uint32_t seg_id, uint8_t limit, uint8_t ids[2])
+        : owner_{owner}, seg_id_{seg_id}, limit_{limit}, ids_{ids[0], ids[1]} {
+    }
+
+    DashTable* owner_;
+    uint32_t seg_id_;
+    uint8_t limit_; // 桶数量限制
+    std::array<uint8_t, 2> ids_;
+};
 
 
-// 判断迭代器是否结束
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-bool DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::is_done() const {
-    if (IsSingleBucket) {
-        // 单桶迭代器：只需要检查是否还在当前桶内
-        return bucket_id_ >= kTotalBuckets || slot_id_ >= kSlotNum;
-    } else {
-        // 全表迭代器：检查是否遍历完所有桶
-        return bucket_id_ >= kTotalBuckets;
+template <typename _Key, typename _Value, typename Policy>
+DashTable<_Key, _Value, Policy>::DashTable(size_t capacity_log, const Policy& policy,
+                                           PMR_NS::memory_resource* mr)
+    : Base(capacity_log), policy_(policy), segment_(mr) {
+    segment_.resize(unique_segments_);
+    for (uint32_t i = 0; i < segment_.size(); ++i) {
+        segment_[i] = ConstructSegment(global_depth_, i);  
+    }
+}
+template <typename _Key, typename _Value, typename Policy>
+DashTable<_Key, _Value, Policy>::~DashTable() {
+    Clear();
+    auto* resource = segment_.get_allocator().resource();
+    PMR_NS::polymorphic_allocator<SegmentType> pa(resource);
+    using alloc_traits = std::allocator_traits<decltype(pa)>;
+
+    IterateDistinct([&](SegmentType* seg) {
+        alloc_traits::destroy(pa, seg);
+        alloc_traits::deallocate(pa, seg, 1);
+        return false;
+    });
+}
+
+
+
+template <typename _Key, typename _Value, typename Policy>
+template <typename U>
+auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
+    uint64_t key_hash = DoHash(key);
+    uint32_t seg_id = SegmentId(key_hash);  // seg_id takes up global_depth_ high bits.
+
+    // Hash structure is like this: [SSUUUUBF], where S is segment id, U - unused,
+    // B - bucket id and F is a fingerprint. Segment id is needed to identify the correct segment.
+    // Once identified, the segment instance uses the lower part of hash to locate the key.
+    // It uses 8 least significant bits for a fingerprint and few more bits for bucket id.
+    if (auto seg_it = segment_[seg_id]->FindIt(key_hash, EqPred(key)); seg_it.found()) {
+        return {this, seg_id, seg_it.index, seg_it.slot};
+    }
+    return {};
+}
+
+template <typename _Key, typename _Value, typename Policy>
+template <typename Pred>
+auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator {
+    uint32_t seg_id = SegmentId(key_hash);
+    if (auto seg_it = segment_[seg_id]->FindIt(key_hash, pred); seg_it.found()) {
+        return {this, seg_id, seg_it.index, seg_it.slot};
+    }
+    return {};
+}
+
+
+
+
+
+
+
+template <typename _Key, typename _Value, typename Policy>
+typename DashTable<_Key, _Value, Policy>::SegmentType* 
+DashTable<_Key, _Value, Policy>::ConstructSegment(uint8_t depth, uint32_t id) {
+    auto* mr = segment_.get_allocator().resource();
+    PMR_NS::polymorphic_allocator<SegmentType> pa(mr);
+    SegmentType* res = pa.allocate(1);
+    pa.construct(res, depth, id, mr);  //   new SegmentType(depth);
+    bucket_count_ += res->num_buckets();
+    return res;
+}
+
+
+
+template <typename _Key, typename _Value, typename Policy>
+template <typename Cb>
+void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) { // ????
+    size_t i = 0;
+    while (i < segment_.size()) {
+        auto* seg = segment_[i];
+        size_t next_id = NextSeg(i);
+        if (cb(seg))
+            break;
+        i = next_id;
     }
 }
 
-// 检查槽位是否被占用
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-bool DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::IsOccupied() const {
-    if (is_done()) return false;
-    return owner_->buckets_[bucket_id_].GetBusyMask() & (1u << slot_id_);
+template <typename _Key, typename _Value, typename Policy>
+void DashTable<_Key, _Value, Policy>::Clear() {
+    auto cb = [this](SegmentType* seg) {
+        seg->TraverseAll([this, seg](const SegmentIterator& it) {
+            policy_.DestroyKey(seg->Key(it.index, it.slot));
+            policy_.DestroyValue(seg->Value(it.index, it.slot));
+        });
+        seg->Clear();
+        return false;
+    };
+
+    IterateDistinct(cb);
+    size_ = 0;
+
+    // Consider the following case: table with 8 segments overall, 4 distinct.
+    // S1, S1, S1, S1, S2, S3, S4, S4
+    /* This corresponds to the tree:
+                R
+            /  \
+            S1   /\
+                /\ S4
+            S2 S3
+        We want to collapse this tree into, say, 2 segment directory.
+        That means we need to keep S1, S2 but delete S3, S4.
+        That means, we need to move representative segments until we reached the desired size
+        and then erase all other distinct segments.
+    **********/
+    if (global_depth_ > initial_depth_) {
+        PMR_NS::polymorphic_allocator<SegmentType> pa(segment_.get_allocator());
+        using alloc_traits = std::allocator_traits<decltype(pa)>;
+
+        size_t dest = 0, src = 0;
+        size_t new_size = (1 << initial_depth_);
+        bucket_count_ = 0;
+        while (src < segment_.size()) {
+        auto* seg = segment_[src];
+        size_t next_src = NextSeg(src);  
+        if (dest < new_size) {
+            seg->set_local_depth(initial_depth_);
+            bucket_count_ += seg->num_buckets();
+            segment_[dest++] = seg;
+        } else {
+            alloc_traits::destroy(pa, seg);
+            alloc_traits::deallocate(pa, seg, 1);
+        }
+
+        src = next_src;
+        }
+
+        global_depth_ = initial_depth_;
+        unique_segments_ = new_size;
+        segment_.resize(new_size);
+    }
 }
 
-// 获取版本号（简化版：始终返回 0，因为未实现版本控制）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-uint64_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetVersion() const {
-    return 0;
+template <typename _Key, typename _Value, typename Policy>
+template <typename U, typename V, typename EvictionPolicy>
+auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, EvictionPolicy& ev,
+                                                     InsertMode mode) -> std::pair<iterator, bool> {
+    uint64_t key_hash = DoHash(key);
+    uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段
+
+    while (true) {
+        assert(target_seg_id < segment_.size());
+        SegmentType* target = segment_[target_seg_id];
+        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热， !!!!!!!!!!!!!!!!!!!
+
+        typename SegmentType::Iterator it;
+        bool res = true;
+        unsigned num_buckets = target->num_buckets();
+
+        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) {
+            ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
+        };
+
+        if (mode == InsertMode::kForceInsert) {
+            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb);  // 强制插入
+            res = it.found();  // 键已存在
+        } else {
+            std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
+                                            EqPred(key), move_cb); // 正常插入，会检查重复
+        }
+
+        if (res) {  // success
+            bucket_count_ += (target->num_buckets() - num_buckets);
+            ++size_;
+            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, true);
+        }
+
+        if (it.found()) {
+            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
+        }
+
+        bool consider_throw = true; // 决定是否抛出内存不足异常
+
+        // if constexpr (EvictionPolicy::can_evict || EvictionPolicy::can_gc) {
+
+        //     uint8_t bid[HotBuckets::kRegularBuckets];
+        //     SegmentType::FillProbeArray(key_hash, bid);
+        //     HotBuckets hotspot;
+        //     hotspot.key_hash = key_hash;
+
+        //     for (unsigned j = 0; j < HotBuckets::kRegularBuckets; ++j) {
+        //         hotspot.probes.by_type.regular_buckets[j] = bucket_iterator{this, target_seg_id, bid[j]};
+        //     }
+
+        //     for (unsigned i = 0; i < SegmentType::kStashBucketNum; ++i) {
+        //         hotspot.probes.by_type.stash_buckets[i] =
+        //             bucket_iterator{this, target_seg_id, uint8_t(Policy::kBucketNum + i), 0};
+        //     }
+        //     hotspot.num_buckets = HotBuckets::kNumBuckets;
+        //     if constexpr (EvictionPolicy::can_gc) { //  GC 回收（垃圾回收）
+        //         unsigned res = ev.GarbageCollect(hotspot, this);
+        //         garbage_collected_ += res;
+        //         if (res) {
+        //             // We succeeded to gc. Lets continue with the momentum.
+        //             // In terms of API abuse it's an awful hack, just to see if it works.
+        //             /*unsigned start = (bid[HotBuckets::kNumBuckets - 1] + 1) % kLogicalBucketNum;
+        //             for (unsigned i = 0; i < HotBuckets::kNumBuckets; ++i) {
+        //                 uint8_t id = (start + i) % kLogicalBucketNum;
+        //                 buckets.probes.arr[i] = bucket_iterator{this, target_seg_id, id};
+        //             }
+        //             garbage_collected_ += ev.GarbageCollect(buckets, this);
+        //             */
+        //         continue;
+        //         }
+        //     }
+
+        //     auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
+        //     unsigned moved = target->UnloadStash(hash_fn, move_cb); // 卸载 Stash
+        //     if (moved > 0) {
+        //         stash_unloaded_ += moved;
+        //         continue;
+        //     }
+
+        //     // We evict only if our policy says we can not grow
+        //     if constexpr (EvictionPolicy::can_evict) { //  驱逐 (Eviction)
+        //         bool can_grow = ev.CanGrow(*this);
+        //         if (can_grow) {
+        //         consider_throw = false;
+        //         } else {
+        //         unsigned res = ev.Evict(hotspot, this);
+        //         if (res)
+        //             continue;
+        //         }
+        //     }
+        // }
+
+        // if (consider_throw && !ev.CanGrow(*this)) {
+        //     throw std::bad_alloc{};
+        // }
+
+        // Split the segment.
+        if (target->local_depth() == global_depth_) { // 段分裂 (Split)
+            IncreaseDepth(global_depth_ + 1);
+
+            target_seg_id = SegmentId(key_hash);
+            assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
+        }
+
+        ev.RecordSplit(target);
+        Split(target_seg_id, ev);
+    }
+
+    return std::make_pair(iterator{}, false);
 }
 
-// 获取 key（const 版本）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-const _Key& 
- DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() const {
-    static _Key empty_key{};
-    if (is_done() || !IsOccupied()) return empty_key;
-    return owner_->buckets_[bucket_id_].GetKey(slot_id_);
+
+template <typename _Key, typename _Value, typename Policy>
+template <typename EvictionPolicy>
+void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) {
+    SegmentType* source = segment_[seg_id];
+
+    uint32_t chunk_size = 1u << (global_depth_ - source->local_depth()); // 该段覆盖的目录项数量
+    uint32_t start_idx = seg_id & (~(chunk_size - 1)); // 覆盖范围的起始索引
+    assert(segment_[start_idx] == source && segment_[start_idx + chunk_size - 1] == source);
+    uint32_t target_id = start_idx + chunk_size / 2; // 新段在目录中的起始位置
+    SegmentType* target = ConstructSegment(source->local_depth() + 1, target_id);
+
+    auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
+
+    // remove current segment bucket count.
+    bucket_count_ -= (source->num_buckets() + target->num_buckets());
+
+    source->Split(
+        std::move(hash_fn), target,
+        [&](uint32_t segment_from, detail::PhysicalBid from, uint32_t segment_to,
+            detail::PhysicalBid to) {
+            // OnMove is used to notify eviction policy about the moves across
+            // buckets/segments during the split.
+            ev.OnMove(Cursor{global_depth_, segment_from, from}, Cursor{global_depth_, segment_to, to});
+        });
+
+    // add back the updated bucket count.
+    bucket_count_ += (target->num_buckets() + source->num_buckets());
+    ++unique_segments_;
+
+    for (size_t i = target_id; i < start_idx + chunk_size; ++i) {
+        segment_[i] = target;
+    }
 }
 
-// 获取 value（const 版本）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-const _Value& 
-DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() const {
-    static _Value empty_value{};
-    if (is_done() || !IsOccupied()) return empty_value;
-    return owner_->buckets_[bucket_id_].GetValue(slot_id_);
+template <typename _Key, typename _Value, typename Policy>
+void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) {
+    assert(!segment_.empty());
+    assert(new_depth > global_depth_);
+    size_t prev_sz = segment_.size();
+    size_t repl_cnt = 1ul << (new_depth - global_depth_);
+    segment_.resize(1ul << new_depth);
+
+    for (int i = prev_sz - 1; i >= 0; --i) {
+        size_t offs = i * repl_cnt;
+        std::fill(segment_.begin() + offs, segment_.begin() + offs + repl_cnt, segment_[i]);
+        segment_[i]->set_segment_id(offs);  // update segment id.
+    }
+    global_depth_ = new_depth;
 }
 
-// 获取 key（非 const 版本，仅当 IsConst=false）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-_Key& 
-DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::first() {
-    static _Key empty_key{};
-    if (is_done() || !IsOccupied()) return empty_key;
-    return owner_->buckets_[bucket_id_].GetKey(slot_id_);
+
+
+template <typename _Key, typename _Value, typename Policy>
+size_t DashTable<_Key, _Value, Policy>::Erase(const Key_t& key) {
+    uint64_t key_hash = DoHash(key);
+    size_t x = SegmentId(key_hash);
+    auto* target = segment_[x];
+    auto it = target->FindIt(key_hash, EqPred(key));
+    if (!it.found())
+        return 0;
+
+    policy_.DestroyKey(target->Key(it.index, it.slot));
+    policy_.DestroyValue(target->Value(it.index, it.slot));
+    target->Delete(it, key_hash);
+    --size_;
+
+    return 1;
 }
 
-// 获取 value（非 const 版本，仅当 IsConst=false）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-_Value&
-DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::second() {
-    static _Value empty_value{};
-    if (is_done() || !IsOccupied()) return empty_value;
-    return owner_->buckets_[bucket_id_].GetValue(slot_id_);
+template <typename _Key, typename _Value, typename Policy>
+void DashTable<_Key, _Value, Policy>::Erase(iterator it) {
+    auto* target = segment_[it.seg_id_];
+    uint64_t key_hash = DoHash(it->first);
+    SegmentIterator sit{it.bucket_id_, it.slot_id_};
+
+    policy_.DestroyKey(it->first);
+    policy_.DestroyValue(it->second);
+
+    target->Delete(sit, key_hash);
+    --size_;
 }
 
-// 获取 owner（用于重新查找）
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-DashTable<_Key, _Value>& 
-DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::owner() const {
-    return *owner_;
+
+
+template <typename _Key, typename _Value, typename Policy>
+template <bool IsConst, bool IsSingleBucket>
+void DashTable<_Key, _Value, Policy>::Iterator<IsConst, IsSingleBucket>::Seek2Occupied() {
+    if (owner_ == nullptr)
+        return;
+    assert(seg_id_ < owner_->segment_.size());
+
+    if constexpr (IsSingleBucket) {
+        const auto& b = owner_->segment_[seg_id_]->GetBucket(bucket_id_);
+        uint32_t mask = b.GetBusy() >> slot_id_;
+        if (mask) {
+            int slot = __builtin_ctz(mask);
+            slot_id_ += slot;
+            return;
+        }
+    } else {
+        while (seg_id_ < owner_->segment_.size()) {
+            auto seg_it = owner_->segment_[seg_id_]->FindValidStartingFrom(bucket_id_, slot_id_);
+            if (seg_it.found()) {
+                bucket_id_ = seg_it.index;
+                slot_id_ = seg_it.slot;
+                return;
+            }
+            seg_id_ = owner_->NextSeg(seg_id_);
+            bucket_id_ = slot_id_ = 0;
+        }
+    }
+    owner_ = nullptr;
 }
 
-// // 获取 Segment（简化版：返回 owner 的引用，因为只有一个 segment）
-// template<typename _Key, typename _Value>
-// template<bool IsConst, bool IsSingleBucket>
-// auto DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSegment() 
-//     -> decltype(owner_->buckets_[0])& {
-//     return owner_->buckets_[0];
-// }
 
-// 获取桶 ID
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-uint8_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetBucketId() const {
-    return bucket_id_;
-}
-//
-// 获取槽位 ID
-template<typename _Key, typename _Value>
-template<bool IsConst, bool IsSingleBucket>
-uint8_t DashTable<_Key, _Value>::Iterator<IsConst, IsSingleBucket>::GetSlotId() const {
-    return slot_id_;
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }
+
+
+
+
+
+
+
 
 
 
