@@ -1,4 +1,10 @@
 #pragma once 
+
+#include <assert.h>
+#include <immintrin.h>
+
+#include "memory/memory_resource.hpp"
+
 namespace dfly {
 namespace detail {
 
@@ -246,6 +252,61 @@ public:
         std::swap(finger_arr_[slot_a], finger_arr_[slot_b]);
     }
 
+
+    template <typename F>
+    std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const{
+        unsigned om = is_probe ? stash_probe_mask_ : ~stash_probe_mask_;
+        unsigned ob = stash_busy_;
+
+        for (unsigned i = 0; i < kStashFpLen; ++i) {
+            if ((ob & 1) && (stash_arr_[i] == fp) && (om & 1)) {
+                unsigned pos = (stash_pos_ >> (i * 2)) & 3;
+                auto sid = func(i, pos);
+                if (sid != BucketBase::kNanSlot) {
+                    return std::pair<unsigned, SlotId>(pos, sid);
+                }
+            }
+            ob >>= 1;
+            om >>= 1;
+        }
+        return {0, BucketBase::kNanSlot};
+    }
+
+    void SetStashPtr(unsigned stash_pos, uint8_t meta_hash, BucketBase* next){
+        assert(stash_pos < 4);
+        if (!SetStash(meta_hash, stash_pos, false)) {
+            if (!next->SetStash(meta_hash, stash_pos, true)) {
+                overflow_count_++;
+            }
+        }
+        stash_busy_ |= kStashPresentBit;
+    }
+
+    unsigned UnsetStashPtr(uint8_t fp_hash, unsigned stash_pos, BucketBase* next){
+  /*also needs to ensure that this meta_hash must belongs to other bucket*/
+        bool clear_success = ClearStash(fp_hash, stash_pos, false);
+        unsigned res = 0;
+
+        if (!clear_success) {
+            clear_success = next->ClearStash(fp_hash, stash_pos, true);
+            res += clear_success;
+        }
+
+        if (!clear_success) {
+            assert(overflow_count_ > 0);
+            overflow_count_--;
+        }
+        unsigned mask1 = stash_busy_ & (kStashPresentBit - 1);
+        unsigned mask2 = next->stash_busy_ & (kStashPresentBit - 1);
+
+        if (((mask1 & (~stash_probe_mask_)) == 0) && (overflow_count_ == 0) &&
+            ((mask2 & next->stash_probe_mask_) == 0)) {
+            stash_busy_ &= ~kStashPresentBit;
+        }
+
+        return res;        
+    }
+
 protected:
     uint32_t CompareFP(uint8_t fp) const{
         static_assert(FpArray{}.size() <= 16);
@@ -254,7 +315,7 @@ protected:
         const __m128i key_data = _mm_set1_epi8(fp);
 
         // Loads 16 bytes of src into seg_data.
-        __m128i seg_data = mm_loadu_si128(reinterpret_cast<const __m128i*>(finger_arr_.data()));
+        __m128i seg_data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(finger_arr_.data()));
 
         // compare 16-byte vectors seg_data and key_data, dst[i] := ( a[i] == b[i] ) ? 0xFF : 0.
         __m128i rv_mask = _mm_cmpeq_epi8(seg_data, key_data);
@@ -394,6 +455,9 @@ public:
             return index != kNanBid;
         }
     };
+
+
+    static constexpr size_t kFpMask = (1 << kFingerBits) - 1;
     using Value_t = ValueType;
     using Key_t = KeyType;
     using Hash_t = uint64_t;
@@ -484,14 +548,11 @@ public:
         return GetBucket(bid).value[slot];
     }
 
-    unsigned num_buckets() const {
-        return kBucketNum + kStashBucketNum;
-    }
 
     template <typename Cb> 
     void TraverseAll(Cb&& cb) const; // 对当前 Segment 中所有被占用的槽位遍历接口
 
-
+    int MoveToOther(bool own_items, unsigned from, unsigned to);
 
     void RemoveStashReference(unsigned stash_pos, Hash_t key_hash);
 
@@ -512,6 +573,7 @@ private:
         return bid ? bid - 1 : kBucketNum - 1;
     }
 
+    auto FindValidStartingFrom(PhysicalBid bid, unsigned slot) const-> Iterator;
     Bucket bucket_[kTotalBuckets];
     uint8_t local_depth_; 
     uint32_t segment_id_;  // segment id in the table.
@@ -610,11 +672,11 @@ template <typename U, typename V>
 int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& key, V&& value, 
                                                             uint8_t meta_hash, bool probe)
 {
-    if (IsFull()) {
+    if (this->IsFull()) { // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
         return -1;  // no free space in the bucket.
     }
 
-    int slot = slotb_.FindEmptySlot();
+    int slot = this->slotb_.FindEmptySlot();
     assert(slot >= 0);
     Insert(slot, std::forward<U>(key), std::forward<V>(value), meta_hash, probe);
     return slot;    
@@ -638,10 +700,10 @@ void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
     assert(slot < kSlotNum);
     key[slot] = std::forward<U>(u);
     value[slot] = std::forward<V>(v);
-    SetHash(slot, meta_hash, probe);    
+    this->SetStash(slot, meta_hash, probe);  // not same   
 }
 template <typename Key, typename Value, typename Policy>
-template <typename U, typename V>
+template <typename This, typename Cb>
 void Segment<Key, Value, Policy>::Bucket::ForEachSlotImpl(This obj, Cb&& cb) const {
     uint32_t mask = this->GetBusy();
     uint32_t probe_mask = this->GetProbe(true);
@@ -656,8 +718,51 @@ void Segment<Key, Value, Policy>::Bucket::ForEachSlotImpl(This obj, Cb&& cb) con
 }
 
 
+template <typename Key, typename Value, typename Policy>
+template <typename Pred>
+auto Segment<Key, Value, Policy>::Bucket::FindByFp(uint8_t fp_hash, bool probe, Pred&& pred) const
+    -> SlotId {
+    unsigned mask = this->Find(fp_hash, probe);
+    if (!mask)
+        return kNanSlot;
+
+    unsigned delta = __builtin_ctz(mask);
+    mask >>= delta;
+    for (unsigned i = delta; i < kSlotNum; ++i) {
+        // Filterable just by key
+        if constexpr (std::is_invocable_v<Pred, const Key_t&>) {
+            if ((mask & 1) && pred(key[i]))
+                return i;
+        }
+
+        // Filterable by key and value
+        if constexpr (std::is_invocable_v<Pred, const Key_t&, const Value_t&>) {
+            if ((mask & 1) && pred(key[i], value[i]))
+                return i;
+        }
+
+        mask >>= 1;
+    };
+
+    return kNanSlot;
+}
 
 
+
+template <typename Key, typename Value, typename Policy>
+template <typename U, typename V, typename Pred, typename OnMoveCb>
+auto Segment<Key, Value, Policy>::Insert(U&& key, V&& value, Hash_t key_hash, Pred&& pred,
+                                         OnMoveCb&& on_move_cb) -> std::pair<Iterator, bool> {
+    Iterator it = FindIt(key_hash, pred);
+    if (it.found()) {
+        return std::make_pair(it, false); /* duplicate insert*/
+    }
+
+    it = InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true,
+                    std::forward<OnMoveCb>(on_move_cb));
+
+    return std::make_pair(it, it.found());
+}
 
 template <typename Key, typename Value, typename Policy>
 template <typename U, typename V, typename OnMoveCb>
@@ -690,7 +795,7 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
         int slot =
             neighbor.TryInsertToBucket(std::forward<U>(key), std::forward<V>(value), meta_hash, true);
         if (slot >= 0) {
-        return Iterator{nid, uint8_t(slot)};
+            return Iterator{nid, uint8_t(slot)};
         }
     }
 
@@ -908,12 +1013,6 @@ auto Segment<Key, Value, Policy>::TryMoveFromStash(unsigned stash_id, unsigned s
     }
 
     if (reg_slot >= 0) {
-        if constexpr (kUseVersion) {
-        // We maintain the invariant for the physical bucket by updating the version when
-        // the entries move between buckets.
-        uint64_t ver = bucket_[stash_bid].GetVersion();
-        bucket_[bid].UpdateVersion(ver);
-        }
         RemoveStashReference(stash_id, key_hash);
         return Iterator{bid, SlotId(reg_slot)};
     }
@@ -922,9 +1021,48 @@ auto Segment<Key, Value, Policy>::TryMoveFromStash(unsigned stash_id, unsigned s
 }
 
 
+template <typename Key, typename Value, typename Policy>
+int Segment<Key, Value, Policy>::MoveToOther(bool own_items, 
+                            /*
+                                true：移动自己的条目（非探测槽位）；
+                                false：移动别人的条目（探测槽位）                            
+                            */
+
+                        unsigned from_bid, unsigned to_bid) { // 桶满时将一个条目从当前桶移动到另一个桶，为新条目腾出空间
+    assert(from_bid < kBucketNum && to_bid < kBucketNum);
+    auto& src = bucket_[from_bid];
+    uint32_t mask = src.GetProbe(!own_items);
+    if (mask == 0) {
+        return -1;
+    }
+
+    int src_slot = __builtin_ctz(mask);
+    int dst_slot = bucket_[to_bid].TryInsertToBucket(std::forward<Key_t>(src.key[src_slot]),
+                                                    std::forward<Value_t>(src.value[src_slot]),
+                                                    src.Fp(src_slot), own_items);
+    if (dst_slot < 0)
+        return -1;
 
 
+    src.Delete(src_slot);
 
+    return src_slot;
+}
+
+template <typename Key, typename Value, typename Policy>
+auto Segment<Key, Value, Policy>::FindValidStartingFrom(PhysicalBid bid, unsigned slot) const
+    -> Iterator {
+    while (bid < kTotalBuckets) {
+        uint32_t mask = bucket_[bid].GetBusy();
+        mask >>= slot;
+        if (mask) {
+            return Iterator(bid, slot + __builtin_ctz(mask));
+        }
+        ++bid;
+        slot = 0;
+    }
+    return Iterator{};
+}
 
 }
 }

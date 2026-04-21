@@ -1,5 +1,11 @@
 #pragma once
 
+
+/*
+incomplete type 类型不完整
+
+*/
+
 #include <atomic>
 #include <cstring>
 #include <functional>
@@ -10,6 +16,7 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
+#include <ranges>
 #include "dash_internal.hpp"
 
 namespace dfly{
@@ -42,7 +49,23 @@ public:
 
 
     struct HotBuckets;
-    struct DefaultEvictionPolicy;
+
+
+    struct DefaultEvictionPolicy{
+        static constexpr bool can_gc = false;
+        static constexpr bool can_evict = false; 
+        
+        bool CanGrow(const DashTable&) {
+            return true;
+        }
+
+        void OnMove(Cursor source, Cursor dest) {
+        }
+
+        void RecordSplit(SegmentType* segment) {
+        }        
+
+    };
 
     DashTable(size_t capacity_log = 1, const Policy& policy = Policy{},
             PMR_NS::memory_resource* mr = PMR_NS::get_default_resource());
@@ -53,12 +76,33 @@ public:
         DefaultEvictionPolicy policy;
         return InsertInternal(std::forward<U>(key), std::forward<V>(value), policy,
                             InsertMode::kInsertIfNotFound);
+    } 
+    
+    template <typename U, typename V> 
+    iterator InsertNew(U&& key, V&& value){
+        DefaultEvictionPolicy policy;
+        return InsertNew(std::forward<U>(key), std::forward<V>(value), policy);        
     }    
+
+    template <typename U, typename V, typename EvictionPolicy>
+    iterator InsertNew(U&& key, V&& value, EvictionPolicy& ev){
+        return InsertInternal(std::forward<U>(key), std::forward<V>(value), ev,
+                            InsertMode::kForceInsert).first;
+    }
+
+
+
     template <typename U> 
     const_iterator Find(U&& key) const;
     template <typename U> 
-    iterator Find(U&& key){ return FindFirst(DoHash(key), EqPred(key)); }
-    
+    iterator Find(U&& key){ 
+        return FindFirst(DoHash(key), EqPred(key)); 
+    }
+  
+    template <typename Pred> 
+    iterator FindFirst(uint64_t key_hash, Pred&& pred);    
+
+
     void Erase(iterator it);
     size_t Erase(const Key_t& k);
     
@@ -93,7 +137,14 @@ public:
         return sid + delta;
     }  
     
+    template <typename U> 
+    uint64_t DoHash(U&& k) const {   // not same
+        return policy_.HashFn(std::forward<U>(k));                       
+    } 
     
+    
+
+
 private:
     enum class InsertMode {
         kInsertIfNotFound,
@@ -107,8 +158,7 @@ private:
                                             InsertMode mode);
 
     SegmentType* ConstructSegment(uint8_t depth, uint32_t id);  
-    template <typename Cb> 
-    void IterateDistinct(Cb&& cb);
+
 
 
 
@@ -215,7 +265,10 @@ private:
     owner_(me), 
     seg_id_(seg_id), 
     bucket_id_(bid), 
-    slot_id_(sid) { }    
+    slot_id_(sid) { } 
+
+    void Seek2Occupied();
+
     // 迭代器的位置信息
     Owner* owner_;      // 所属的 DashTable
     uint32_t seg_id_;   // 当前 segment 索引
@@ -297,7 +350,15 @@ auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
     return {};
 }
 
-
+template <typename _Key, typename _Value, typename Policy>
+template <typename Pred>
+auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator {
+    uint32_t seg_id = SegmentId(key_hash);
+    if (auto seg_it = segment_[seg_id]->FindIt(key_hash, pred); seg_it.found()) {
+        return {this, seg_id, seg_it.index, seg_it.slot};
+    }
+    return {};
+}
 
 
 
@@ -583,7 +644,35 @@ void DashTable<_Key, _Value, Policy>::Erase(iterator it) {
 
 
 
+template <typename _Key, typename _Value, typename Policy>
+template <bool IsConst, bool IsSingleBucket>
+void DashTable<_Key, _Value, Policy>::Iterator<IsConst, IsSingleBucket>::Seek2Occupied() {
+    if (owner_ == nullptr)
+        return;
+    assert(seg_id_ < owner_->segment_.size());
 
+    if constexpr (IsSingleBucket) {
+        const auto& b = owner_->segment_[seg_id_]->GetBucket(bucket_id_);
+        uint32_t mask = b.GetBusy() >> slot_id_;
+        if (mask) {
+            int slot = __builtin_ctz(mask);
+            slot_id_ += slot;
+            return;
+        }
+    } else {
+        while (seg_id_ < owner_->segment_.size()) {
+            auto seg_it = owner_->segment_[seg_id_]->FindValidStartingFrom(bucket_id_, slot_id_);
+            if (seg_it.found()) {
+                bucket_id_ = seg_it.index;
+                slot_id_ = seg_it.slot;
+                return;
+            }
+            seg_id_ = owner_->NextSeg(seg_id_);
+            bucket_id_ = slot_id_ = 0;
+        }
+    }
+    owner_ = nullptr;
+}
 
 
 
