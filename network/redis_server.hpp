@@ -1,55 +1,19 @@
 // network/redis_server.h
 #pragma once
 
-#include <asio.hpp>
+#include <boost/asio.hpp>
 #include <thread>
 #include <vector>
 #include <functional>
 #include "EngineShardSet.hpp"
-
+#include "cluster_support.hpp"
 #include "facade/redis_parser.hpp"
 #include "facade/reply_builder.hpp"
+#include "src/include/namespaces.hpp"
+using namespace boost;
 
 namespace dfly{
 
-inline ShardId Shard(std::string_view key, ShardId shard_num) {
-    size_t hash = 0x811c9dc5;
-    for (char c : key) {
-        hash ^= c;
-        hash *= 0x01000193;
-    }
-    return hash % shard_num;
-}
-class RedisServer {
-public:
-    RedisServer(asio::io_context& io_context, short port, EngineShardSet* shard_set)
-        : acceptor_(io_context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
-          socket_(io_context),
-          shard_set_(shard_set) {
-    }
-    
-    void Start() {
-        DoAccept();
-    }
-    
-    void Stop() {
-        acceptor_.close();
-    }
-    
-private:
-    void DoAccept() {
-        acceptor_.async_accept(socket_, [this](std::error_code ec) {
-            if (!ec) {
-                std::make_shared<RedisSession>(std::move(socket_), shard_set_)->Start();
-            }
-            DoAccept();
-        });
-    }
-    
-    asio::ip::tcp::acceptor acceptor_;
-    asio::ip::tcp::socket socket_;
-    EngineShardSet* shard_set_;
-};
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
@@ -117,16 +81,17 @@ private:
     // ==================== 命令实现 ====================
     
     std::string HandleSet(const std::string& key, const std::string& value) {
-        ShardId sid = Shard(key, shard_set_->size());
+        ShardId sid = KeySlot(std::string_view(key));
         
         // 使用 BlockingCounter 等待完成
         util::fb2::BlockingCounter bc(1);
-        bool success = false;
+
         
         shard_set_->Add(sid, [&]() {
             auto* shard = EngineShard::tlocal();
-            shard->db_slice().Set(key, value);
-            success = true;
+
+            Namespaces->GetDefaultNamespace().GetDbSlice(shard->shard_id())
+                                            .AddOrFind();
             bc.Dec();
         });
         
@@ -179,5 +144,37 @@ private:
     asio::streambuf buffer_;
     EngineShardSet* shard_set_;
 };
+class RedisServer {
+public:
+    RedisServer(asio::io_context& io_context, short port, EngineShardSet* shard_set)
+        : acceptor_(io_context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)),
+          socket_(io_context),
+          shard_set_(shard_set) {
+    }
+    
+    void Start() {
+        DoAccept();
+    }
+    
+    void Stop() {
+        acceptor_.close();
+    }
+    
+private:
+    void DoAccept() {
+        acceptor_.async_accept(socket_, [this](std::error_code ec) {
+            if (!ec) {
+                std::make_shared<RedisSession>(std::move(socket_), shard_set_)->Start();
+            }
+            DoAccept();
+        });
+    }
+    
+    asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
+    EngineShardSet* shard_set_;
+};
+
+
 
 }

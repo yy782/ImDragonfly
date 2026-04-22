@@ -89,13 +89,13 @@ void EngineShardSet::RunBriefInParallel(U&& func, P&& pred) const {
 
     for (uint32_t i = 0; i < size(); ++i) {
         if (!pred(i))
-        continue;
+            continue;
 
         bc->Add(1);
         util::ProactorBase* dest = pp_->at(i);
         dest->DispatchBrief([&func, bc]() mutable {
-        func(EngineShard::tlocal());
-        bc->Dec();
+            func(EngineShard::tlocal());
+            bc->Dec();
         });
     }
     bc->Wait();
@@ -110,15 +110,14 @@ template <typename U, typename P> void EngineShardSet::RunBlockingInParallel(U&&
 
     for (uint32_t i = 0; i < size(); ++i) {
         if (!pred(i))
-        continue;
-
+            continue;
         bc->Add(1);
         util::ProactorBase* dest = pp_->at(i);
 
         // the "Dispatch" call spawns a fiber underneath.
         dest->Dispatch([&func, bc]() mutable {
-        func(EngineShard::tlocal());
-        bc->Dec();
+            func(EngineShard::tlocal());
+            bc->Dec();
         });
     }
     bc->Wait();
@@ -129,15 +128,15 @@ ShardId Shard(std::string_view v, ShardId shard_num);
 // absl::GetCurrentTimeNanos is twice faster than clock_gettime(CLOCK_REALTIME) on my laptop
 // and 4 times faster than on a VM. it takes 5-10ns to do a call.
 
-extern uint64_t TEST_current_time_ms;
+// extern uint64_t TEST_current_time_ms;
 
-inline uint64_t GetCurrentTimeMs() {
-    return TEST_current_time_ms ? TEST_current_time_ms : absl::GetCurrentTimeNanos() / 1000000;
-}
+// inline uint64_t GetCurrentTimeMs() {
+//     return TEST_current_time_ms ? TEST_current_time_ms : absl::GetCurrentTimeNanos() / 1000000;
+// }
 
-inline uint64_t GetCurrentTimeNs() {
-    return TEST_current_time_ms ? TEST_current_time_ms * 1000000 : absl::GetCurrentTimeNanos();
-}
+// inline uint64_t GetCurrentTimeNs() {
+//     return TEST_current_time_ms ? TEST_current_time_ms * 1000000 : absl::GetCurrentTimeNanos();
+// }
 
 extern EngineShardSet* shard_set;
 }  // namespace dfly

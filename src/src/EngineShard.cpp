@@ -1,10 +1,12 @@
 #include "EngineShard.hpp"
 #include "../include/memory/stateless_alloceator.hpp"
 
+
 namespace dfly{
 constexpr size_t kQueueLen = 64;
 thread_local mi_heap_t* data_heap = nullptr; // 线程本地堆指针
 __thread EngineShard* EngineShard::shard_ = nullptr;
+
 void EngineShard::InitThreadLocal(ProactorBase* pb) {
     data_heap = mi_heap_new();
     void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(EngineShard), alignof(EngineShard));

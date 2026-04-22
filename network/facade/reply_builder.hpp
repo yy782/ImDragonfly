@@ -29,7 +29,7 @@ inline std::string BuildBulkString(const std::string& s) {
 inline std::string BuildArray(const std::vector<std::string>& items) {
     std::string res = "*" + std::to_string(items.size()) + "\r\n";
     for (const auto& item : items) {
-        res += BulkString(item);
+        res += BuildString(item);
     }
     return res;
 }
