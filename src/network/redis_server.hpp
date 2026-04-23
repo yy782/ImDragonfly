@@ -5,14 +5,14 @@
 #include <thread>
 #include <vector>
 #include <functional>
-#include "engine_shard_set.hpp"
-#include "cluster_support.hpp"
+#include "sharding/engine_shard_set.hpp"
+#include "sharding/cluster_support.hpp"
 #include "facade/redis_parser.hpp"
 #include "facade/reply_builder.hpp"
-#include "namespaces.hpp"
+#include "sharding/namespaces.hpp"
 
-#include "dispatch_command.hpp"
-#include "common.hpp"
+#include "command_layer/dispatch_command.hpp"
+#include "detail/common.hpp"
 using namespace boost;
 
 namespace dfly{

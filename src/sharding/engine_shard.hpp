@@ -4,7 +4,7 @@
 #include "detail/task_queue.hpp"
 #include "detail/intent_lock.hpp"
 #include "util/sliding_counter.h"
-#include "memory/mi_memory_resource.hpp"
+#include "detail/mi_memory_resource.hpp"
 
 namespace dfly {
 

@@ -20,7 +20,7 @@ inline bool IsValid(PrimeConstIterator it) {
     return !it.is_done();
 }
 using DbIndex = uint16_t;
-uint32_t thread_index;
+//uint32_t thread_index;
 
 
 struct DbTable : 

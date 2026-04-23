@@ -1,7 +1,8 @@
-// simplified_compact_obj.h
+
 #pragma once
 
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@ namespace detail
 class RobjWrapper;
 }
 
+// namespace PMR_NS = base::pmr;
 
 using CompactObjType = unsigned;
 
@@ -29,11 +31,11 @@ protected:
         INT_TAG = 17,
         SMALL_TAG = 18, // 小字符串
         ROBJ_TAG = 19, // Redis 对象（list/hash/set） 
-    };    
+    };
     enum EncodingEnum : uint8_t;
 public:
     struct StrEncoding;
-    using MemoryResource = PMR_NS::memory_resource;  
+    // using MemoryResource = PMR_NS::memory_resource;  
     
     explicit CompactObj(bool is_key)
         : is_key_{is_key}, taglen_{0} {  // default - empty string
@@ -47,7 +49,7 @@ public:
         operator=(std::move(cs));
     };    
 
-    ~CompactObj();
+    ~CompactObj()=default;
 
     CompactObj& operator=(CompactObj&& o) noexcept; 
 
@@ -58,6 +60,7 @@ public:
 
 
     void SetString(std::string_view str);
+
     std::string ToString() const{
         return u_.str_;
     }
@@ -69,7 +72,7 @@ protected:
     union U {
         std::string str_;
         U():str_(){}
-        ~U(){}
+        ~U(){} // 需要显式析构函数
     }u_;
 
     const bool is_key_ : 1; 
@@ -117,41 +120,6 @@ struct CompactValue : public CompactObj {
     }
 };
 
-
-#include "redis/redis_aux.hpp"
-
-void CompactObj::SetString(std::string_view str) {
-    u_.str_=str;
-}
-
-CompactObj& CompactObj::operator=(CompactObj&& o) noexcept {
-    SetMeta(o.taglen_);
-
-    u_.str_=o.u_.str_;
-
-    return *this;
-}
-
-void CompactObj::SetMeta(uint8_t taglen) {
-    taglen_ = taglen;
-}
-
-uint64_t CompactObj::HashCode() const {
-    return std::hash<std::string>{}(u_.str_); // !!!!!!!!!!!!!!!!!!!
-}
-
-uint64_t CompactObj::HashCode(std::string_view str) {
-  return std::hash<std::string_view>{}(str);
-}
-
-void CompactObj::Reset() {
-    taglen_ = 0;
-}
-
-
-CompactObjType CompactObj::ObjType() const {
-    return OBJ_STRING;
-}
 
 
 

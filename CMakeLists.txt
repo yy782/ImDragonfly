@@ -48,26 +48,23 @@ endif()
 # 主代码
 add_subdirectory(helio)
 add_subdirectory(src)
-# 网络层
-add_subdirectory(network)
 # 测试
 if(BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
 # 主程序
-add_executable(storage_engine main.cpp)
-target_include_directories(storage_engine PRIVATE
+add_executable(imdragonfly main.cpp)
+target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/network
-    ${CMAKE_SOURCE_DIR}/src/include
     ${CMAKE_SOURCE_DIR}/helio
 )
 
 
-target_link_libraries(storage_engine PRIVATE
-    network
-    storage_core
+target_link_libraries(imdragonfly PRIVATE
+    incomplete-imdragonfly
     mimalloc
-    helio
+    fibers2
+    base
+    io
 )
