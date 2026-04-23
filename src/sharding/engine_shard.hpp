@@ -1,10 +1,10 @@
 #pragma once
 #include <cstdint>
 #include <mimalloc.h> 
-#include "detail/task_queue.hpp"
-#include "detail/intent_lock.hpp"
+#include "task_queue.hpp"
+#include "intent_lock.hpp"
 #include "util/sliding_counter.h"
-#include "detail/mi_memory_resource.hpp"
+#include "mi_memory_resource.hpp"
 
 namespace dfly {
 

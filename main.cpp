@@ -1,10 +1,14 @@
 // main.cpp
+// ./imdragonfly
 #include <boost/asio.hpp>
 #include <iostream>
 #include <signal.h>
-#include "network/redis_server.hpp"
+#include "src/network/redis_server.hpp"
 #include "util/fibers/pool.h"
 #include <memory>
+#include <absl/flags/flag.h>
+
+ABSL_FLAG(bool, cache_mode, false, "Enable cache mode");
 
 using namespace dfly;
 std::unique_ptr<RedisServer> g_server;
@@ -22,7 +26,7 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     auto pp = std::unique_ptr<util::fb2::Pool>(util::fb2::Pool::IOUring(256, 4));
-    
+    pp->Run();
     //  创建 EngineShardSet
     shard_set = new EngineShardSet(pp.get());
     

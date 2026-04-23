@@ -1,5 +1,5 @@
 #include "compact_obj.hpp"
-#include "redis/redis_aux.hpp"
+#include "redis_aux.hpp"
 namespace dfly{
 
 
@@ -36,7 +36,7 @@ CompactObjType CompactObj::ObjType() const {
     return OBJ_STRING;
 }
 
-CompactObj& CompactObj::operator=(CompactObj&& o) noexcept{
-    u_.str_=std::move(o.u_.str_);
+bool CompactObj::operator==(const CompactObj& o) noexcept{
+    return u_.str_==o.u_.str_;
 }
 }

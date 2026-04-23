@@ -67,4 +67,8 @@ target_link_libraries(imdragonfly PRIVATE
     fibers2
     base
     io
+    absl::flags
+    absl::strings
+    absl::hash
+    absl::base
 )

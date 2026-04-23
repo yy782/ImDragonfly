@@ -1,8 +1,10 @@
 #include "engine_shard_set.hpp"
-#include "detail/common.hpp"
+#include "common.hpp"
 #include "namespaces.hpp"
 
 namespace dfly{
+
+EngineShardSet* shard_set = nullptr;
 
 void EngineShardSet::Init(uint32_t sz, std::function<void()> shard_handler) {
     shards_.reset(new EngineShard*[sz]);

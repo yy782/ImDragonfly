@@ -52,7 +52,7 @@ public:
     ~CompactObj()=default;
 
     CompactObj& operator=(CompactObj&& o) noexcept; 
-
+    bool operator==(const CompactObj& o) noexcept;
     uint64_t HashCode() const;
     static uint64_t HashCode(std::string_view str);
 
@@ -101,7 +101,9 @@ struct CompactKey : public CompactObj {
         return *this;
     }
 
-    bool operator==(std::string_view sl) const;
+    bool operator==(std::string_view sl) const{
+        return u_.str_==std::string(sl);
+    }
 
     bool operator!=(std::string_view sl) const {
         return !(*this == sl);
