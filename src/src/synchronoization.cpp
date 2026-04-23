@@ -2,8 +2,8 @@
 // See LICENSE for licensing terms.
 //
 
-#include "include/synchronization.hpp"
-#include "include/engine_shard_set.hpp"
+#include "synchronization.hpp"
+#include "engine_shard_set.hpp"
 
 namespace dfly {
 

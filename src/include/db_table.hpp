@@ -1,6 +1,6 @@
 #pragma once
 #include "DashTable/dash_table.hpp"
-#include "DashTable/CompactObj.hpp"
+#include "DashTable/compact_obj.hpp"
 #include "DashTable/table_policy.hpp"
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
