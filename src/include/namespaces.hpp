@@ -10,12 +10,12 @@
 #include <string>
 #include <vector>
 
-#include "detail/common_types.h"
+#include "detail/common_types.hpp"
 #include "util/fibers/synchronization.h"
 
 namespace dfly {
 
-class BlockingController;
+// class BlockingController;
 class DbSlice;
 class EngineShard;
 
@@ -26,12 +26,12 @@ class Namespace {
   DbSlice& GetCurrentDbSlice();
 
   DbSlice& GetDbSlice(ShardId sid);
-  BlockingController* GetOrAddBlockingController(EngineShard* shard);
-  BlockingController* GetBlockingController(ShardId sid);
+  // BlockingController* GetOrAddBlockingController(EngineShard* shard);
+  // BlockingController* GetBlockingController(ShardId sid);
 
  private:
   std::vector<std::unique_ptr<DbSlice>> shard_db_slices_;
-  std::vector<std::unique_ptr<BlockingController>> shard_blocking_controller_;
+  // std::vector<std::unique_ptr<BlockingController>> shard_blocking_controller_;
 
   friend class Namespaces;
 };

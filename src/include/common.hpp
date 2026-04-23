@@ -1,4 +1,4 @@
-
+#pragma once // common.hpp
 
 namespace dfly {
 class Namespaces;

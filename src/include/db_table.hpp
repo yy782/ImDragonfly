@@ -1,6 +1,6 @@
 #pragma once
 #include "DashTable/dash_table.hpp"
-#include "DashTable/CompactObj.hpp"
+#include "DashTable/compact_obj.hpp"
 #include "DashTable/table_policy.hpp"
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
@@ -13,11 +13,11 @@ using PrimeTable = DashTable<PrimeKey, PrimeValue, detail::PrimeTablePolicy>;
 using PrimeIterator = PrimeTable::iterator;
 using PrimeConstIterator = PrimeTable::const_iterator;
 inline bool IsValid(PrimeIterator it) {
-  return !it.is_done();
+    return !it.is_done();
 }
 
 inline bool IsValid(PrimeConstIterator it) {
-  return !it.is_done();
+    return !it.is_done();
 }
 using DbIndex = uint16_t;
 uint32_t thread_index;
@@ -28,6 +28,11 @@ struct DbTable :
 {
 
 PrimeTable prime_;
+DbIndex index_;
+// uint32_t thread_index_;
+  explicit DbTable(PMR_NS::memory_resource* mr, DbIndex index); // explicit多余???
+  ~DbTable();
+
 void Clear();
 size_t table_memory();
 };

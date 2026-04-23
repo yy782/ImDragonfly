@@ -61,6 +61,7 @@ target_include_directories(storage_engine PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/network
     ${CMAKE_SOURCE_DIR}/src/include
+    ${CMAKE_SOURCE_DIR}/helio
 )
 
 

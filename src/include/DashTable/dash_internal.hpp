@@ -508,6 +508,11 @@ public:
     size_t local_depth() const {
         return local_depth_;
     }
+
+    void set_local_depth(uint32_t depth) {
+        local_depth_ = depth;
+    }
+
     unsigned num_buckets() const {
         return kBucketNum + kStashBucketNum;
     }

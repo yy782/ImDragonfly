@@ -1,4 +1,4 @@
-#include "DbTable.hpp"
+#include "db_table.hpp"
 #include "op_status.hpp"
 #include "detail/string_or_view.hpp"
 #include "detail/tx_base.hpp"
@@ -10,7 +10,7 @@ using namespace cmn;
 class EngineShard;
 class DbSlice 
 {
-    
+public:    
     template <typename T> 
     class IteratorT {
     public:
@@ -52,9 +52,14 @@ class DbSlice
     using Context = DbContext;   
     struct ItAndUpdater 
     {
-        Iterator it;
-        bool is_new = false;
+        Iterator it_;
+        bool is_new_ = false;
     };
+
+
+    DbSlice(uint32_t index, bool cache_mode, EngineShard* owner);
+    ~DbSlice();
+
     DbSlice(const DbSlice&) = delete;
     void operator=(const DbSlice&) = delete;
 
@@ -85,10 +90,18 @@ private:
                                         UpdateStatsMode stats_mode) const;
     OpResult<ItAndUpdater> FindMutableInternal(const Context& cntx, std::string_view key,
                                              std::optional<unsigned> req_obj_type);
-    OpResult<DbSlice::ItAndUpdater> AddOrUpdateInternal(const Context& cntx,
-                                                                std::string_view key, PrimeValue obj,
-                                                                uint64_t expire_at_ms,
-                                                                bool force_update);                                              
+    OpResult<ItAndUpdater> AddOrUpdateInternal(const Context& cntx,
+                                                            std::string_view key, PrimeValue obj,
+                                                            uint64_t expire_at_ms,
+                                                            bool force_update);         
+                                                            
+                                                            
+
+
+    void CreateDb(DbIndex index);
+
+
+    ShardId shard_id_;
     EngineShard* owner_;
     DbTableArray db_arr_;
 };

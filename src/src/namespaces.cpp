@@ -2,10 +2,10 @@
 // See LICENSE for licensing terms.
 //
 
-#include "include/namespaces.hpp"
-#include "include/engine_shard_set.hpp"
-#include "include/db_slice.hpp"
-
+#include "namespaces.hpp"
+#include "engine_shard_set.hpp"
+#include "db_slice.hpp"
+#include "synchronization.hpp"
 
 
 
@@ -20,14 +20,13 @@ ABSL_DECLARE_FLAG(bool, cache_mode);
 
 namespace dfly {
 
-using namespace std;
 
 Namespace::Namespace() {
     shard_db_slices_.resize(shard_set->size());
-    shard_blocking_controller_.resize(shard_set->size());
+    // shard_blocking_controller_.resize(shard_set->size());
     shard_set->RunBriefInParallel([&](EngineShard* es) { // 并行执行
         ShardId sid = es->shard_id();
-        shard_db_slices_[sid] = make_unique<DbSlice>(sid, absl::GetFlag(FLAGS_cache_mode), es);
+        shard_db_slices_[sid] = std::make_unique<DbSlice>(sid, absl::GetFlag(FLAGS_cache_mode), es);
     });
 }
 
@@ -83,10 +82,11 @@ Namespace& Namespaces::GetDefaultNamespace() const {
 }
 
 Namespace& Namespaces::GetOrInsert(std::string_view ns) {
+    std::string nns=std::string(ns);                // not same
     {
         // Try to look up under a shared lock
         dfly::SharedLock guard(mu_);
-        auto it = namespaces_.find(ns);
+        auto it = namespaces_.find(nns);            
         if (it != namespaces_.end()) {
         return it->second;
         }
@@ -95,7 +95,7 @@ Namespace& Namespaces::GetOrInsert(std::string_view ns) {
     {
         // Key was not found, so we create create it under unique lock
         util::fb2::LockGuard guard(mu_);
-        return namespaces_[ns];
+        return namespaces_[nns];
     }
 }
 

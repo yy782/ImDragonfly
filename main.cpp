@@ -4,6 +4,7 @@
 #include <signal.h>
 #include "network/redis_server.hpp"
 #include <memory>
+#include "helio/util/iouring_proactor_pool.h"
 using namespace dfly;
 std::unique_ptr<EngineShardSet> g_shard_set;
 std::unique_ptr<RedisServer> g_server;
@@ -20,7 +21,7 @@ int main(int argc, char* argv[]) {
     //  初始化信号处理
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
-    auto pp = std::make_unique<util::ProactorPool>(4);  // 4 个线程
+    auto pp = std::make_unique<util::IoUringProactorPool>(4);  // 4 个线程
     
     //  创建 EngineShardSet
     g_shard_set = std::make_unique<EngineShardSet>(pp.get());
