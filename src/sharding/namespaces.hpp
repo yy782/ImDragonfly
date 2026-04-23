@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "detail/common_types.hpp"
+#include "common_types.hpp"
 #include "util/fibers/synchronization.h"
 
 namespace dfly {

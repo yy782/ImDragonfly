@@ -4,6 +4,8 @@
 
 namespace dfly{
 
+EngineShardSet* shard_set = nullptr;
+
 void EngineShardSet::Init(uint32_t sz, std::function<void()> shard_handler) {
     shards_.reset(new EngineShard*[sz]);
     size_ = sz;

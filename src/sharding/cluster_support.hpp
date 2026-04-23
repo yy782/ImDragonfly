@@ -1,6 +1,6 @@
 #pragma once 
 #include "engine_shard_set.hpp"
-#include "detail/common_types.hpp"
+#include "common_types.hpp"
 namespace dfly{
 inline SlotId KeySlot(std::string_view key){
     size_t hash = 0x811c9dc5;
