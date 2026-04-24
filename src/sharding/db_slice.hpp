@@ -74,9 +74,17 @@ public:
     OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
                                     uint64_t expire_at_ms);
 
-  void Del(Context cntx, Iterator it, DbTable* db_table = nullptr, bool async = false);
-  void DelMutable(Context cntx, ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
-  bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
+    void Del(Context cntx, Iterator it, DbTable* db_table = nullptr, bool async = false);
+    void DelMutable(Context cntx, ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
+    bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
+
+
+
+    Iterator ExpireIfNeeded(const Context& cntx, Iterator it) const;
+    PrimeIterator ExpireIfNeeded(const Context& cntx, PrimeIterator it) const;    
+    void ExpireAllIfNeeded();
+
+
 private:
     enum class UpdateStatsMode : uint8_t {
         kReadStats,

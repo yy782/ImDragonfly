@@ -29,8 +29,9 @@ class CompactObj{
 protected:
     enum TagEnum : uint8_t {
         INT_TAG = 17,
-        SMALL_TAG = 18, // 小字符串
+        STR_TAG = 18, // 字符串
         ROBJ_TAG = 19, // Redis 对象（list/hash/set） 
+        SDS_TTL_TAG = 24, 
     };
     enum EncodingEnum : uint8_t;
 public:
@@ -69,8 +70,18 @@ public:
 protected:
     void SetMeta(uint8_t taglen);
 
+    struct TtlString {
+        std::string str_;    // 可能内存泄漏，FIXME
+        uint64_t exp_ms_;  
+
+        std::string_view view() const;
+    } __attribute__((packed));
+
     union U {
         std::string str_;
+
+        TtlString str_ttl_;
+
         U():str_(){}
         ~U(){} // 需要显式析构函数
     }u_;
@@ -86,8 +97,9 @@ struct CompactKey : public CompactObj {
     explicit CompactKey(std::string_view str) : CompactObj{str, true} {
     }
 
-    bool HasExpire() const ;
-
+    bool HasExpire() const{
+    return taglen_ == SDS_TTL_TAG;
+  }
 
     void SetExpireTime(uint64_t abs_ms);
 

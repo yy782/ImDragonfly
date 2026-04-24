@@ -166,7 +166,51 @@ void DbSlice::CreateDb(DbIndex db_ind) {
 }
 
 
+DbSlice::Iterator DbSlice::ExpireIfNeeded(const Context& cntx, Iterator it) const {
+    return Iterator::FromPrime(ExpireIfNeeded(cntx, it.GetInnerIt()));
+}
 
+PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) const {
+    if (!it->first.HasExpire()) {
+        LOG(DFATAL) << "Invalid call to ExpireIfNeeded";
+        return it;
+    }
+
+    int64_t expire_time = it->first.GetExpireTime();
+
+    if (int64_t(cntx.time_now_ms) < expire_time ) {
+        return it;
+    }
+
+    string scratch;
+    string_view key = it->first.GetSlice(&scratch);
+
+    auto& db = db_arr_[cntx.db_index];
+    const_cast<DbSlice*>(this)->PerformDeletionAtomic(Iterator(it, StringOrView::FromView(key)),
+                                                        db.get());
+
+    return PrimeIterator{};
+}
+
+void DbSlice::ExpireAllIfNeeded() {
+
+    for (DbIndex db_index = 0; db_index < db_arr_.size(); db_index++) {
+        if (!db_arr_[db_index])
+            continue;
+        auto& db = *db_arr_[db_index];
+
+        auto cb = [&](PrimeTable::iterator prime_it) {
+            if (prime_it->first.HasExpire()) {
+                ExpireIfNeeded(Context{nullptr, db_index, GetCurrentTimeMs()}, prime_it);
+            }
+        };
+
+        PrimeTable::Cursor cursor;
+        do {
+            cursor = db.prime.Traverse(cursor, cb);
+        } while (cursor);
+    }
+}
 
 
 

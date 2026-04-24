@@ -554,6 +554,10 @@ public:
     }
 
 
+
+    template <typename Cb, typename HashFn>
+    bool TraverseLogicalBucket(LogicalBid bid, HashFn&& hfun, Cb&& cb) const;
+
     template <typename Cb> 
     void TraverseAll(Cb&& cb) const; // 对当前 Segment 中所有被占用的槽位遍历接口
 
@@ -664,7 +668,7 @@ public:
     uint64_t token() const {
         return val_;
     }
-    explicit operator bool() const {
+    explicit operator bool() const { // 为什么要 explicit
         return val_ != 0;
     }
 private:
@@ -1068,6 +1072,87 @@ auto Segment<Key, Value, Policy>::FindValidStartingFrom(PhysicalBid bid, unsigne
     }
     return Iterator{};
 }
+
+
+
+template <typename Key, typename Value, typename Policy>
+template <typename Cb, typename HashFn>
+bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&& hfun,
+                                                        Cb&& cb) const {
+    assert(bid < kBucketNum);
+
+    const Bucket& b = bucket_[bid];
+    bool found = false;
+    if (b.GetProbe(false)) {  // Check items that this bucket owns.
+        b.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+            if (!probe) {
+                found = true;
+                cb(Iterator{bid, slot});
+            }
+        });
+    }
+
+    uint8_t nid = NextBid(bid);
+    const Bucket& next = GetBucket(nid);
+
+    // check for probing entries in the next bucket, i.e. those that should reside in b.
+    if (next.GetProbe(true)) {
+        next.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+            if (probe) {
+                found = true;
+                assert(HomeIndex(hfun(bucket->key[slot])) == bid);
+                cb(Iterator{nid, slot});
+            }
+        });
+    }
+
+    // Finally go over stash buckets and find those entries that belong to b.
+    if (b.HasStash()) {
+        // do not bother with overflow fps. Just go over all the stash buckets.
+        for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
+        const auto& stashb = bucket_[j];
+        stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+            if (HomeIndex(hfun(bucket->key[slot])) == bid) {
+                found = true;
+                cb(Iterator{j, slot});
+            }
+        });
+        }
+    }
+
+    return found;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }
 }

@@ -130,9 +130,9 @@ ShardId Shard(std::string_view v, ShardId shard_num);
 
 // extern uint64_t TEST_current_time_ms;
 
-// inline uint64_t GetCurrentTimeMs() {
-//     return TEST_current_time_ms ? TEST_current_time_ms : absl::GetCurrentTimeNanos() / 1000000;
-// }
+inline uint64_t GetCurrentTimeMs() {  // not same 
+    return absl::GetCurrentTimeNanos() / 1000000;
+}
 
 // inline uint64_t GetCurrentTimeNs() {
 //     return TEST_current_time_ms ? TEST_current_time_ms * 1000000 : absl::GetCurrentTimeNanos();

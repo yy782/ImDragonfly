@@ -142,7 +142,9 @@ public:
         return policy_.HashFn(std::forward<U>(k));                       
     } 
     
-    
+    template <typename _Key, typename _Value, typename Policy>
+    template <typename Cb>
+    auto DashTable<_Key, _Value, Policy>::Traverse(Cursor curs, Cb&& cb) -> Cursor;    
 
 
 private:
@@ -676,7 +678,37 @@ void DashTable<_Key, _Value, Policy>::Iterator<IsConst, IsSingleBucket>::Seek2Oc
 
 
 
+template <typename _Key, typename _Value, typename Policy>
+template <typename Cb>
+auto DashTable<_Key, _Value, Policy>::Traverse(Cursor curs, Cb&& cb) -> Cursor {
+    uint32_t sid = curs.segment_id(global_depth_);
+    uint8_t bid = curs.bucket_id();
 
+    if (bid >= Policy::kBucketNum || sid >= segment_.size())
+        return Cursor::end();
+
+    auto hash_fun = [this](const auto& k) { return policy_.HashFn(k); };
+
+    bool fetched = false;
+    do {
+        SegmentType* s = segment_[sid];
+        assert(s);
+
+        auto dt_cb = [&](const SegmentIterator& it) { cb(iterator{this, sid, it.index, it.slot}); };
+
+        fetched = s->TraverseLogicalBucket(bid, hash_fun, std::move(dt_cb));
+        sid = NextSeg(sid);
+        if (sid >= segment_.size()) {
+        sid = 0;
+        ++bid;
+
+        if (bid >= Policy::kBucketNum)
+            return Cursor::end();
+        }
+    } while (!fetched);
+
+    return Cursor{global_depth_, sid, bid};
+}
 
 
 
