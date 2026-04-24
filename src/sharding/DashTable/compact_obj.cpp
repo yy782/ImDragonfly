@@ -39,4 +39,47 @@ CompactObjType CompactObj::ObjType() const {
 bool CompactObj::operator==(const CompactObj& o) noexcept{
     return u_.str_==o.u_.str_;
 }
+
+
+void CompactKey::SetExpireTime(uint64_t abs_ms) {
+    if (taglen_ == SDS_TTL_TAG) {
+        u_.str_ttl_.exp_ms_ = abs_ms;
+        return;
+    }
+
+    u_.str_ttl_.str_ = u_.str_;
+    u_.str_ttl_.exp_ms_ = abs_ms;
+    taglen_ = SDS_TTL_TAG;
+}
+
+bool CompactKey::ClearExpireTime() {
+    if (taglen_ != SDS_TTL_TAG)
+        return false;
+
+    std::string str=u_.str_ttl_.str_;
+    SetMeta(18);
+
+    SetString(str);
+    return true;
+}
+
+uint64_t CompactKey::GetExpireTime() const {
+    if (taglen_ != SDS_TTL_TAG)
+        return 0;
+    return u_.str_ttl_.exp_ms_;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 }
