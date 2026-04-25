@@ -135,6 +135,13 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx
 
     auto& it = res.it_;
     it->second = std::move(obj);
+
+    if (expire_at_ms) {
+        AddExpire(cntx.db_index, it, expire_at_ms);
+    } else {
+        RemoveExpire(cntx.db_index, it);
+    }
+
     return op_result;
 }
 
@@ -164,6 +171,31 @@ void DbSlice::CreateDb(DbIndex db_ind) {
         db.reset(new DbTable{owner_->memory_resource(), db_ind});
     }
 }
+
+
+void DbSlice::AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at) {
+    main_it->first.SetExpireTime(at);
+}
+
+bool DbSlice::RemoveExpire(DbIndex db_ind, const Iterator& main_it) {
+    if (!main_it->first.HasExpire())
+        return false;
+
+    main_it->first.ClearExpireTime();
+
+    return true;
+}
+
+
+
+
+
+
+
+
+
+
+
 
 
 DbSlice::Iterator DbSlice::ExpireIfNeeded(const Context& cntx, Iterator it) const {

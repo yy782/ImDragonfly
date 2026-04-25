@@ -80,6 +80,9 @@ public:
 
 
 
+  void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);
+
+  bool RemoveExpire(DbIndex db_ind, const Iterator& main_it);
     Iterator ExpireIfNeeded(const Context& cntx, Iterator it) const;
     PrimeIterator ExpireIfNeeded(const Context& cntx, PrimeIterator it) const;    
     void ExpireAllIfNeeded();
