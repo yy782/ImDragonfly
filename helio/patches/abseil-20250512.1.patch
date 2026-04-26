@@ -1,0 +1,34 @@
+diff --git a/absl/container/internal/inlined_vector.h b/absl/container/internal/inlined_vector.h
+index b0d3f07..e1431d3 100644
+--- a/absl/container/internal/inlined_vector.h
++++ b/absl/container/internal/inlined_vector.h
+@@ -1056,9 +1056,16 @@ void Storage<T, N, A>::SwapN(ElementwiseConstructPolicy, Storage* other,
+ 
+ template <typename T, size_t N, typename A>
+ void Storage<T, N, A>::SwapInlinedElements(MemcpyPolicy, Storage* other) {
++#if !defined(__clang__) && defined(__GNUC__)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
++#endif
+   Data tmp = data_;
+   data_ = other->data_;
+   other->data_ = tmp;
++#if !defined(__clang__) && defined(__GNUC__)
++#pragma GCC diagnostic pop
++#endif
+ }
+ 
+ template <typename T, size_t N, typename A>
+diff --git a/absl/debugging/internal/symbolize.h b/absl/debugging/internal/symbolize.h
+index 5593fde..d3a2ba2 100644
+--- a/absl/debugging/internal/symbolize.h
++++ b/absl/debugging/internal/symbolize.h
+@@ -28,7 +28,7 @@
+ 
+ #ifdef ABSL_INTERNAL_HAVE_ELF_SYMBOLIZE
+ #error ABSL_INTERNAL_HAVE_ELF_SYMBOLIZE cannot be directly set
+-#elif defined(__ELF__) && defined(__GLIBC__) && !defined(__native_client__) \
++#elif defined(__ELF__) && !defined(__native_client__) \
+       && !defined(__asmjs__) && !defined(__wasm__)
+ #define ABSL_INTERNAL_HAVE_ELF_SYMBOLIZE 1
+ 

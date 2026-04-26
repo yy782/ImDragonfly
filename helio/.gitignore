@@ -1,0 +1,16 @@
+build/*
+build-*
+clang/*
+clang-*
+.vscode/*.db
+.vscode/settings.json
+third_party/*
+genfiles/*
+*.sublime-*
+.tags
+third_party
+*.pyc
+_deps
+*.orig
+_codeql_detected_source_root
+_codeql_build_dir

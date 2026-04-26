@@ -1,0 +1,208 @@
+name: ci-tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0/3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }} on (${{ matrix.os.arch }})
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix:
+        os:
+          - image: ubuntu-24.04
+            arch: amd64
+          - image: ubuntu-24.04-arm
+            arch: arm64
+
+        # Test of these containers
+        config:
+          - name: alpine-clang
+            container: alpine-dev:latest
+            compiler: {cxx: clang++, c: clang}
+            build_type: Debug
+          - name: gcc-coverage
+            container: ubuntu-dev:24
+            compiler: {cxx: g++, c: gcc}
+            build_type: Debug
+            cxx_flags: "-fprofile-arcs -ftest-coverage -Werror"
+          - name: fedora30-gcc14
+            container: fedora:30-gcc14
+            compiler: {cxx: g++, c: gcc}
+            build_type: Debug
+          - name: ubuntu24-gcc
+            container: ubuntu-dev:24
+            compiler: {cxx: g++, c: gcc}
+            build_type: Debug
+          - name: ubuntu24-clang-asan
+            container: ubuntu-dev:24
+            compiler: {cxx: clang++, c: clang}
+            build_type: Debug
+            cmake_flags: "-DHELIO_USE_SANITIZER=ON"
+
+        exclude:
+          - os: { arch: arm64 }
+            config: { container: "alpine-dev:latest" }
+
+    timeout-minutes: 50
+    runs-on: ${{matrix.os.image}}
+    container:
+      image: ghcr.io/romange/${{ matrix.config.container }}
+
+      # Seems that docker by default prohibits running iouring syscalls
+      options: --security-opt seccomp=unconfined
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache third_party and _deps
+      uses: actions/cache@v4
+      with:
+        path: |
+          $GITHUB_WORKSPACE/build/third_party
+          $GITHUB_WORKSPACE/build/_deps
+        key: ${{ runner.os }}-${{ matrix.os.arch }}-${{ matrix.config.compiler.cxx }}-deps-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.os.arch }}-${{ matrix.config.compiler.cxx }}-deps-
+          ${{ runner.os }}-${{ matrix.os.arch }}-deps-
+
+    - name: ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+          key: ${{ runner.os }}-${{ matrix.os.arch }}-${{ matrix.config.compiler.cxx }}-ccache
+
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      run: |
+          uname -a
+          ulimit -a
+
+          cat /proc/cpuinfo
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{matrix.config.build_type}} \
+            -GNinja -DLEGACY_GLOG=OFF \
+            -DCMAKE_C_COMPILER="${{matrix.config.compiler.c}}" \
+            -DCMAKE_CXX_COMPILER="${{matrix.config.compiler.cxx}}" \
+            -DCMAKE_CXX_FLAGS_DEBUG="${{matrix.config.cxx_flags}}" \
+            ${{matrix.config.cmake_flags}} \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+    - name: Build
+      run: |
+          cd build
+
+          ninja -k 5 base/all io/all strings/all util/all echo_server ping_iouring_server \
+            https_client_cli s3_demo gcs_demo
+          ls -la
+
+    - name: Test
+      timeout-minutes: 2
+      run: |
+          cd build
+
+          # Create a rule that automatically prints stacktrace upon segfault
+          cat > ./init.gdb <<EOF
+          catch signal SIGSEGV
+          command
+          bt
+          end
+          EOF
+
+          gdb -ix ./init.gdb --batch -ex r --args ./fibers_test --logtostderr
+          GLOG_logtostderr=1 ctest -V -L CI
+
+    - name: Start Minio
+      if: matrix.config.name == 'ubuntu24-gcc' && matrix.os.arch == 'amd64'
+      run: |
+        curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o /tmp/minio
+        chmod +x /tmp/minio
+        mkdir -p /tmp/minio-data/ci-test-bucket
+        MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin /tmp/minio server /tmp/minio-data &
+        for i in $(seq 1 20); do
+          curl -sf http://localhost:9000/minio/health/live && break || sleep 1
+        done
+        echo "MINIO_ENDPOINT=http://localhost:9000" >> $GITHUB_ENV
+        echo "MINIO_ACCESS_KEY=minioadmin"          >> $GITHUB_ENV
+        echo "MINIO_SECRET_KEY=minioadmin"          >> $GITHUB_ENV
+        echo "MINIO_BUCKET=ci-test-bucket"          >> $GITHUB_ENV
+
+    - name: Start Azurite
+      if: matrix.config.name == 'ubuntu24-gcc' && matrix.os.arch == 'amd64'
+      run: |
+        curl -fsSL https://nodejs.org/dist/v22.16.0/node-v22.16.0-linux-x64.tar.xz | tar -xJ -C /tmp
+        export PATH=/tmp/node-v22.16.0-linux-x64/bin:$PATH
+        npm install -g azurite
+        azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck &
+        ready=0
+        for i in $(seq 1 20); do
+          if curl -sf http://localhost:10000/ 2>/dev/null || \
+             [ "$(curl -so /dev/null -w '%{http_code}' http://localhost:10000/ 2>/dev/null)" = "400" ]; then
+            ready=1
+            break
+          fi
+          sleep 1
+        done
+        test "$ready" -eq 1
+        echo "AZURITE_ENDPOINT=http://localhost:10000" >> $GITHUB_ENV
+
+    - name: Authenticate to AWS
+      if: >
+        matrix.config.name == 'ubuntu24-gcc' && matrix.os.arch == 'amd64' &&
+        (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ secrets.AWS_CI_S3_ROLE_ARN }}
+        aws-region: us-east-1
+
+    - name: Python tests (echo_server)
+      if: contains(matrix.config.name, 'ubuntu') || contains(matrix.config.name, 'alpine')
+      env:
+        S3_TEST_BUCKET: ${{ secrets.S3_REGTEST_BUCKET }}
+      run: |
+          PIP_BREAK_SYSTEM_PACKAGES=1 pip install pytest azure-storage-blob
+          pwd  # /__w/helio/helio
+          cat <<EOF > asan_suppressions.txt
+          leak:ares_malloc_zero
+          leak:ares_getaddrinfo
+          leak:ares_append_addrinfo_node
+          leak:ares_strdup
+          leak:ares_append_ai_node
+          EOF
+
+          export LSAN_OPTIONS=suppressions=$(pwd)/asan_suppressions.txt
+          cd tests
+          python3 -m pytest -q -s
+    - name: Upload logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries
+        path: |
+          $GITHUB_WORKSPACE/build/fibers_test
+          $GITHUB_WORKSPACE/build/fiber_socket_test
+          $GITHUB_WORKSPACE/build/accept_server_test
+
+    - name: Coverage
+      if: matrix.name == 'gcc-coverage'
+      run: |
+          lcov -c -d $GITHUB_WORKSPACE/build -o coverage.info
+          lcov --remove coverage.info -o coverage.info '/usr/*' '*/_deps/*' '*/third_party/*'
+
+    - name: Upload coverage to Codecov
+      if: matrix.name == 'gcc-coverage'
+      uses: codecov/codecov-action@v4
+      with:
+         files: ./coverage.info
+         fail_ci_if_error: false
