@@ -1,3 +1,5 @@
+#pragma once
+
 #include "db_table.hpp"
 #include "op_status.hpp"
 #include "string_or_view.hpp"

@@ -8,6 +8,19 @@ using DbIndex = uint16_t;
 using ShardId = uint16_t;
 
 using SlotId = std::uint16_t;
+
+
+constexpr DbIndex kInvalidDbId = DbIndex(-1);
+constexpr ShardId kInvalidSid = ShardId(-1);
+
+
+
+
+
+
+
+
+
 class EngineShard;
 class Transaction;
 class DbSlice;

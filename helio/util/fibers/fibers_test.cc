@@ -1,0 +1,1329 @@
+// Copyright 2023, Roman Gershman.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
+#include "util/fibers/fibers.h"
+
+#include <absl/strings/str_cat.h>
+#include <gmock/gmock.h>
+
+#include <atomic>
+#include <boost/intrusive/slist.hpp>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
+#include "base/gtest.h"
+#include "base/logging.h"
+#include "base/mpmc_bounded_queue.h"
+#include "util/fibers/detail/fiber_interface.h"
+#include "util/fibers/detail/wait_queue.h"
+#include "util/fibers/epoll_proactor.h"
+#include "util/fibers/fiber_file.h"
+#include "util/fibers/fiberqueue_threadpool.h"
+#include "util/fibers/future.h"
+#include "util/fibers/simple_channel.h"
+#include "util/fibers/synchronization.h"
+
+#ifdef __linux__
+#include <sys/syscall.h>
+
+#include "util/fibers/uring_proactor.h"
+
+// older linux systems do not expose this system call so we wrap it in our own function.
+int my_gettid() {
+  return syscall(SYS_gettid);
+}
+
+#endif
+
+#if defined(__FreeBSD__)
+#include <pthread_np.h>
+#endif
+
+using namespace std;
+using absl::StrCat;
+using namespace testing;
+
+namespace util {
+namespace fb2 {
+
+#if defined(__FreeBSD__)
+
+int my_gettid() {
+  return pthread_getthreadid_np();
+}
+
+#endif
+
+#if defined(__APPLE__)
+
+unsigned my_gettid() {
+  uint64_t tid;
+  pthread_threadid_np(NULL, &tid);
+  return tid;
+}
+
+#endif
+
+constexpr uint32_t kRingDepth = 16;
+
+class FiberTest : public testing::Test {
+ public:
+};
+
+struct ProactorThread {
+  std::unique_ptr<ProactorBase> proactor;
+  std::thread proactor_thread;
+
+  ProactorThread(unsigned index, ProactorBase::Kind kind);
+
+  ~ProactorThread() {
+    LOG(INFO) << "Stopping proactor thread";
+    proactor->Stop();
+    proactor_thread.join();
+    proactor.reset();
+  }
+
+  ProactorBase* get() {
+    return proactor.get();
+  }
+};
+
+ProactorThread::ProactorThread(unsigned index, ProactorBase::Kind kind) {
+  switch (kind) {
+    case ProactorBase::Kind::EPOLL:
+      proactor.reset(new EpollProactor);
+      break;
+    case ProactorBase::Kind::IOURING:
+#ifdef __linux__
+      proactor.reset(new UringProactor);
+#else
+      LOG(FATAL) << "IOUring is not supported on this platform";
+#endif
+      break;
+  }
+
+  proactor_thread = thread{[this, kind, index] {
+    switch (kind) {
+      case ProactorBase::Kind::EPOLL:
+        static_cast<EpollProactor*>(proactor.get())->Init(index);
+        break;
+      case ProactorBase::Kind::IOURING:
+#ifdef __linux__
+        static_cast<UringProactor*>(proactor.get())->Init(index, kRingDepth);
+#endif
+        break;
+    }
+
+    proactor->Run();
+  }};
+}
+
+// Struct to combine proactor type and IP version parameters
+struct TestParams {
+  string_view proactor_type;
+  bool use_ipv6;
+
+  TestParams(string_view type, bool ipv6) : proactor_type(type), use_ipv6(ipv6) {
+  }
+
+  string ToString() const {
+    string ip_ver = use_ipv6 ? "IPv6" : "IPv4";
+    return string(proactor_type) + "_" + ip_ver;
+  }
+};
+
+class ProactorTest : public testing::TestWithParam<TestParams> {
+ protected:
+  static unique_ptr<ProactorThread> CreateProactorThread() {
+    string_view param = GetParam().proactor_type;
+    if (param == "epoll") {
+      return make_unique<ProactorThread>(0, ProactorBase::EPOLL);
+    }
+    if (param == "uring") {
+      return make_unique<ProactorThread>(0, ProactorBase::IOURING);
+    }
+
+    LOG(FATAL) << "Unknown param: " << param;
+    return nullptr;
+  }
+
+  void SetUp() final {
+    proactor_th_ = CreateProactorThread();
+    const TestInfo* const test_info = UnitTest::GetInstance()->current_test_info();
+    LOG(INFO) << "Starting " << test_info->name() << " with " << (UseIPv6() ? "IPv6" : "IPv4");
+  }
+
+  void TearDown() final {
+    proactor_th_.reset();
+  }
+
+  static void SetUpTestCase() {
+    testing::FLAGS_gtest_death_test_style = "threadsafe";
+  }
+
+  ProactorBase* proactor() {
+    return proactor_th_->get();
+  }
+
+  // Return the proactor type parameter
+  string_view GetProactorType() const {
+    return GetParam().proactor_type;
+  }
+
+  // Return whether to use IPv6
+  bool UseIPv6() const {
+    return GetParam().use_ipv6;
+  }
+
+  using IoResult = int;
+
+  std::unique_ptr<ProactorThread> proactor_th_;
+};
+
+INSTANTIATE_TEST_SUITE_P(Engines, ProactorTest,
+                         testing::Values(TestParams("epoll", false)  // epoll with IPv4
+                                         ,
+                                         TestParams("epoll", true)  // epoll with IPv6
+#ifdef __linux__
+                                         ,
+                                         TestParams("uring", false)  // uring with IPv4
+                                         ,
+                                         TestParams("uring", true)  // uring with IPv6
+#endif
+                                         ),
+                         [](const auto& info) { return info.param.ToString(); });
+
+struct SlistMember {
+  boost::intrusive::slist_member_hook<boost::intrusive::link_mode<boost::intrusive::safe_link>>
+      hook;
+};
+
+using TestSlist = boost::intrusive::slist<
+    SlistMember,
+    boost::intrusive::member_hook<SlistMember, decltype(SlistMember::hook), &SlistMember::hook>,
+    boost::intrusive::constant_time_size<false>, boost::intrusive::cache_last<true>>;
+
+TEST_F(FiberTest, SListSafe) {
+  TestSlist queue;
+  SlistMember m1;
+  TestSlist::iterator it = TestSlist::s_iterator_to(m1);
+  ASSERT_FALSE(m1.hook.is_linked());
+  // queue.erase(it); <- infinite loop since the item is not there.
+  queue.push_front(m1);
+  ASSERT_TRUE(m1.hook.is_linked());
+  queue.erase(it);
+  ASSERT_TRUE(queue.empty());
+  queue.push_front(m1);
+  ASSERT_FALSE(queue.empty());
+  queue.pop_front();
+}
+
+TEST_F(FiberTest, Basic) {
+  int run = 0;
+  uint64_t epoch = FiberSwitchEpoch();
+
+  // We could preempt before in the previous tests, so it may be > 0.
+  uint64_t preempt_cnt_start = ThisFiber::GetPreemptCount();
+  Fiber fb1("test1", [&] { ++run; });
+  Fiber fb2("test2", [&] { ++run; });
+  EXPECT_EQ(epoch, FiberSwitchEpoch());
+  EXPECT_EQ(64 * 1024 * 2, WorkerFibersStackSize());  // 2 fibers, 64k each
+  EXPECT_EQ(2, WorkerFibersCount());
+
+  fb1.Join();
+  EXPECT_EQ(preempt_cnt_start + 1, ThisFiber::GetPreemptCount());
+  fb2.Join();
+  EXPECT_GE(GetFiberRunSeq(), 5);
+
+  // Second join does not preempt because fb2 finished running before.
+  EXPECT_EQ(preempt_cnt_start + 1, ThisFiber::GetPreemptCount());
+
+  EXPECT_EQ(0, WorkerFibersCount());
+  EXPECT_EQ(0, WorkerFibersStackSize());
+
+  EXPECT_EQ(2, run);
+  EXPECT_LT(epoch, FiberSwitchEpoch());
+
+  Fiber fb3("test3", [](int i) {}, 1);
+  fb3.Join();
+  EXPECT_EQ(preempt_cnt_start + 2, ThisFiber::GetPreemptCount());
+}
+
+TEST_F(FiberTest, Stack) {
+  Fiber fb1, fb2;
+  {
+    uint64_t val1 = 42;
+    uint64_t arg1 = 43;
+    auto cb1 = [val1](uint64_t arg) {
+      ASSERT_EQ(val1, 42);
+      ASSERT_EQ(arg, 43);
+    };
+
+    fb1 = Fiber(Launch::post, "test1", cb1, arg1);
+  }
+
+  {
+    uint64_t val = 142;
+    auto cb1 = [val](uint64_t arg) {
+      EXPECT_EQ(val, 142);
+      EXPECT_EQ(arg, 143);
+    };
+
+    fb2 = Fiber(Launch::post, "test2", cb1, 143);
+  }
+  fb1.Join();
+  fb2.Join();
+
+  // Test with moveable only arguments.
+  unique_ptr<int> pass(new int(42));
+  Fiber("test3", [](unique_ptr<int> p) { EXPECT_EQ(42, *p); }, std::move(pass)).Detach();
+}
+
+TEST_F(FiberTest, Remote) {
+  Fiber fb1;
+  mutex mu;
+  condition_variable cnd;
+  bool set = false;
+  std::thread t1([&] {
+    fb1 = Fiber("test1", [] { LOG(INFO) << "test1 run"; });
+    ThisFiber::Yield();
+    {
+      unique_lock lk(mu);
+      set = true;
+      cnd.notify_one();
+      LOG(INFO) << "set signaled";
+    }
+    this_thread::sleep_for(10ms);
+    LOG(INFO) << "tb1 exiting";
+  });
+
+  unique_lock lk(mu);
+  cnd.wait(lk, [&] { return set; });
+  LOG(INFO) << "set = true";
+  fb1.Join();
+  LOG(INFO) << "fb1 joined";
+  t1.join();
+}
+
+TEST_F(FiberTest, Dispatch) {
+  int val1 = 0, val2 = 0;
+
+  Fiber fb2;
+
+  Fiber fb1(Launch::dispatch, "test1", [&] {
+    val1 = 1;
+    fb2 = Fiber(Launch::dispatch, "test2", [&] { val2 = 1; });
+    val1 = 2;
+  });
+  EXPECT_EQ(1, val1);
+  EXPECT_EQ(1, val2);
+
+  fb1.Join();
+  EXPECT_EQ(2, val1);
+
+  fb2.Join();
+}
+
+TEST_F(FiberTest, EventCount) {
+  EventCount ec;
+  bool signal = false;
+  bool fb_exit = false;
+
+  Fiber fb(Launch::dispatch, "fb", [&] {
+    ec.await([&] { return signal; });
+    fb_exit = true;
+  });
+  ec.notify();
+  ThisFiber::Yield();
+
+  EXPECT_FALSE(fb_exit);
+
+  signal = true;
+  ec.notify();
+  fb.Join();
+
+  EXPECT_EQ(std::cv_status::timeout,
+            ec.await_until([] { return false; }, chrono::steady_clock::now() + 10ms));
+
+  ASSERT_FALSE(detail::FiberActive()->sleep_hook.is_linked());
+  signal = false;
+  Fiber(Launch::post, "fb2", [&] {
+    signal = true;
+    ec.notify();
+  }).Detach();
+  auto next = chrono::steady_clock::now() + 1s;
+  LOG(INFO) << "timeout at " << next.time_since_epoch().count();
+
+  EXPECT_EQ(std::cv_status::no_timeout, ec.await_until([&] { return signal; }, next));
+  signal = false;
+  Fiber fb3(Launch::post, "fb3", [&] {
+    signal = true;
+    ThisFiber::SleepFor(2ms);
+    ec.notify();
+  });
+
+  next = chrono::steady_clock::now();
+  LOG(INFO) << "timeout at " << next.time_since_epoch().count();
+  EXPECT_EQ(std::cv_status::timeout, ec.await_until([&] { return signal; }, next));
+  fb3.Join();
+}
+
+TEST_F(FiberTest, EventCountMT) {
+  EventCount ec1, ec2;
+  atomic_uint32_t cnt{0}, gate{0};
+  constexpr unsigned kNumIters = 1000;
+
+  array<thread, 5> threads;
+  for (auto& th : threads) {
+    th = thread([&] {
+      Fiber fb2("producer", [&] {
+        for (unsigned i = 0; i < kNumIters; ++i) {
+          ec2.await([&] { return gate.load(memory_order_relaxed) == i; });
+          ThisFiber::SleepFor(1us);
+          if (cnt.fetch_add(1, memory_order_relaxed) == threads.size() - 1)
+            ec1.notify();
+        }
+      });
+      fb2.Join();
+    });
+  }
+
+  unsigned preempts = 0;
+
+  Fiber fb(Launch::dispatch, "fb1", [&] {
+    for (unsigned i = 0; i < kNumIters; ++i) {
+      gate.store(i, memory_order_release);
+      ec2.notifyAll();
+
+      preempts += ec1.await([&] { return cnt.load(memory_order_relaxed) == threads.size(); });
+      cnt.store(0, memory_order_relaxed);
+    }
+  });
+
+  fb.Join();
+  for (auto& th : threads) {
+    th.join();
+  }
+  LOG(INFO) << "Preempts: " << preempts;
+}
+
+TEST_F(FiberTest, Future) {
+  Future<int> fut;
+
+  Fiber fb("fb3", [fut]() mutable { EXPECT_EQ(42, fut.Get()); });
+  fut.Resolve(42);
+
+  fb.Join();
+}
+
+// Test Subscribe() method of blocking counter to run a generic callback
+// instead of waking up a fiber when the counter reaches zero
+TEST_F(FiberTest, TestCounterSubscribe) {
+  atomic_bool done = false;
+  EventCount done_ec{};
+  auto unblock_done = [&done, &done_ec] {
+    done.store(true, memory_order_relaxed);
+    done_ec.notify();
+  };
+
+  // Actionable waiter that unblocks the `done` ec above
+  detail::Waiter waiter{unblock_done};
+
+  // Subscribe to counter, it should trigger the action
+  BlockingCounter counter{10};
+  auto key1 = counter->OnCompletion(&waiter);
+
+  // Start decrement workers
+  vector<thread> threads;
+  for (size_t i = 0; i < 10; i++)
+    threads.emplace_back([counter]() mutable { counter->Dec(); });
+
+  // Wait for event to fire
+  done_ec.await([&done] { return done.load(memory_order_relaxed); });
+  key1.reset();
+  for (auto& th : threads)
+    th.join();
+
+  // Now check empty doesn't register
+  done.store(false, memory_order_relaxed);
+  auto key2 = counter->OnCompletion(&waiter);
+  EXPECT_FALSE(key2);
+
+  // Check cancellation resolves
+  done.store(false, memory_order_relaxed);
+  counter->Start(3);
+  auto key3 = counter->OnCompletion(&waiter);
+  counter->Cancel();
+  EXPECT_EQ(done.load(memory_order_relaxed), true);
+}
+
+#ifdef __linux__
+
+TEST_F(FiberTest, AsyncEvent) {
+  Done done;
+
+  auto cb = [done](auto*, UringProactor::IoResult, uint32_t, uint32_t) mutable {
+    done.Notify();
+    LOG(INFO) << "notify";
+  };
+
+  ProactorThread pth(0, ProactorBase::IOURING);
+  pth.get()->DispatchBrief(
+      [up = reinterpret_cast<UringProactor*>(pth.proactor.get()), cb = std::move(cb)] {
+        SubmitEntry se = up->GetSubmitEntry(std::move(cb));
+        se.sqe()->opcode = IORING_OP_NOP;
+        LOG(INFO) << "submit";
+      });
+
+  LOG(INFO) << "DispatchBrief";
+  done.Wait();
+}
+
+TEST_F(FiberTest, RegisteredBuffers) {
+  ProactorThread pth(0, ProactorBase::IOURING);
+  pth.get()->DispatchBrief([&] {
+    UringProactor* up = static_cast<UringProactor*>(pth.proactor.get());
+    EXPECT_EQ(up->RegisterBuffers(12 * 4096), 0);
+
+    auto borrowed = up->RequestBuffer(3 * 4096 - 1);
+    EXPECT_TRUE(borrowed.has_value());
+    EXPECT_EQ(*borrowed->buf_idx, 0u);
+    EXPECT_EQ(borrowed->bytes.size(), 3 * 4096);
+
+    char test_string[] = "SOME SIMPLE TEST DATA TO CHECK PAGE VALIDITY";
+    memcpy(borrowed->bytes.data(), test_string, sizeof(test_string));
+
+    // Not enough space until we return our previous one
+    EXPECT_FALSE(up->RequestBuffer(12 * 4096).has_value());
+
+    up->ReturnBuffer(*borrowed);
+    EXPECT_TRUE(up->RequestBuffer(12 * 4096).has_value());
+  });
+}
+
+#if 0
+TEST_F(FiberTest, CleanExit) {
+  ASSERT_EXIT(
+      {
+        thread th([] { Fiber([] { exit(42); }).Join(); });
+        th.join();
+      },
+      ::testing::ExitedWithCode(42), "");
+}
+#endif
+
+#endif
+
+TEST_F(FiberTest, Notify) {
+  EventCount ec;
+  Fiber fb1([&] {
+    for (unsigned i = 0; i < 1000; ++i) {
+      ec.await_until([] { return false; }, chrono::steady_clock::now() + 10us);
+    }
+  });
+
+  bool done{false};
+  Fiber fb2([&] {
+    while (!done) {
+      ec.notify();
+      ThisFiber::SleepFor(10us);
+    }
+  });
+
+  fb1.Join();
+  LOG(INFO) << "fb1 joined";
+  done = true;
+  fb2.Join();
+}
+
+TEST_F(FiberTest, SwitchAndExecute) {
+  Future<detail::FiberInterface*> first, second;
+  unsigned cnt1 = 0, cnt2 = 0;
+
+  Fiber fb1("fb1", [&]() mutable {
+    first.Resolve(detail::FiberActive());
+    detail::FiberInterface* other = second.Get();
+    for (unsigned i = 0; i < 10; ++i) {
+      other->SwitchToAndExecute([&] { ++cnt1; });
+    }
+    while (cnt2 < 10)
+      ThisFiber::Yield();
+  });
+
+  Fiber fb2("fb2", [&] {
+    second.Resolve(detail::FiberActive());
+    detail::FiberInterface* other = first.Get();
+
+    for (unsigned i = 0; i < 10; ++i) {
+      other->SwitchTo();
+      ++cnt2;
+    }
+
+    do {
+      ThisFiber::Yield();
+    } while (cnt1 < 10);
+  });
+
+  fb1.Join();
+  fb2.Join();
+}
+
+TEST_F(FiberTest, WaitFor) {
+  CondVarAny cnd;
+  NoOpLock lk;
+  for (unsigned i = 0; i < 3; ++i) {
+    cnd.wait_for(lk, 10ms);
+  }
+}
+
+TEST_F(FiberTest, StackSize) {
+  Fiber fb1(Launch::dispatch, boost::context::fixedsize_stack{8000}, "fb1", [] {
+
+#ifndef ABSL_HAVE_ADDRESS_SANITIZER  // with asan log blows up the stack
+    LOG(INFO) << "fb1 started";
+#endif
+
+    detail::FiberInterface* active = detail::FiberActive();
+
+    // we can not have bigger buffer here because LOG(INFO) callchain also uses stack,
+    // and it can lead to stack overflow.
+    char buf[128];
+    memset(buf, 0, sizeof(buf));
+
+    // active is on the right side of the stack address range but variables on stack
+    // grow from high to low addresses.
+    {
+      // Approximate stack bottom calculation for logging (assuming active is near top)
+      unsigned free_space =
+          reinterpret_cast<uintptr_t>(&free_space) - (reinterpret_cast<uintptr_t>(active) - 4096);
+
+#ifndef ABSL_HAVE_ADDRESS_SANITIZER
+      LOG(INFO) << "fb1 ends, free space on the stack: " << free_space;
+#endif
+    }
+  });
+
+  fb1.Join();
+}
+
+TEST_F(FiberTest, HighPriority) {
+  vector<string> run_order;
+  Fiber fb1(Fiber::Opts{.priority = FiberPriority::BACKGROUND, .name = "bg"},
+            [&] { run_order.push_back("bg"); });
+  Fiber fb2(Fiber::Opts{.priority = FiberPriority::NORMAL, .name = "normal"},
+            [&] { run_order.push_back("normal"); });
+  Fiber fb3(Fiber::Opts{.priority = FiberPriority::HIGH, .name = "high"},
+            [&] { run_order.push_back("high"); });
+  fb1.Join();
+  fb2.Join();
+  fb3.Join();
+  EXPECT_EQ("high", run_order[0]);
+  // TODO: fix the order for background vs normal fibers on macOS.
+  // EXPECT_THAT(run_order, testing::ElementsAre("high", "normal", "bg"));
+}
+
+// EXPECT_DEATH does not work well with freebsd, also it does not work well with gtest_repeat.
+#if 0
+TEST_F(FiberTest, AtomicGuard) {
+  FiberAtomicGuard guard;
+#ifndef NDEBUG
+  EXPECT_DEATH(ThisFiber::Yield(), "Preempting inside");
+#endif
+}
+#endif
+
+TEST_P(ProactorTest, AsyncCall) {
+  ASSERT_FALSE(ProactorBase::IsProactorThread());
+
+  for (unsigned i = 0; i < ProactorBase::kTaskQueueLen * 2; ++i) {
+    VLOG(1) << "Dispatch: " << i;
+    proactor()->DispatchBrief([i] { VLOG(1) << "I: " << i; });
+  }
+  LOG(INFO) << "DispatchBrief done";
+  proactor()->AwaitBrief([] {});
+
+  usleep(2000);
+  EventCount ec;
+  bool signal = false;
+  proactor()->DispatchBrief([&] {
+    signal = true;
+    ec.notify();
+  });
+
+  auto next = chrono::steady_clock::now() + 1s;
+  EXPECT_EQ(std::cv_status::no_timeout, ec.await_until([&] { return signal; }, next));
+}
+
+TEST_P(ProactorTest, AwaitBrief) {
+  thread_local int val = 5;
+
+  proactor()->AwaitBrief([] { val = 15; });
+  EXPECT_EQ(5, val);
+
+  int j = proactor()->AwaitBrief([] { return val; });
+  EXPECT_EQ(15, j);
+}
+
+TEST_P(ProactorTest, DispatchTest) {
+  CondVarAny cnd1, cnd2;
+  Mutex mu;
+  int state = 0;
+
+  LOG(INFO) << "LaunchFiber";
+  auto fb = proactor()->LaunchFiber("jessie", [&] {
+    unique_lock g(mu);
+    state = 1;
+    LOG(INFO) << "state 1";
+
+    cnd2.notify_one();
+    // Verify that the fiber has been running. Even on fast ARM systems with lower-frequency
+    // counters takes more than 100 cycles.
+    EXPECT_GT(ThisFiber::GetRunningTimeCycles(), 100);
+
+    cnd1.wait(g, [&] { return state == 2; });
+
+    LOG(INFO) << "End";
+  });
+
+  {
+    unique_lock g(mu);
+    cnd2.wait(g, [&] { return state == 1; });
+    state = 2;
+    LOG(INFO) << "state 2";
+    cnd1.notify_one();
+  }
+  LOG(INFO) << "BeforeJoin";
+  fb.Join();
+}
+
+TEST_P(ProactorTest, Sleep) {
+  proactor()->Await(
+      [] {
+        LOG(INFO) << "Before Sleep";
+        ThisFiber::SleepFor(20ms);
+        LOG(INFO) << "After Sleep";
+      },
+      Fiber::Opts{.name = "test_sleep"});
+}
+
+TEST_P(ProactorTest, LocalCond) {
+  CondVarAny cond;
+  NoOpLock lock;
+  unsigned latch = 0;
+  auto fb = proactor()->LaunchFiber(Launch::dispatch,
+                                    [&] { cond.wait(lock, [&] { return latch == 1; }); });
+  latch = 1;
+  cond.notify_one();
+  fb.Join();
+}
+
+constexpr unsigned kNumFibers = 64;
+constexpr unsigned kNumThreads = 16;
+
+TEST_P(ProactorTest, MultiParking) {
+  EventCount ec;
+  unique_ptr<ProactorThread> ths[kNumThreads];
+  atomic_uint num_started{0};
+  Fiber fbs[kNumThreads][kNumFibers];
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    ths[i] = CreateProactorThread();
+  }
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    for (unsigned j = 0; j < kNumFibers; ++j) {
+      fbs[i][j] = ths[i]->proactor->LaunchFiber(StrCat("test", i, "/", j), [&] {
+        num_started.fetch_add(1, std::memory_order_relaxed);
+        ec.notify();
+
+        string_view name = ThisFiber::GetName();
+        VLOG(1) << "After ec.notify() " << name;
+
+        for (unsigned iter = 0; iter < 10; ++iter) {
+          for (unsigned k = 0; k < kNumThreads; ++k) {
+            DVLOG(2) << name << " " << pthread_self() << " -> " << iter << "/" << k;
+            ths[k]->proactor->AwaitBrief([=] {});
+          }
+        }
+
+        VLOG(1) << "After loop " << name;
+      });
+    }
+  }
+
+  ec.await([&] { return num_started == kNumThreads * kNumFibers; });
+  LOG(INFO) << "After the first await";
+
+  for (auto& fb_arr : fbs) {
+    for (auto& fb : fb_arr)
+      fb.Join();
+  }
+
+  LOG(INFO) << "After fiber join";
+  for (auto& th : ths)
+    th.reset();
+}
+
+TEST_P(ProactorTest, NotifyRemote2) {
+  constexpr unsigned kNumThreads = 32;
+
+  unique_ptr<ProactorThread> ths[kNumThreads];
+  vector<Fiber> fbs;
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    ths[i] = CreateProactorThread();
+  }
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    for (unsigned j = 0; j < 20; ++j) {
+      fbs.push_back(ths[i]->proactor->LaunchFiber(StrCat("test", i, "/", j), [i, &ths] {
+        for (unsigned iter = 0; iter < 1000; ++iter) {
+          unsigned idx = (i + iter) % kNumThreads;
+
+          ths[idx]->proactor->AwaitBrief([] {});
+
+          idx = (idx + 1) % kNumThreads;
+          ths[idx]->proactor->AwaitBrief([] {});
+
+          idx = (idx + 1) % kNumThreads;
+          ths[idx]->proactor->AwaitBrief([] {});
+        }
+      }));
+    }
+  }
+
+  for (auto& fb_arr : fbs)
+    fb_arr.Join();
+
+  LOG(INFO) << "After fiber join";
+  for (auto& th : ths)
+    th.reset();
+}
+
+TEST_P(ProactorTest, NotifyMyself) {
+  unique_ptr<ProactorThread> ths[2];
+
+  for (unsigned i = 0; i < 2; ++i) {
+    ths[i] = CreateProactorThread();
+  }
+
+  Fiber fbs[2];
+  EventCount ec;
+  atomic_uint num_ended{0};
+  for (unsigned i = 0; i < 2; ++i) {
+    fbs[i] =
+        ths[i]->proactor->LaunchFiber(StrCat("test", i), [&, other = ths[1 - i]->proactor.get()] {
+          for (unsigned iter = 0; iter < 200; ++iter) {
+            Fiber([&, other] {
+              other->AwaitBrief([] {});
+              num_ended.fetch_add(1, std::memory_order_relaxed);
+              ec.notify();
+            }).Detach();
+          }
+        });
+  }
+
+  for (auto& fb : fbs)
+    fb.Join();
+  ec.await([&] { return num_ended == 400; });
+
+  for (auto& th : ths)
+    th.reset();
+}
+
+TEST_P(ProactorTest, Migrate) {
+  ProactorThread pth(0, proactor()->GetKind());
+
+  pid_t dest_tid = pth.get()->AwaitBrief([&] { return my_gettid(); });
+
+  Fiber fb = proactor()->LaunchFiber([&] {
+    // Originally I used pthread_self(). However it is declared as 'attribute ((const))'
+    // thus it allows compiler to eliminate subsequent calls to this function.
+    // Therefore I use syscall variant to get fresh values.
+    pid_t tid1 = my_gettid();
+    LOG(INFO) << "Source pid " << tid1 << ", dest pid " << dest_tid;
+    proactor()->Migrate(pth.get());
+    LOG(INFO) << "After migrate";
+    ASSERT_EQ(dest_tid, my_gettid());
+  });
+  fb.Join();
+}
+
+TEST_P(ProactorTest, LeakOnFiber) {
+  // This test verifies that ASAN correctly scans the fiber stack.
+  // If it didn't, this would be reported as a leak because the pointer
+  // is only held on the fiber stack.
+  proactor()->Await([&] {
+    int* leak = new int(42);
+    // Uncomment to see the leak reported in ASAN.
+    delete leak;
+  });
+}
+
+TEST_P(ProactorTest, NotifyRemote) {
+  EventCount ec;
+  Done done;
+  proactor()->Await([&] {
+    for (unsigned i = 0; i < 1000; ++i) {
+      ec.await_until([] { return false; }, chrono::steady_clock::now() + 10us);
+    }
+    done.Notify();
+  });
+
+  bool keep_run{true};
+  Fiber fb2([&] {
+    while (keep_run) {
+      ec.notify();
+      ThisFiber::SleepFor(1us);
+    }
+  });
+
+  done.Wait();
+  keep_run = false;
+  fb2.Join();
+}
+
+// Disable EXPECT_DEATH because it messes up with info logs.
+#if 0
+TEST_P(ProactorTest, BriefDontBlock) {
+  Done done;
+
+  proactor()->AwaitBrief([&] {
+#ifndef NDEBUG
+    EXPECT_DEATH(done.WaitFor(1ms), "Should not preempt");
+#endif
+  });
+}
+#endif
+
+TEST_P(ProactorTest, Timeout) {
+  EventCount ec;
+
+  auto consumer_fb = proactor()->LaunchFiber("consumer", [&] {
+    for (unsigned i = 0; i < 1000; ++i) {
+      ec.await_until([] { return false; }, chrono::steady_clock::now() + 10us);
+    }
+    LOG(INFO) << "Consumer done";
+  });
+
+  Fiber producer_fb("producer", [&] {
+    for (unsigned i = 0; i < 1000; ++i) {
+      ec.notify();
+      ThisFiber::SleepFor(1us);
+    }
+    LOG(INFO) << "Producer done";
+  });
+
+  LOG(INFO) << "Before join ";
+  consumer_fb.Join();
+  producer_fb.Join();
+}
+
+TEST_P(ProactorTest, Mutex) {
+  unique_ptr<ProactorThread> ths[kNumThreads];
+  Fiber fbs[kNumThreads];
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    ths[i] = CreateProactorThread();
+  }
+
+  Mutex mu;
+
+  for (unsigned i = 0; i < kNumThreads; ++i) {
+    fbs[i] = ths[i]->get()->LaunchFiber([&] { lock_guard lk(mu); });
+  }
+
+  for (auto& fb : fbs)
+    fb.Join();
+
+  for (auto& th : ths)
+    th.reset();
+}
+
+TEST_P(ProactorTest, DragonflyBug1591) {
+  auto sock = std::unique_ptr<FiberSocketBase>(proactor()->CreateSocket());
+  auto sock2 = std::unique_ptr<FiberSocketBase>(proactor()->CreateSocket());
+
+  int next_step = 0;
+  auto start_step = [&next_step](int step) {
+    while (next_step < step) {
+      ThisFiber::Yield();
+    }
+    LOG(INFO) << "step " << step;
+  };
+  auto end_step = [&next_step]() { next_step++; };
+
+  Mutex m1, m2;
+  auto fb_server = proactor()->LaunchFiber("server", [&] {
+    start_step(0);
+
+    // Create the correct socket type based on IP version
+    if (UseIPv6()) {
+      auto create_ec = sock->Create(AF_INET6);
+      ASSERT_FALSE(create_ec) << create_ec.message();
+    }
+
+    auto ec = sock->Listen(0, /*backlog=*/10);
+    ASSERT_FALSE(ec) << ec.message();
+    end_step();
+
+    start_step(2);
+    FiberSocketBase::AcceptResult a_res = sock->Accept();
+    a_res.value()->SetProactor(proactor());
+    ASSERT_TRUE(a_res.has_value()) << a_res.error().message();
+    unique_ptr<FiberSocketBase> guard(a_res.value());
+
+    m1.lock();
+    end_step();
+
+    start_step(4);
+    for (size_t i = 0; i < 100; i++) {
+      ec = a_res.value()->Write(io::Buffer("TRIGGERS A READ IN THE OTHER SOCKET"sv));
+      ThisFiber::SleepFor(1ms);
+    }
+
+    ec = a_res.value()->Close();
+    ec = sock->Close();
+
+    m1.unlock();
+    end_step();
+  });
+
+  auto fb_client = proactor()->LaunchFiber("client", [&] {
+    start_step(1);
+
+    // Use IPv4 or IPv6 address based on the parameter
+    boost::asio::ip::address localhost;
+    if (UseIPv6()) {
+      localhost = boost::asio::ip::make_address("::1");  // IPv6 loopback
+    } else {
+      localhost = boost::asio::ip::make_address("127.0.0.1");  // IPv4 loopback
+    }
+    auto ep = FiberSocketBase::endpoint_type{localhost, sock->LocalEndpoint().port()};
+    auto ec = sock2->Connect(ep);
+    end_step();
+
+    start_step(3);
+    ASSERT_FALSE(ec) << ec.message();
+    uint8_t buf[128];
+    // This triggers the dangling read_req_ bug on timeout.
+    sock2->set_timeout(1);
+    auto res = sock2->Recv(buf);
+    ASSERT_FALSE(res.has_value()) << "Receive should fail on timeout";
+    end_step();
+
+    // Now try to acquire the lock. Since it was acquired by the other fiber in step #2,
+    // this will stall. Make sure that we don't get spurios wakeups because of the socket.
+    m1.lock();
+    m1.unlock();
+    ec = sock2->Close();
+  });
+
+  fb_client.Join();
+  fb_server.Join();
+}
+
+TEST_P(ProactorTest, DumpFiberStacks) {
+  ProactorThread pth(0, proactor()->GetKind());
+
+  Fiber fb = proactor()->LaunchFiber([&] {
+    ThisFiber::SetName("migrated");
+    int i = 42;
+    ThisFiber::PrintLocalsCallback locals([&] { return absl::StrCat("i=", i, "\n"); });
+
+    proactor()->Migrate(pth.get());
+    ThisFiber::SleepFor(30ms);
+  });
+
+  fb2::PrintFiberStackTracesInThread();
+  pth.get()->Await([]() { fb2::PrintFiberStackTracesInThread(); });
+
+  fb.Join();
+}
+
+TEST_P(ProactorTest, Periodic) {
+  unsigned cnt = 0;
+
+  proactor()->Await([&] {
+    auto task_id = proactor()->AddPeriodic(1, [&] { ++cnt; });
+    ThisFiber::SleepFor(20ms);
+    LOG(INFO) << "Canceling periodic";
+    proactor()->CancelPeriodic(task_id);
+    LOG(INFO) << "After canceling periodic";
+  });
+  LOG(INFO) << "Periodic finished";
+  EXPECT_GT(cnt, 0u);
+}
+
+TEST_P(ProactorTest, Background) {
+  auto fb = proactor()->LaunchFiber(
+      Fiber::Opts{.priority = FiberPriority::BACKGROUND, .name = "background"}, [&] {
+        EXPECT_EQ(ThisFiber::Priority(), FiberPriority::BACKGROUND);
+        for (unsigned i = 0; i < 1000; ++i) {
+          ThisFiber::Yield();
+        }
+      });
+  fb.Join();
+}
+
+TEST_P(ProactorTest, Mixed) {
+  vector<Fiber> fibers;
+  for (size_t i = 0; i < 100u; i++) {
+    Fiber::Opts opts{
+        .priority = i % 2 == 0 ? FiberPriority::NORMAL : FiberPriority::BACKGROUND,  //
+        .name = absl::StrCat("fb", i)                                                //
+    };
+    auto fb = proactor()->LaunchFiber(opts, [times = i * 2 + 500] {
+      for (unsigned i = 0; i < times; ++i) {
+        ThisFiber::Yield();
+      };
+    });
+    fibers.emplace_back(std::move(fb));
+  }
+  for (auto& fb : fibers)
+    fb.Join();
+}
+
+TEST_P(ProactorTest, FiberFile) {
+  string path = base::GetTestTempPath("fiber_write.bin");
+  FiberQueueThreadPool tp(1);
+
+  proactor()->Await([&] {
+    auto res = OpenFiberWriteFile(path, &tp);
+    ASSERT_TRUE(res.has_value()) << res.error().message();
+    unique_ptr<io::WriteFile> file(std::move(res.value()));
+    std::ignore = file->Close();
+  });
+}
+
+// Stress test for SimpleChannel::Pop() TOCTOU race.
+TEST_F(FiberTest, SimpleChannelPopRace) {
+  constexpr unsigned kNumProducers = 4;
+  constexpr unsigned kItemsPerProducer = 3;
+  constexpr unsigned kIterations = 10000;
+  constexpr int kExpectedTotal = kNumProducers * kItemsPerProducer;
+
+  using Channel = SimpleChannel<int, base::mpmc_bounded_queue<int>>;
+
+  vector<unique_ptr<ProactorThread>> proactor_threads;
+  for (unsigned i = 0; i < kNumProducers + 1; i++) {
+    proactor_threads.push_back(make_unique<ProactorThread>(i, ProactorBase::EPOLL));
+  }
+
+  for (unsigned iter = 0; iter < kIterations; iter++) {
+    Channel channel(2, kNumProducers);
+    int popped = 0;
+    int missed = 0;
+
+    vector<Fiber> fibers;
+
+    // Consumer fiber on proactor 0.
+    fibers.push_back(proactor_threads[0]->get()->LaunchFiber([&] {
+      int val;
+      while (channel.Pop(val))
+        popped++;
+      // Items found here were missed by Pop() due to the TOCTOU race.
+      while (channel.TryPop(val))
+        missed++;
+    }));
+
+    // Producer fibers on proactors 1..N.
+    for (unsigned p = 0; p < kNumProducers; p++) {
+      fibers.push_back(proactor_threads[p + 1]->get()->LaunchFiber([&] {
+        for (unsigned i = 0; i < kItemsPerProducer; i++)
+          channel.Push(1);
+        channel.StartClosing();
+      }));
+    }
+
+    for (auto& fb : fibers)
+      fb.Join();
+
+    ASSERT_EQ(missed, 0) << "Pop() has a TOCTOU race: items pushed between "
+                            "TryPop and IsClosing checks are lost, iter " << iter;
+    ASSERT_EQ(popped + missed, kExpectedTotal) << "Data loss at iteration " << iter;
+  }
+}
+
+//
+// Persistent Waiter Tests ---
+//
+
+// Basic persistence - notifyAll fires callback multiple times, waiter stays linked.
+TEST_F(FiberTest, PersistentWaiterNotifyAll) {
+  EventCount ec;
+  unsigned counter{};
+  auto cb = [&counter] { ++counter; };
+  detail::Waiter waiter{cb};
+
+  auto sub = ec.subscribe_persistent(&waiter);
+  EXPECT_TRUE(waiter.IsLinked());
+
+  ec.notifyAll();
+  ec.notifyAll();
+  ec.notifyAll();
+
+  EXPECT_EQ(counter, 3u);
+  EXPECT_TRUE(waiter.IsLinked());
+  EXPECT_TRUE(waiter.is_persistent());
+}
+
+// SubKey RAII - destruction unlinks and resets persistent flag.
+TEST_F(FiberTest, PersistentWaiterSubKeyRAII) {
+  EventCount ec;
+  unsigned counter{};
+  auto cb = [&counter] { ++counter; };
+  detail::Waiter waiter{cb};
+
+  {
+    auto sub = ec.subscribe_persistent(&waiter);
+    EXPECT_TRUE(waiter.IsLinked());
+    EXPECT_TRUE(waiter.is_persistent());
+
+    ec.notifyAll();
+    EXPECT_EQ(counter, 1u);
+  }  // SubKey destroyed here
+
+  EXPECT_FALSE(waiter.IsLinked());
+  EXPECT_FALSE(waiter.is_persistent());
+
+  // Subsequent notifications must not reach the unlinked waiter.
+  ec.notifyAll();
+  EXPECT_EQ(counter, 1u);
+}
+
+// notify() on a single persistent waiter - no starvation DCHECK.
+TEST_F(FiberTest, PersistentWaiterNotifyOneSingle) {
+  EventCount ec;
+  unsigned counter{};
+  auto cb = [&counter] { ++counter; };
+  detail::Waiter waiter{cb};
+
+  auto sub = ec.subscribe_persistent(&waiter);
+
+  // Only one waiter in the queue: &front == &back, so no DCHECK fires.
+  ec.notify();
+  ec.notify();
+
+  EXPECT_EQ(counter, 2u);
+  EXPECT_TRUE(waiter.IsLinked());
+}
+
+// Mixed queue via notifyAll - persistent stays, one-shot fiber wakes.
+TEST_F(FiberTest, PersistentWaiterMixedNotifyAll) {
+  EventCount ec;
+  unsigned persistent_count{};
+  auto cb = [&persistent_count] { ++persistent_count; };
+  detail::Waiter waiter{cb};
+
+  auto sub = ec.subscribe_persistent(&waiter);
+
+  bool fiber_woke{false};
+  Fiber fb(Launch::dispatch, "oneshot", [&] {
+    ec.await([&] { return fiber_woke; });
+  });
+
+  // Both waiters are now in the queue. Fire notifyAll.
+  fiber_woke = true;
+  ec.notifyAll();
+
+  fb.Join();
+
+  // Persistent waiter got the notification, one-shot fiber completed.
+  EXPECT_GE(persistent_count, 1u);
+  EXPECT_TRUE(waiter.IsLinked());
+}
+
+// SubKey move semantics - ownership transfers correctly.
+TEST_F(FiberTest, PersistentWaiterSubKeyMove) {
+  EventCount ec;
+  unsigned counter{};
+  auto cb = [&counter] { ++counter; };
+  detail::Waiter waiter{cb};
+
+  std::optional<EventCount::SubKey> holder;
+  {
+    auto sub = ec.subscribe_persistent(&waiter);
+    holder.emplace(std::move(sub));
+    // Original sub is moved-from; waiter must still be linked via holder.
+  }
+
+  EXPECT_TRUE(waiter.IsLinked());
+  ec.notifyAll();
+  EXPECT_EQ(counter, 1u);
+
+  // Destroy holder - should unlink.
+  holder.reset();
+  EXPECT_FALSE(waiter.IsLinked());
+  EXPECT_FALSE(waiter.is_persistent());
+
+  ec.notifyAll();
+  EXPECT_EQ(counter, 1u);
+}
+
+// Waiter re-use - persistent then one-shot on same Waiter object.
+TEST_F(FiberTest, PersistentWaiterReuse) {
+  EventCount ec;
+  unsigned counter{};
+  auto cb = [&counter] { ++counter; };
+  detail::Waiter waiter{cb};
+
+  // Phase 1: persistent subscription.
+  {
+    auto sub = ec.subscribe_persistent(&waiter);
+    ec.notifyAll();
+    EXPECT_EQ(counter, 1u);
+    EXPECT_TRUE(waiter.is_persistent());
+  }
+  // SubKey destroyed: persistent flag reset, waiter unlinked.
+  EXPECT_FALSE(waiter.is_persistent());
+  EXPECT_FALSE(waiter.IsLinked());
+
+  // Phase 2: one-shot subscription with the same waiter.
+  auto sub = ec.check_or_subscribe([&] { return false; }, &waiter);
+  ASSERT_TRUE(sub.has_value());
+  EXPECT_TRUE(waiter.IsLinked());
+  EXPECT_FALSE(waiter.is_persistent());
+
+  ec.notifyAll();
+  // One-shot waiter should be unlinked after notification.
+  EXPECT_FALSE(waiter.IsLinked());
+  EXPECT_EQ(counter, 2u);
+}
+
+// (Debug only): Starvation guard - DCHECK fires when notify() hits a persistent
+// waiter with other waiters queued behind it.
+#ifndef NDEBUG
+TEST_F(FiberTest, PersistentWaiterStarvationDCheck) {
+  testing::FLAGS_gtest_death_test_style = "threadsafe";
+
+  EXPECT_DEATH(
+      {
+        EventCount ec;
+        unsigned counter{};
+        auto cb = [&counter] { ++counter; };
+        detail::Waiter persistent_waiter{cb};
+
+        auto sub = ec.subscribe_persistent(&persistent_waiter);
+
+        // Add a second (one-shot) waiter behind the persistent one via a fiber.
+        // Launch::dispatch ensures the fiber runs immediately and parks on await().
+        bool wake{false};
+        Fiber fb(Launch::dispatch, "oneshot", [&] { ec.await([&] { return wake; }); });
+
+        // Now there are 2 waiters and the persistent one is at front. DCHECK should fire.
+        ec.notify();
+
+        // Cleanup (unreachable after DCHECK death).
+        wake = true;
+        ec.notifyAll();
+        fb.Join();
+      },
+      "causes starvation");
+}
+#endif
+
+}  // namespace fb2
+}  // namespace util

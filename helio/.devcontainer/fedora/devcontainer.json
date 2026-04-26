@@ -1,0 +1,24 @@
+{
+	"name": "fedora",
+	"image": "ghcr.io/romange/fedora:30",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools",
+				"ms-vscode.cmake-tools",
+				"ms-vscode.cpptools-themes",
+				"twxs.cmake"
+			],
+			"settings": {
+				"cmake.buildDirectory": "/build",
+				"extensions.ignoreRecommendations": true,
+				"cmake.configureArgs": [
+				]
+			}
+		}
+	},
+	"mounts": [
+		"source=fedora-vol,target=/build,type=volume"
+	],
+	"postCreateCommand": ".devcontainer/post-create.sh ${containerWorkspaceFolder}"
+}

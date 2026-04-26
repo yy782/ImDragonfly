@@ -12,7 +12,7 @@ namespace facade {
 
 class CommandId {
 public:
-    CommandId(const char* name, uint32_t mask, int8_t arity, int8_t first_key, int8_t last_key);
+    CommandId(const char* name, int8_t arity, int8_t first_key, int8_t last_key);
 
     std::string_view name() const {
         return name_;

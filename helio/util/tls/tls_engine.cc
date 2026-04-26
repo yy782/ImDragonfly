@@ -1,0 +1,285 @@
+// Copyright 2023, Roman Gershman.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
+#include "util/tls/tls_engine.h"
+
+#include <openssl/err.h>
+#include <sys/stat.h>
+
+#include "base/logging.h"
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#error Please update your libssl to libssl1.1 - install libssl-dev
+#endif
+
+namespace util {
+
+namespace tls {
+
+static void ClearSslError() {
+  unsigned long l;
+
+  do {
+    const char *file, *data;
+    int line, flags;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000
+    const char* func;
+    l = ERR_get_error_all(&file, &line, &func, &data, &flags);
+#else
+    l = ERR_get_error_line_data(&file, &line, &data, &flags);
+#endif
+  } while (l);
+}
+
+#define S1(x) #x
+#define S2(x) S1(x)
+#define LOCATION __FILE__ " : " S2(__LINE__)
+
+#define RETURN_RESULT(res) \
+  if (res > 0)             \
+    return res;            \
+  return ToOpResult(res, LOCATION)
+
+Engine::Engine(SSL_CTX* context) : ssl_(::SSL_new(context)) {
+  CHECK(ssl_);
+
+  SSL_set_mode(ssl_, SSL_MODE_ENABLE_PARTIAL_WRITE);
+  SSL_set_mode(ssl_, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+  SSL_set_mode(ssl_, SSL_MODE_RELEASE_BUFFERS);
+
+  ::BIO* int_bio = 0;
+
+  BIO_new_bio_pair(&int_bio, 0, &external_bio_, 0);
+
+  // SSL_set0_[rw]bio take ownership of the passed reference,
+  // so if we call both with the same BIO, we need the refcount to be 2.
+  BIO_up_ref(int_bio);
+
+  SSL_set0_rbio(ssl_, int_bio);
+  SSL_set0_wbio(ssl_, int_bio);
+
+  // Debugging traces.
+  // SSL_set_msg_callback(ssl_, SSL_trace);
+  // SSL_set_msg_callback_arg(ssl_, BIO_new_fp(stdout,0));
+}
+
+Engine::~Engine() {
+  CHECK(!SSL_get_app_data(ssl_));
+
+  ::BIO_free(external_bio_);
+  ::SSL_free(ssl_);
+  external_bio_ = nullptr;
+  ssl_ = nullptr;
+}
+
+auto Engine::PeekOutputBuf() -> Buffer {
+  char* buf = nullptr;
+
+  // BIO_nread0 just calls BIO_ctrl(, BIO_C_NREAD0).
+  long res = BIO_ctrl(external_bio_, BIO_C_NREAD0, 0, &buf);
+  if (res == -1) {  // no data
+    res = 0;
+  } else if (res > INT_MAX) {
+    res = INT_MAX;
+  }
+  CHECK_GE(res, 0);
+  return Buffer(reinterpret_cast<const uint8_t*>(buf), res);
+}
+
+void Engine::ConsumeOutputBuf(unsigned sz) {
+  int res = BIO_nread(external_bio_, NULL, sz);
+  CHECK_EQ(unsigned(res), sz);
+}
+
+auto Engine::PeekInputBuf() const -> MutableBuffer {
+  char* buf = nullptr;
+
+  // Does not really write anything, just returns the pointer to the internal write buffer.
+  int res = BIO_nwrite0(external_bio_, &buf);
+  CHECK_GT(res, 0);
+
+  return MutableBuffer{reinterpret_cast<uint8_t*>(buf), unsigned(res)};
+}
+
+void Engine::CommitInput(unsigned sz) {
+  CHECK_LE(sz, unsigned(INT_MAX));
+
+  CHECK_EQ(int(sz), BIO_nwrite(external_bio_, nullptr, sz));
+}
+
+auto Engine::Handshake(HandshakeType type) -> OpResult {
+  int result = (type == CLIENT) ? SSL_connect(ssl_) : SSL_accept(ssl_);
+  RETURN_RESULT(result);
+}
+
+auto Engine::Shutdown() -> OpResult {
+  if (state_ & FATAL_ERROR)
+    return 1;
+
+  if (!SSL_is_init_finished(ssl_))
+    return 0;
+
+  int result = SSL_shutdown(ssl_);
+  // See https://www.openssl.org/docs/man1.1.1/man3/SSL_shutdown.html
+  // OpenSSL uses a two-step shutdown:
+  //  * The first SSL_shutdown() sends "close_notify" alert and usually returns 0.
+  //  * A subsequent SSL_shutdown() completes the bidirectional shutdown and may return 1.
+  //
+  // When result == 0 here we are only initiating the shutdown. We do not check OutputPending() yet,
+  // because we immediately call SSL_shutdown() again to drive the second phase and rely on that
+  // call (and its return value) to decide whether the final alert needs to be flushed.
+  if (result == 0) {              // First step of Shutdown (close_notify) returns 0.
+    result = SSL_shutdown(ssl_);  // Initiate the second step.
+  }
+
+  // If result == 1, the bidirectional TLS shutdown has completed: both peers have exchanged
+  // close_notify alerts and OpenSSL considers the session fully closed. At this point we
+  // only need to ensure that any final "close_notify" sitting in the outbound BIO is flushed.
+  // We return 0 (rather than 1) to signal a graceful shutdown to the caller.
+  if (result == 1) {
+    // Check if we have a final 'close notify' alert sitting in the
+    // outbound BIO that needs to be flushed to the peer.
+    if (OutputPending()) {
+      return NEED_WRITE;
+    }
+    return 0;
+  }
+
+  RETURN_RESULT(result);
+}
+
+auto Engine::Write(const Buffer& buf) -> OpResult {
+  CHECK(!buf.empty());
+  int sz = buf.size() < INT_MAX ? buf.size() : INT_MAX;
+  int result = SSL_write(ssl_, buf.data(), sz);
+
+  if (result > 0) {
+    bytes_written_ += result;
+  }
+  RETURN_RESULT(result);  // Should never return 0.
+}
+
+auto Engine::Read(uint8_t* dest, size_t len) -> OpResult {
+  if (len == 0)
+    return 0;
+  int sz = len < INT_MAX ? len : INT_MAX;
+  int result = SSL_read(ssl_, dest, sz);
+  if (result > 0) {
+    bytes_read_ += result;
+  }
+
+  if (result < 0) {
+    // Verify that we aren't hiding decrypted application data behind an error code.
+    char dummy;
+    DCHECK_LE(SSL_peek(ssl_, &dummy, 1), 0)
+        << "SSL_read returned error but SSL_peek says data is ready!";
+  }
+
+  RETURN_RESULT(result);
+}
+
+// returns -1 if failed to load any CA certificates, 0 if loaded successfully
+int SslProbeSetDefaultCALocation(SSL_CTX* ctx) {
+  /* The probe paths are based on:
+   * https://www.happyassassin.net/posts/2015/01/12/a-note-about-ssltls-trusted-certificate-stores-and-platforms/
+   */
+  static const char* paths[] = {
+      "/etc/pki/tls/certs/ca-bundle.crt",
+      "/etc/ssl/certs/ca-bundle.crt",
+      "/etc/pki/tls/certs/ca-bundle.trust.crt",
+      "/etc/ssl/cert.pem",
+      "/etc/ssl/cacert.pem",
+
+      "/etc/ssl/certs/ca-certificates.crt",
+
+      /* BSD */
+      "/usr/local/share/certs/ca-root-nss.crt",
+      "/etc/openssl/certs/ca-certificates.crt",
+#ifdef __APPLE__
+      "/private/etc/ssl/cert.pem",
+      "/private/etc/ssl/certs",
+      "/usr/local/etc/openssl@1.1/cert.pem",
+      "/usr/local/etc/openssl@1.0/cert.pem",
+      "/usr/local/etc/openssl/certs",
+      "/System/Library/OpenSSL",
+#endif
+      NULL,
+  };
+  const char* path = NULL;
+  int i;
+
+  for (i = 0; (path = paths[i]); i++) {
+    struct stat st;
+
+    if (stat(path, &st) != 0)
+      continue;
+
+    int res = SSL_CTX_load_verify_locations(ctx, path, NULL);
+    if (res != 1) {
+      ClearSslError();
+
+      continue;
+    }
+    VLOG(1) << "Successfully loaded root certificates from " << path;
+    return 0;
+  }
+
+  return -1;
+}
+
+auto Engine::ToOpResult(int result, const char* location) -> OpResult {
+  DCHECK_LE(result, 0);
+
+  int ssl_error = SSL_get_error(ssl_, result);
+  unsigned long queue_error = 0;
+
+#define ERROR_DETAILS(err, loc)                                       \
+  ERR_GET_LIB(err) << ":" << ERR_GET_REASON(err) << ":" << err << " " \
+                   << ERR_reason_error_string(err) << " " << loc
+
+  switch (ssl_error) {
+    case SSL_ERROR_ZERO_RETURN:  // graceful shutdown of TLS connection.
+      return Engine::EOF_GRACEFUL;
+    case SSL_ERROR_WANT_READ:
+      return Engine::NEED_READ_AND_MAYBE_WRITE;
+    case SSL_ERROR_WANT_WRITE:
+      return Engine::NEED_WRITE;
+    case SSL_ERROR_SYSCALL:  // fatal error in system call.
+      queue_error = ERR_get_error();
+      VLOG(1) << "SSL syscall error " << ERROR_DETAILS(queue_error, location);
+      break;
+
+    case SSL_ERROR_SSL: {
+      queue_error = ERR_get_error();
+      int reason = ERR_GET_REASON(queue_error);
+      switch (reason) {
+        case SSL_R_APPLICATION_DATA_AFTER_CLOSE_NOTIFY:
+          // The client sent data (trailing bytes) after the server already initiated the TLS
+          // shutdown. We treat this as a benign EOF/graceful shutdown.
+          VLOG(1) << "SSL application data after close_notify " << location;
+          break;
+        default: {
+          // All other protocol errors are warnings/fatal
+          state_ |= FATAL_ERROR;
+          LOG_EVERY_T(WARNING, 1) << "SSL protocol error " << ERROR_DETAILS(queue_error, location)
+                                  << " bytes_read: " << bytes_read_
+                                  << " bytes_written: " << bytes_written_;
+        }
+      }
+      break;
+    }
+    default:
+      queue_error = ERR_get_error();
+      state_ |= FATAL_ERROR;
+      LOG_EVERY_T(WARNING, 1) << "Unexpected SSL error " << ssl_error << " "
+                              << ERROR_DETAILS(queue_error, location);
+      break;
+  }
+
+  return Engine::EOF_ABRUPT;
+}
+
+}  // namespace tls
+}  // namespace util

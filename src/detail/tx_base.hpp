@@ -12,7 +12,7 @@ using IndexSlice = std::pair<uint32_t, uint32_t>;
 struct DbContext {
     Namespace* ns_ = nullptr; 
     DbIndex db_index_ = 0;
-    // uint64_t time_now_ms = 0;
+    uint64_t time_now_ms = 0;
     DbSlice& GetDbSlice(ShardId shard_id) const{
         return ns->GetDbSlice(shard_id);        
     }  
