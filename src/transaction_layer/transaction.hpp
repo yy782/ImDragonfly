@@ -4,6 +4,7 @@
 #include "tx_base.hpp"
 #include "common_types.hpp"
 
+#include <functional>
 
 namespace dfly{
 
@@ -13,6 +14,9 @@ class Namespace;
 
 
 class Transaction{
+public:
+    using RunnableType = std::function<RunnableResult(Transaction* t, EngineShard*)>; // not same , using ref will well
+
     OpArgs Transaction::GetOpArgs(EngineShard* shard) const;
     
     DbContext GetDbContext() const {
