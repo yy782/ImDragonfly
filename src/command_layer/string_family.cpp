@@ -197,13 +197,13 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     auto [key, value] = parser.Next<string_view, string_view>();
     auto params_result = ParseSetParams(parser, cmd_cntx);
 
-    auto& sparams = util::bf2::get<SetCmd::SetParams>(params_result);
+    auto& sparams = std::get<SetCmd::SetParams>(params_result);
 
     optional<StringResult> prev;
     if (sparams.flags & SetCmd::SET_GET)
         sparams.prev_val = &prev;
 
-    optional<util::fb2::Future<bool>> backpressure;
+    std::optional<util::fb2::Future<bool>> backpressure;
     sparams.backpressure = &backpressure;
 
     auto cb = [&](Transaction* t, EngineShard* shard) {
