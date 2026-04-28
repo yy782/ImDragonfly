@@ -1,6 +1,6 @@
 #pragma once
 
-namespace dfly {
+namespace facade  {
 
 enum class OpStatus : uint16_t {
     OK,

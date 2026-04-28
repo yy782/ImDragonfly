@@ -1,7 +1,5 @@
 
-
-#ifndef COROUTINE_DETAIL_LIGHTWEIGHT_MANUAL_RESET_EVENT_H
-#define COROUTINE_DETAIL_LIGHTWEIGHT_MANUAL_RESET_EVENT_H
+#pragma once
 
 #include <atomic>
 #include <cstdint>

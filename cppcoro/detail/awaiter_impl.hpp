@@ -1,6 +1,5 @@
+#pragma once
 
-#ifndef XYNET_COROUTINE_DETAIL_IS_AWAITER_H
-#define XYNET_COROUTINE_DETAIL_IS_AWAITER_H
 #include <type_traits>
 #include <coroutine>
 #include <concepts>

@@ -191,7 +191,8 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     return sparams;
 }
 
-cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
+
+cppcoro::Task<void, Coro> CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     facade::CmdArgParser parser{args};
 
     auto [key, value] = parser.Next<string_view, string_view>();
@@ -199,7 +200,7 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 
     auto& sparams = std::get<SetCmd::SetParams>(params_result);
 
-    optional<StringResult> prev;
+    std::optional<StringResult> prev;
     if (sparams.flags & SetCmd::SET_GET)
         sparams.prev_val = &prev;
 
@@ -210,7 +211,7 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
         return SetCmd(t->GetOpArgs(shard), true).Set(sparams, key, value);
     };
 
-    OpStatus result = co_await cmd::SingleHop(cb);
+    facade::OpStatus result = co_await cmd::SingleHop(cb);
     auto* rb = cmd_cntx->rb();
 
     switch (result) {
@@ -272,7 +273,7 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
         return SetCmd(t->GetOpArgs(shard)).Set(sparams, key, value);
     };
 
-    OpStatus result = co_await cmd::SingleHop(cb);
+    facade::OpStatus result = co_await cmd::SingleHop(cb);
 
 
     auto* conn = cmd_cntx->conn_cntx()->owner_;
