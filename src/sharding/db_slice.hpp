@@ -65,7 +65,16 @@ public:
     DbSlice(const DbSlice&) = delete;
     void operator=(const DbSlice&) = delete;
 
-    void PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async = false); // 实际的删除函数
+
+    EngineShard* shard_owner() const {
+        return owner_;
+    }
+
+    ShardId shard_id() const {
+        return shard_id_;
+    }
+
+    void PerformDeletionAtomic(const Iterator& del_it, DbTable* table); // 实际的删除函数
 
     ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
     ConstIterator FindReadOnly(const Context& cntx, std::string_view key) const; // 查找 key，返回只读迭代器
@@ -76,18 +85,21 @@ public:
     OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
                                     uint64_t expire_at_ms);
 
-    void Del(Context cntx, Iterator it, DbTable* db_table = nullptr, bool async = false);
+    void Del(Context cntx, Iterator it, DbTable* db_table = nullptr);
     void DelMutable(Context cntx, ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
     bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
 
 
+    facade::OpResult<void> UpdateExpire(const Context& cntx, Iterator prime_it,
+                                        int64_t sec);    
+    void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);
 
-  void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);
-
-  bool RemoveExpire(DbIndex db_ind, const Iterator& main_it);
+    bool RemoveExpire(DbIndex db_ind, const Iterator& main_it);
     Iterator ExpireIfNeeded(const Context& cntx, Iterator it) const;
     PrimeIterator ExpireIfNeeded(const Context& cntx, PrimeIterator it) const;    
     void ExpireAllIfNeeded();
+
+
 
 
 private:
@@ -105,8 +117,7 @@ private:
                                              std::optional<unsigned> req_obj_type);
     OpResult<ItAndUpdater> AddOrUpdateInternal(const Context& cntx,
                                                             std::string_view key, PrimeValue obj,
-                                                            uint64_t expire_at_ms,
-                                                            bool force_update);         
+                                                            uint64_t expire_at_ms);         
                                                             
                                                             
 

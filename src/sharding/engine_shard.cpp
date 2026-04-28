@@ -1,6 +1,5 @@
 #include "engine_shard.hpp"
 #include "stateless_alloceator.hpp"
-#include <absl/strings/str_cat.h>
 
 
 namespace dfly{
@@ -20,8 +19,8 @@ queue_(kQueueLen, 1, 1),
 queue2_(kQueueLen / 2, 2, 2),
 shard_id_(pb->GetPoolIndex()),
 mi_resource_(heap) {
-    queue_.Start(absl::StrCat("shard_queue_", shard_id()));
-    queue2_.Start(absl::StrCat("l2_queue_", shard_id()));
+    queue_.Start("shard_queue_"+std::to_string(shard_id()));
+    queue2_.Start("l2_queue_"+std::to_string(shard_id()));
 }
 void EngineShard::DestroyThreadLocal() {
     if (!shard_)

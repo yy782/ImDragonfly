@@ -1,3 +1,5 @@
+#pragma once
+
 #include "compact_obj.hpp"
 #include "redis_aux.hpp"
 namespace dfly{

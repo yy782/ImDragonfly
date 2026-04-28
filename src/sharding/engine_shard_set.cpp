@@ -2,6 +2,8 @@
 #include "common.hpp"
 #include "namespaces.hpp"
 
+#include <functional>
+
 namespace dfly{
 
 EngineShardSet* shard_set = nullptr;
@@ -65,8 +67,18 @@ void EngineShardSet::InitThreadLocal(ProactorBase* pb) {
 
 
 
+ShardId Shard(std::string_view key)
+{
+    auto size = shard_set.size();
+    size_t hash = std::hash<std::string_view>{}(key);
 
-
+    if(isPowerOfTwo(size))
+    {
+        return hash & (size-1);
+    }
+    else 
+        return hash % size;
+}
 
 
 }  // namespace dfly

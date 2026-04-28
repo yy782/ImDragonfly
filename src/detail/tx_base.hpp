@@ -2,11 +2,10 @@
 #include "common_types.hpp"
 
 #include "namespaces.hpp"
-#include <absl/types/span.h>
+#include <span>
 namespace dfly {
 
-using ArgSlice = absl::Span<const std::string_view>; // from arg_range.h
-using IndexSlice = std::pair<uint32_t, uint32_t>;
+
 
 
 struct DbContext {
@@ -20,14 +19,8 @@ struct DbContext {
 
 struct OpArgs {
     EngineShard* shard_ = nullptr;
-    // const Transaction* tx = nullptr;
+    const Transaction* tx_ = nullptr;
     DbContext db_cntx_;
-
-    OpArgs() = default;
-
-    OpArgs(EngineShard* s,  const DbContext& cntx)
-        : shard_(s),  db_cntx_(cntx) {
-    }
 
     // Convenience method.
     DbSlice& GetDbSlice() const;
@@ -38,7 +31,7 @@ class ShardArgs {
 public:
     class Iterator {
         ArgSlice arglist_;
-        absl::Span<const IndexSlice>::const_iterator index_it_;
+        std::span<const IndexSlice>::const_iterator index_it_;
         uint32_t delta_ = 0;
 
     public:
@@ -87,7 +80,7 @@ public:
 
     using const_iterator = Iterator;
 
-    ShardArgs(ArgSlice fa, absl::Span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
+    ShardArgs(ArgSlice fa, std::span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
     }
 
     ShardArgs() : slice_(ArgsIndexPair{}) {
@@ -119,7 +112,7 @@ public:
         return *cbegin();
     }
 private:
-    using ArgsIndexPair = std::pair<ArgSlice, absl::Span<const IndexSlice>>;
+    using ArgsIndexPair = std::pair<ArgSlice, std::span<const IndexSlice>>;
     ArgsIndexPair slice_;
 };
 

@@ -2,6 +2,8 @@
 #include "engine_shard.hpp"
 #include "util/proactor_pool.h"
 
+#include "utils/Time.hpp"
+
 namespace dfly{
 class TieredStorage;
 class ShardDocIndices;
@@ -123,20 +125,9 @@ template <typename U, typename P> void EngineShardSet::RunBlockingInParallel(U&&
     bc->Wait();
 }
 
-ShardId Shard(std::string_view v, ShardId shard_num);
+ShardId Shard(std::string_view key);
 
-// absl::GetCurrentTimeNanos is twice faster than clock_gettime(CLOCK_REALTIME) on my laptop
-// and 4 times faster than on a VM. it takes 5-10ns to do a call.
 
-// extern uint64_t TEST_current_time_ms;
-
-inline uint64_t GetCurrentTimeMs() {  // not same 
-    return absl::GetCurrentTimeNanos() / 1000000;
-}
-
-// inline uint64_t GetCurrentTimeNs() {
-//     return TEST_current_time_ms ? TEST_current_time_ms * 1000000 : absl::GetCurrentTimeNanos();
-// }
 
 extern EngineShardSet* shard_set;
 }  // namespace dfly
