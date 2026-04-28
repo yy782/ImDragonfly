@@ -23,6 +23,9 @@ public:
         return DbContext{namespace_, db_index_, time_now_ms_};
     }   
 
+    DbSlice& Transaction::GetDbSlice(ShardId shard_id) const {
+        return namespace_->GetDbSlice(shard_id);
+    }
 private:
     const CommandId* cid_ = nullptr;
     Namespace* namespace_ = nullptr;

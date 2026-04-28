@@ -65,10 +65,10 @@ public:
         }
     };
 
-    OpStatus Set(const SetParams& params, std::string_view key, std::string_view value);
+    facade::OpResult<void> Set(const SetParams& params, std::string_view key, std::string_view value);
 
 private:
-    OpStatus SetExisting(const SetParams& params, std::string_view value,
+   facade::OpResult<void> SetExisting(const SetParams& params, std::string_view value,
                         DbSlice::ItAndUpdater* it_upd);
 
     void AddNew(const SetParams& params, const DbSlice::Iterator& it, std::string_view key,
@@ -79,54 +79,8 @@ private:
 };
 
 
-struct GetReplies {
-  GetReplies(SinkReplyBuilder* rb) : rb{static_cast<RedisReplyBuilder*>(rb)} {
-    DCHECK(dynamic_cast<RedisReplyBuilder*>(rb));
-  }
 
-  template <typename T> void Send(OpResult<T>&& res) const {
-    switch (res.status()) {
-      case OpStatus::OK:
-        return Send(std::move(res.value()));
-      case OpStatus::WRONG_TYPE:
-        return rb->SendError(kWrongTypeErr);
-      case OpStatus::IO_ERROR:
-        return rb->SendError(kTieredIoError);
-      default:
-        rb->SendNull();
-    }
-  }
-
-  template <typename T> void Send(optional<T>&& res) const {
-    if (res.has_value())
-      return Send(std::move(*res));
-    return rb->SendNull();
-  }
-
-  template <typename T> void Send(TResultOrT<T>&& res) const {
-    if (holds_alternative<T>(res))
-      return Send(get<T>(res));
-
-    io::Result<T> iores = get<1>(std::move(res)).Get();
-    if (iores.has_value())
-      Send(*iores);
-    else
-      Send(iores.error().message());
-  }
-
-  void Send(size_t val) const {
-    rb->SendLong(val);
-  }
-
-  void Send(string_view str) const {
-    rb->SendBulkString(str);
-  }
-
-  RedisReplyBuilder* rb;
-};
-
-
-OpStatus SetCmd::Set(const SetParams& params, string_view key, string_view value) {
+facade::OpResult<void> SetCmd::Set(const SetParams& params, string_view key, string_view value) {
     auto& db_slice = op_args_.GetDbSlice();
     auto op_res = db_slice.AddOrFind(op_args_.db_cntx, key, std::nullopt);
 
@@ -139,7 +93,7 @@ OpStatus SetCmd::Set(const SetParams& params, string_view key, string_view value
     }
 }
 
-OpStatus SetCmd::SetExisting(const SetParams& params, string_view value,
+facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, string_view value,
                              DbSlice::ItAndUpdater* it_upd) {
 
     PrimeKey& key = it_upd->it->first;
@@ -260,7 +214,10 @@ cmd::CmdR CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
 }
 
-cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
+
+using CoroTask = cppcoro::task<void, cmd::Coro>;
+
+CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     facade::CmdArgParser parser{args};
 
     auto [key, value] = parser.Next<string_view, string_view>();
@@ -269,16 +226,16 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 
     auto& sparams = std::get<SetCmd::SetParams>(params_result); // 获取解析后的 SetParams 结构体
 
-    auto cb = [&](Transaction* t, EngineShard* shard) {
+    auto cb = [&](Transaction* t, EngineShard* shard)-> OpResult<void> {
         return SetCmd(t->GetOpArgs(shard)).Set(sparams, key, value);
     };
 
-    facade::OpStatus result = co_await cmd::SingleHop(cb);
+    auto result = co_await cmd::SingleHopT(cb);
 
 
     auto* conn = cmd_cntx->conn_cntx()->owner_;
 
-    if (result == OpStatus::OK) {
+    if (result.status() == OpStatus::OK) {
         conn->SendOk();
     } else {
         conn->SendERROR();
@@ -287,8 +244,8 @@ cmd::CmdR CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     co_return std::nullopt;
 }
 
-cmd::CmdR CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
-    auto cb = [key = ArgS(args, 0)](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
+CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
+    auto cb = [key = args[0]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
         auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key, OBJ_STRING);
         if (!it_res.ok())
             return it_res.status();
@@ -296,7 +253,13 @@ cmd::CmdR CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
         return ReadString(tx->GetDbIndex(), key, (*it_res)->second, es);
     };
 
-    GetReplies{cmd_cntx->rb()}.Send(co_await cmd::SingleHopT(cb));
+    auto result = co_await cmd::SingleHopT(cb);
+
+    if (result.status() == OpStatus::OK) {
+        conn->Send(result.value());
+    } else {
+        conn->SendERROR();
+    }    
     co_return std::nullopt;
 }
 
