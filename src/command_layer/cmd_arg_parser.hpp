@@ -10,9 +10,9 @@
 #include <utility>
 #include <charconv>
 
-#include "utils/EqualsIgnoreCase.hpp"
+#include "utils/Strings.hpp"
 
-namespace facade {
+namespace cmd {
 
 struct CmdArgParser {
 public:

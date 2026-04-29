@@ -10,11 +10,14 @@
 #include <ranges>
 #include <string_view>
 
+#include "cmd_arg_parser.hpp"
+
+
 namespace cmn {
 
 class BackedArguments {
-    constexpr static size_t kLenCap = 5; // 内联存储的偏移量数量
-    constexpr static size_t kStorageCap = 88; // 内联存储的存储空间大小
+    constexpr static size_t kLenCap = 5; // 初始存储的偏移量数量
+    constexpr static size_t kStorageCap = 88; // 初始存储的存储空间大小
 
 public:
     using value_type = std::string_view;
@@ -155,5 +158,30 @@ void BackedArguments::Assign(I begin, I end, size_t len) {
         next += sz + 1;
     }
 }
+
+
+
+class ParsedCommand : BackedArguments{
+public:
+
+    using BackedArguments::BackedArguments;
+
+    CmdArgParser ToParser() const 
+    {
+        assert(vec_.size()==0);
+
+        for(const std::string_view sv : view(1))
+        {
+            vec_.push_back(sv);
+        }
+        ArgSlice full_span(vec);
+
+        auto slic = full_span.subspan(1);
+        return {slic};
+    }
+};
+private:
+
+    std::vector<std::string_view> vec_;
 
 }  // namespace cmn

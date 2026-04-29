@@ -81,7 +81,7 @@ public:
 
     using const_iterator = Iterator;
 
-    ShardArgs(ArgSlice fa, absl::Span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
+    ShardArgs(ArgSlice fa, std::span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
     }
 
     ShardArgs() : slice_(ArgsIndexPair{}) {
@@ -113,7 +113,7 @@ public:
         return *cbegin();
     }
 private:
-    using ArgsIndexPair = std::pair<ArgSlice, absl::Span<const IndexSlice>>;
+    using ArgsIndexPair = std::pair<ArgSlice, std::span<const IndexSlice>>;
     ArgsIndexPair slice_;
 };
 

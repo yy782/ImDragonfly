@@ -1,9 +1,13 @@
 #pragma once
 
 #include <span>
-
-#include <concepts>
 #include <string_view>
-namespace facade{
+
+namespace cmn {
+
+using ArgSlice = std::span<const std::string_view>;
+
+
 using CmdArgList = std::span<const std::string_view>;    
+
 }

@@ -90,7 +90,8 @@ public:
     bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
 
 
-
+    facade::OpResult<void> UpdateExpire(const Context& cntx, Iterator prime_it,
+                                        int64_t sec);    
     void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);
 
     bool RemoveExpire(DbIndex db_ind, const Iterator& main_it);
@@ -116,8 +117,7 @@ private:
                                              std::optional<unsigned> req_obj_type);
     OpResult<ItAndUpdater> AddOrUpdateInternal(const Context& cntx,
                                                             std::string_view key, PrimeValue obj,
-                                                            uint64_t expire_at_ms,
-                                                            bool force_update);         
+                                                            uint64_t expire_at_ms);         
                                                             
                                                             
 

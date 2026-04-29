@@ -37,7 +37,6 @@ public:
     Transaction* tx() const { 
         return transaction_;
     }
-
 private:
     ConnextionContext* conn_cntx_;
     Transaction* transaction_;

@@ -90,7 +90,7 @@ private:
   CommandContext* cmd_cntx_;
 };
 
-
+using CoroTask = cppcoro::task<void, cmd::Coro>;
 
 
 }  // namespace dfly::cmd

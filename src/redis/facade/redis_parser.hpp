@@ -5,10 +5,13 @@
 #include <vector>
 #include <cctype>
 #include <sstream>
-namespace dfly{
-// ==================== RESP 协议解析 ====================
 
-inline std::vector<std::string> ParseRESP(const std::string& data) {
+#include "parsed_command.hpp"
+
+namespace dfly{
+
+
+inline BackedArguments ParseRESP(/* data */) {
     std::vector<std::string> result;
     if (data.empty() || data[0] != '*') {
         return result;
@@ -53,7 +56,7 @@ inline std::vector<std::string> ParseRESP(const std::string& data) {
         if (pos < data.size() && data[pos] == '\n') pos++;
     }
     
-    return result;
+    return BackedArguments(result.begin(), result.end(), result.size());
 }
 
 }

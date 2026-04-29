@@ -78,12 +78,12 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, std::str
 }
 OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, std::string_view key,
                                                      PrimeValue obj, uint64_t expire_at_ms) {
-    return AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms, true);
+    return AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms);
 }
 
 OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std::string_view key,
                                                 PrimeValue obj, uint64_t expire_at_ms) {
-    auto op_result = AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms, false);
+    auto op_result = AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms);
     auto& res = *op_result;
     return DbSlice::ItAndUpdater{.it_ = res.it_};
 }
@@ -119,8 +119,7 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, 
 
 OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
                                                              std::string_view key, PrimeValue obj,
-                                                             uint64_t expire_at_ms,
-                                                             bool force_update) {
+                                                             uint64_t expire_at_ms) {
     auto op_result = AddOrFind(cntx, key, std::nullopt);
     
     if(op_result.status() != OpStatus::OK)
@@ -130,7 +129,7 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx
 
 
     auto& res = *op_result;
-    if (!res.is_new_ && !force_update) 
+    if (!res.is_new_ ) // not same 
         return op_result;
 
     auto& it = res.it_;
@@ -172,6 +171,13 @@ void DbSlice::CreateDb(DbIndex db_ind) {
     }
 }
 
+
+facade::OpResult<void> DbSlice::UpdateExpire(const Context& cntx, Iterator prime_it,
+                                    int64_t sec){
+    main_it->first.SetExpireTime(sec);                                    
+
+
+}
 
 void DbSlice::AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at) {
     main_it->first.SetExpireTime(at);

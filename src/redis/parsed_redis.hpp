@@ -10,12 +10,15 @@
 #include "namespaces.hpp"
 #include "tx_base.hpp"
 #include "db_slice.hpp"
+
+
+
 namespace dfly{
 
-class Common{
+class ParsedRedis{
 public:
 
-    Common(const DbContext& db_context) : db_context_(db_context) {}
+    ParsedRedis(const DbContext& db_context) : db_context_(db_context) {}
 
     std::string HandleSet(const std::string& key, const std::string& value) {
         ShardId sid = KeySlot(std::string_view(key));
