@@ -8,6 +8,8 @@ OpArgs Transaction::GetOpArgs(EngineShard* shard) const {
 }
 
 
-
+ShardArgs Transaction::GetShardArgs(ShardId sid) const {
+    return ShardArgs{full_args_, std::span(args_slices_)}; 
+}
     
 }

@@ -5,6 +5,9 @@
 #include "common_types.hpp"
 #include "utils/function_ref.hpp"
 #include "engine_shard_set.hpp"
+#include "facade_types.hpp"
+#include "tx_base.hpp"
+
 namespace dfly{
 
 
@@ -16,8 +19,8 @@ class Transaction{
 public:
     using RunnableType = utils::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
 
-    OpArgs Transaction::GetOpArgs(EngineShard* shard) const;
-    
+    OpArgs GetOpArgs(EngineShard* shard) const;
+    ShardArgs GetShardArgs(ShardId sid) const;    
     DbContext GetDbContext() const {
         return DbContext{namespace_, db_index_, time_now_ms_};
     }   
@@ -43,6 +46,8 @@ private:
 
     ShardId unique_shard_id_ = kInvalidSid;
 
+    std::vector<IndexSlice> args_slices_;
+    facade::CmdArgList full_args_;
 
 };
 
