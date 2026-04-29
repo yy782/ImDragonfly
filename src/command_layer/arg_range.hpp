@@ -1,10 +1,10 @@
 #pragma once
 
-#include <absl/types/span.h>
+#include <span>
 #include <string_view>
 
 namespace cmn {
 
-using ArgSlice = absl::Span<const std::string_view>;
+using ArgSlice = std::Span<const std::string_view>;
 
 }

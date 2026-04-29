@@ -4,29 +4,15 @@
 
 #include "command_registry.hpp"
 
-#include <absl/container/inlined_vector.h>
-#include <absl/strings/ascii.h>
-#include <absl/strings/match.h>
-#include <absl/strings/str_cat.h>
-#include <absl/strings/str_split.h>
-#include <absl/time/clock.h>
-#include <hdr/hdr_histogram.h>
-
 #include "base/bits.h"
 #include "base/flags.h"
 #include "base/logging.h"
 #include "base/stl_util.h"
-
+#include "utils/Strings.hpp"
 
 namespace dfly {
 
 using namespace facade;
-
-using absl::AsciiStrToUpper;
-using absl::GetFlag;
-using absl::StrCat;
-using absl::StrSplit;
-
 
 
 CommandId::CommandId(const char* name, uint32_t mask, int8_t arity, int8_t first_key,
@@ -69,7 +55,7 @@ CommandRegistry::FamiliesVec CommandRegistry::GetFamilies() {
 }
 
 std::pair<const CommandId*, ParsedArgs> CommandRegistry::FindExtended(ParsedArgs args) const {
-    std::string cmd = absl::AsciiStrToUpper(args.Front());// 提取并转大写
+    std::string cmd = utils::StrToUpper<std::string>(args.Front());// 提取并转大写
     const CommandId* res = Find(cmd);
     if (!res)
       return {nullptr, {}};

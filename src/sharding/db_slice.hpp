@@ -74,7 +74,7 @@ public:
         return shard_id_;
     }
 
-    void PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async = false); // 实际的删除函数
+    void PerformDeletionAtomic(const Iterator& del_it, DbTable* table); // 实际的删除函数
 
     ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
     ConstIterator FindReadOnly(const Context& cntx, std::string_view key) const; // 查找 key，返回只读迭代器
@@ -85,7 +85,7 @@ public:
     OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
                                     uint64_t expire_at_ms);
 
-    void Del(Context cntx, Iterator it, DbTable* db_table = nullptr, bool async = false);
+    void Del(Context cntx, Iterator it, DbTable* db_table = nullptr);
     void DelMutable(Context cntx, ItAndUpdater it_updater); // 通过 FindMutable 找到 key 后删除
     bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
 

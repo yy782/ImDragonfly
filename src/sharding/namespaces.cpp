@@ -8,16 +8,6 @@
 #include "synchronization.hpp"
 
 
-
-
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>  // from #include "base/flags.h"
-
-
-
-
-ABSL_DECLARE_FLAG(bool, cache_mode);
-
 namespace dfly {
 
 
@@ -26,7 +16,7 @@ Namespace::Namespace() {
     // shard_blocking_controller_.resize(shard_set->size());
     shard_set->RunBriefInParallel([&](EngineShard* es) { // 并行执行
         ShardId sid = es->shard_id();
-        shard_db_slices_[sid] = std::make_unique<DbSlice>(sid, absl::GetFlag(FLAGS_cache_mode), es);
+        shard_db_slices_[sid] = std::make_unique<DbSlice>(sid, false, es);
     });
 }
 
@@ -69,7 +59,7 @@ void Namespaces::Clear() {
     }
 
     shard_set->RunBriefInParallel([&](EngineShard* es) {
-        for (auto& ns : ABSL_TS_UNCHECKED_READ(namespaces_)) {
+        for (auto& ns : namespaces_) {
             ns.second.shard_db_slices_[es->shard_id()].reset();
         }
     });
@@ -85,7 +75,7 @@ Namespace& Namespaces::GetOrInsert(std::string_view ns) {
     std::string nns=std::string(ns);                // not same
     {
         // Try to look up under a shared lock
-        dfly::SharedLock guard(mu_);
+        SharedLock guard(mu_);
         auto it = namespaces_.find(nns);            
         if (it != namespaces_.end()) {
         return it->second;

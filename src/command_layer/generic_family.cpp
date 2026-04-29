@@ -4,25 +4,22 @@
 
 #include "generic_family.hpp"
 
-#include <absl/strings/ascii.h>
-#include <absl/strings/str_cat.h>
 
 #include <optional>
 
 #include "cmd_support.hpp"
 
-
-
-namespace rng = std::ranges;
+#include <atomic>
 
 namespace dfly {
-using namespace std;
-using namespace facade;
-
 namespace {
 
 constexpr uint32_t kMaxTtl = (1UL << 26);
 constexpr size_t DUMP_FOOTER_SIZE = sizeof(uint64_t) + sizeof(uint16_t);  // version number and crc
+
+
+
+
 
 std::optional<RdbVersion> GetRdbVersion(std::string_view msg, bool ignore_crc = false) {
   if (msg.size() <= DUMP_FOOTER_SIZE) {
@@ -65,7 +62,7 @@ class InMemSource : public ::io::Source {
 
   ::io::Result<size_t> ReadSome(const iovec* v, uint32_t len) final;
 
- protected:
+protected:
   std::string_view buf_;
   off_t offs_ = 0;
 };
@@ -792,79 +789,9 @@ uint64_t RmGeneric(uint64_t cursor, const ScanOpts& scan_opts, uint32_t* deleted
   return cursor;
 }
 
-OpStatus OpExpire(const OpArgs& op_args, string_view key, const DbSlice::ExpireParams& params) {
-  auto& db_slice = op_args.GetDbSlice();
-  auto find_res = db_slice.FindMutable(op_args.db_cntx, key);
-  if (!IsValid(find_res.it)) {
-    return OpStatus::KEY_NOTFOUND;
-  }
 
-  find_res.post_updater.Run();
-  auto res = db_slice.UpdateExpire(op_args.db_cntx, find_res.it, params);
 
-  // If the value was deleted, replicate as DEL.
-  // Else, replicate as PEXPIREAT with exact time.
-  if (op_args.shard->journal() && res.ok()) {
-    if (res.value() == -1) {
-      RecordJournal(op_args, "DEL"sv, ArgSlice{key});
-    } else {
-      auto time = absl::StrCat(res.value());
-      // Note: Don't forget to change this when adding arguments to expire commands.
-      RecordJournal(op_args, "PEXPIREAT"sv, ArgSlice{key, time});
-    }
-  }
 
-  return res.status();
-}
-
-#ifdef WITH_COLLECTION_CMDS
-OpResult<vector<long>> OpFieldExpire(const OpArgs& op_args, string_view key, uint32_t ttl_sec,
-                                     CmdArgList values) {
-  auto& db_slice = op_args.GetDbSlice();
-  auto [it, auto_updater, is_new] = db_slice.FindMutable(op_args.db_cntx, key);
-
-  if (!IsValid(it) || (it->second.ObjType() != OBJ_SET && it->second.ObjType() != OBJ_HASH)) {
-    std::vector<long> res(values.size(), -2);
-    return res;
-  }
-
-  PrimeValue* pv = &it->second;
-  if (pv->ObjType() == OBJ_SET) {
-    auto result = SetFamily::SetFieldsExpireTime(op_args, ttl_sec, values, pv);
-    // Finalize memory accounting before potential deletion.
-    auto_updater.Run();
-    SetFamily::DeleteSetIfEmpty(db_slice, op_args.db_cntx, key, *pv);
-    return result;
-  } else {
-    return HSetFamily::SetFieldsExpireTime(op_args, ttl_sec, ExpireFlags::EXPIRE_ALWAYS, key,
-                                           values, pv);
-  }
-}
-
-// returns -2 if the key was not found, -3 if the field was not found,
-// -1 if ttl on the field was not found.
-OpResult<long> OpFieldTtl(Transaction* t, EngineShard* shard, string_view key, string_view field) {
-  auto& db_slice = t->GetDbSlice(shard->shard_id());
-  const DbContext& db_cntx = t->GetDbContext();
-  auto it = db_slice.FindReadOnly(db_cntx, key);
-  if (!IsValid(it))
-    return -2;
-
-  if (it->second.ObjType() != OBJ_SET && it->second.ObjType() != OBJ_HASH)
-    return OpStatus::WRONG_TYPE;
-
-  int32_t res = -1;
-  if (it->second.ObjType() == OBJ_SET) {
-    res = SetFamily::FieldExpireTime(db_cntx, it->second, field);
-    SetFamily::DeleteSetIfEmpty(db_slice, db_cntx, key, it->second);
-  } else {
-    DCHECK_EQ(OBJ_HASH, it->second.ObjType());
-    res = HSetFamily::FieldExpireTime(db_cntx, it->second, field);
-    HSetFamily::DeleteIfEmpty(db_slice, db_cntx, key, it->second);
-  }
-  return res <= 0 ? res : int32_t(res - MemberTimeSeconds(db_cntx.time_now_ms));
-}
-#else
 OpResult<vector<long>> OpFieldExpire(const OpArgs& op_args, string_view key, uint32_t ttl_sec,
                                      CmdArgList values) {
   return OpStatus::SKIPPED;
@@ -873,24 +800,8 @@ OpResult<long> OpFieldTtl(Transaction* t, EngineShard* shard, string_view key, s
   return OpStatus::SKIPPED;
 }
 
-#endif
 
-OpResult<uint32_t> OpStick(const OpArgs& op_args, const ShardArgs& keys) {
-  DVLOG(1) << "Stick: " << keys.Front();
 
-  auto& db_slice = op_args.GetDbSlice();
-
-  uint32_t res = 0;
-  for (string_view key : keys) {
-    auto find_res = db_slice.FindMutable(op_args.db_cntx, key);
-    if (IsValid(find_res.it) && !find_res.it->first.IsSticky()) {
-      find_res.it->first.SetSticky(true);
-      ++res;
-    }
-  }
-
-  return res;
-}
 
 OpResult<uint64_t> OpExpireTime(Transaction* t, EngineShard* shard, string_view key) {
   auto& db_slice = t->GetDbSlice(shard->shard_id());
@@ -906,118 +817,9 @@ OpResult<uint64_t> OpExpireTime(Transaction* t, EngineShard* shard, string_view 
   return ttl_ms;
 }
 
-// OpMove touches multiple databases (op_args.db_idx, target_db), so it assumes it runs
-// as a global transaction.
-// TODO: Allow running OpMove without a global transaction.
-OpStatus OpMove(const OpArgs& op_args, string_view key, DbIndex target_db) {
-  auto& db_slice = op_args.GetDbSlice();
 
-  // Fetch value at key in current db.
-  auto from_res = db_slice.FindMutable(op_args.db_cntx, key);
-  if (!IsValid(from_res.it))
-    return OpStatus::KEY_NOTFOUND;
 
-  // Ensure target database exists.
-  db_slice.ActivateDb(target_db);
 
-  // Fetch value at key in target db.
-  DbContext target_cntx = op_args.db_cntx;
-  target_cntx.db_index = target_db;
-  auto to_res = db_slice.FindReadOnly(target_cntx, key);
-  if (IsValid(to_res))
-    return OpStatus::KEY_EXISTS;
-
-  bool sticky = from_res.it->first.IsSticky();
-  uint64_t exp_ts = from_res.it->first.GetExpireTime();
-  from_res.post_updater.Run();
-  PrimeValue from_obj = std::move(from_res.it->second);
-
-  db_slice.Del(op_args.db_cntx, from_res.it);
-  auto op_result = db_slice.AddNew(target_cntx, key, std::move(from_obj), exp_ts);
-  RETURN_ON_BAD_STATUS(op_result);
-  auto& add_res = *op_result;
-  add_res.it->first.SetSticky(sticky);
-
-  // When tiering is enabled, update tiered-storage metadata for partial moved values.
-  if (EngineShard::tlocal()->tiered_storage()) {
-    if (add_res.it->second.ObjType() == OBJ_LIST && add_res.it->second.Encoding() == kEncodingQL2) {
-      auto* ql = static_cast<QList*>(add_res.it->second.RObjPtr());
-      ql->SetDbIndex(target_db);
-    }
-  }
-
-  auto bc = op_args.db_cntx.ns->GetBlockingController(op_args.shard->shard_id());
-  if (add_res.it->second.ObjType() == OBJ_LIST && bc) {
-    bc->Awaken(target_db, key);
-  }
-
-  return OpStatus::OK;
-}
-
-OpResult<void> OpRen(const OpArgs& op_args, string_view from_key, string_view to_key,
-                     bool destination_should_not_exist) {
-  auto* es = op_args.shard;
-  auto& db_slice = op_args.GetDbSlice();
-  auto from_res = db_slice.FindMutable(op_args.db_cntx, from_key);
-  if (!IsValid(from_res.it))
-    return OpStatus::KEY_NOTFOUND;
-
-  if (from_key == to_key)
-    return destination_should_not_exist ? OpStatus::KEY_EXISTS : OpStatus::OK;
-
-  bool is_prior_list = false;
-  auto to_res = db_slice.FindMutable(op_args.db_cntx, to_key);
-  if (IsValid(to_res.it)) {
-    if (destination_should_not_exist)
-      return OpStatus::KEY_EXISTS;
-
-    RemoveKeyFromIndexesIfNeeded(to_key, op_args.db_cntx, to_res.it->second, op_args.shard);
-    is_prior_list = (to_res.it->second.ObjType() == OBJ_LIST);
-  }
-
-  // Delete the "from" document from the search index before deleting from the database
-  RemoveKeyFromIndexesIfNeeded(from_key, op_args.db_cntx, from_res.it->second, op_args.shard);
-
-  bool sticky = from_res.it->first.IsSticky();
-  uint64_t exp_ts = from_res.it->first.GetExpireTime();
-  from_res.post_updater.ReduceHeapUsage();
-
-  // we keep the value we want to move.
-  PrimeValue from_obj = std::move(from_res.it->second);
-
-  if (IsValid(to_res.it)) {
-    to_res.post_updater.ReduceHeapUsage();
-    to_res.it->second = std::move(from_obj);
-
-    if (exp_ts) {
-      db_slice.AddExpire(op_args.db_cntx.db_index, to_res.it, exp_ts);
-    } else {
-      db_slice.RemoveExpire(op_args.db_cntx.db_index, to_res.it);
-    }
-
-    to_res.it->first.SetSticky(sticky);
-    to_res.post_updater.Run();
-
-    db_slice.DelMutable(op_args.db_cntx, std::move(from_res));
-  } else {
-    // Here we first delete from_it because AddNew below could invalidate from_it.
-    // On the other hand, AddNew does not rely on the iterators - this is why we keep
-    // the value in `from_obj`.
-    db_slice.DelMutable(op_args.db_cntx, std::move(from_res));
-    auto op_result = db_slice.AddNew(op_args.db_cntx, to_key, std::move(from_obj), exp_ts);
-    RETURN_ON_BAD_STATUS(op_result);
-    to_res = std::move(*op_result);
-    to_res.it->first.SetSticky(sticky);
-  }
-
-  AddKeyToIndexesIfNeeded(to_key, op_args.db_cntx, to_res.it->second, op_args.shard);
-
-  auto bc = op_args.db_cntx.ns->GetBlockingController(es->shard_id());
-  if (!is_prior_list && to_res.it->second.ObjType() == OBJ_LIST && bc) {
-    bc->Awaken(op_args.db_cntx.db_index, to_key);
-  }
-  return OpStatus::OK;
-}
 
 OpResult<uint64_t> OpTtl(Transaction* t, EngineShard* shard, string_view key) {
   auto opExpireTimeResult = OpExpireTime(t, shard, key);
@@ -1034,22 +836,7 @@ OpResult<uint64_t> OpTtl(Transaction* t, EngineShard* shard, string_view key) {
   }
 }
 
-ErrorReply RenameGeneric(CmdArgList args, bool destination_should_not_exist, Transaction* tx) {
-  string_view key[2] = {ArgS(args, 0), ArgS(args, 1)};
 
-  if (tx->GetUniqueShardCnt() == 1) {
-    tx->ReviveAutoJournal();  // Safe to use RENAME with single shard
-    auto cb = [&](Transaction* t, EngineShard* shard) {
-      return OpRen(t->GetOpArgs(shard), key[0], key[1], destination_should_not_exist);
-    };
-    OpResult<void> result = tx->ScheduleSingleHopT(std::move(cb));
-
-    return result.status();
-  }
-
-  Renamer renamer{tx, key[0], key[1], shard_set->size()};
-  return renamer.Rename(destination_should_not_exist);
-}
 
 void ExpireTimeGeneric(CmdArgList args, TimeUnit unit, CommandContext* cmd_cntx) {
   string_view key = ArgS(args, 0);
@@ -1099,167 +886,153 @@ void TtlGeneric(CmdArgList args, TimeUnit unit, CommandContext* cmd_cntx) {
   }
 }
 
-io::Result<int32_t, string> ParseExpireOptionsOrReply(const CmdArgList args) {
-  int32_t flags = ExpireFlags::EXPIRE_ALWAYS;
-  for (auto& arg : args) {
-    string arg_sv = absl::AsciiStrToUpper(ToSV(arg));
-    if (arg_sv == "NX") {
-      flags |= ExpireFlags::EXPIRE_NX;
-    } else if (arg_sv == "XX") {
-      flags |= ExpireFlags::EXPIRE_XX;
-    } else if (arg_sv == "GT") {
-      flags |= ExpireFlags::EXPIRE_GT;
-    } else if (arg_sv == "LT") {
-      flags |= ExpireFlags::EXPIRE_LT;
-    } else {
-      return nonstd::make_unexpected(absl::StrCat("Unsupported option: ", arg_sv));
-    }
-  }
-
-  if ((flags & ExpireFlags::EXPIRE_NX) && (flags & ExpireFlags::EXPIRE_XX)) {
-    return nonstd::make_unexpected("NX and XX options at the same time are not compatible");
-  }
-  if ((flags & ExpireFlags::EXPIRE_GT) && (flags & ExpireFlags::EXPIRE_LT)) {
-    return nonstd::make_unexpected("GT and LT options at the same time are not compatible");
-  }
-  return flags;
-}
 
 }  // namespace
 
 
-static cmd::CmdR CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
-    bool async_unlink =
-        cmd_cntx->cid()->name() == "UNLINK" && absl::GetFlag(FLAGS_unlink_experimental_async);
 
-    std::atomic_uint32_t result = 0;
+
+
+
+
+facade::OpResult<uint32_t> OpDel(const OpArgs& op_args, const ShardArgs& keys) {
+
+    auto& db_slice = op_args.GetDbSlice();
+    uint32_t res = 0;
+    for (std::string_view key : keys) {
+        auto it = db_slice.FindMutable(op_args.db_cntx, key).it;  // post_updater will run immediately
+        if (!IsValid(it))
+        continue;
+
+        db_slice.Del(op_args.db_cntx, it, nullptr);
+        ++res;
+    }
+
+    return res;
+}
+
+static CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
+    std::atomic<uint32_t> result = 0;
     auto cb = [&](Transaction* tx, EngineShard* es) {
         auto args = tx->GetShardArgs(es->shard_id());
         auto op_args = tx->GetOpArgs(es);
-        auto res = GenericFamily::OpDel(op_args, args, async_unlink);
+        auto res = OpDel(op_args, args, async_unlink);
         result.fetch_add(res.value_or(0), memory_order_relaxed);
         return OpStatus::OK;
     };
 
-    co_await cmd::SingleHop(cb);
+    co_await cmd::SingleHopT(cb);
     uint32_t del_cnt = result.load(memory_order_relaxed);
 
-    auto* rb = cmd_cntx->rb();
-    rb->SendLong(del_cnt);
+    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    conn->Send(del_cnt);
     
     co_return std::nullopt;
 }
 
 void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
-  string_view key = ArgS(args, 0);
-
-  // Parse optional condition
-  enum class Condition : uint8_t { 
-    NONE, // 无条件，等价于 DEL 命令
-    IFEQ, // 如果键值等于指定值则删除
-    IFNE, // 如果键值不等于指定值则删除
-    IFDEQ, // 如果键值的摘要等于指定摘要则删除
-    IFDNE // 如果键值的摘要不等于指定摘要则删除
-  };
-  Condition cond = Condition::NONE;
-  string_view compare_value;
-
-  if (args.size() == 1) {
-    // DELEX key - no condition, behaves like DEL
-    cond = Condition::NONE;
-  } else {
-    // args.size() > 2
-    return cmd_cntx->SendError(facade::WrongNumArgsError("DELEX"), kSyntaxErrType);
-  }
-
-  // If no condition, delegate to standard DEL
-  if (cond == Condition::NONE) {
     CmdDel(args, cmd_cntx);
     return;
-  }
 }
 
+
 void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
-  if (args.size() > 1) {
-    return cmd_cntx->SendError(facade::WrongNumArgsError("ping"), kSyntaxErrType);
-  }
+    if (args.size() > 1) {
+        return cmd_cntx->SendError();
+    }
+    std::string_view msg = args[0];
+    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    conn->send(msg);
+}
 
-  string_view msg;
 
-  // If a client in the subscribe state and in resp2 mode, it returns an array for some reason.
-  auto* rb = static_cast<RedisReplyBuilder*>(cmd_cntx->rb());
-  if (cmd_cntx->server_conn_cntx()->conn_state.subscribe_info && !rb->IsResp3()) {
-    if (args.size() == 1) {
-      msg = ArgS(args, 0);
+
+
+
+
+CoroTask OpExists(CmdArgList args, CommandContext* cmd_cntx) {
+
+    auto Op = [](const OpArgs& op_args, const ShardArgs& keys) -> facade::OpResult<uint32_t> {
+        auto& db_slice = op_args.GetDbSlice();
+        uint32_t res = 0;
+
+        for (string_view key : keys) {
+          auto find_res = db_slice.FindReadOnly(op_args.db_cntx, key);
+          res += IsValid(find_res);
+        }
+        return res;    
+    };
+
+    std::atomic<uint32_t> result{0};
+
+    auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResukt<void> {
+      ShardArgs args = t->GetShardArgs(shard->shard_id());
+      auto res = Op(t->GetOpArgs(shard), args);
+      result.fetch_add(res.value_or(0), memory_order_relaxed);
+      return {OpStatus::OK};
+    };
+
+    auto res = co_await cmd::SingleHopT(cb);
+
+    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    if(res.status() == OpStatus::OK)
+    {
+        
+        conn->Send(result);  // FIXME
+    }
+    else 
+    {
+        conn->SendError();
     }
 
-    auto replier = [msg = string(msg)](RedisReplyBuilder* rb) {
-      string_view resp[2] = {"pong", msg};
-      rb->SendBulkStrArr(resp);
-    };
-    return cmd_cntx->ReplyWith(std::move(replier));
-  }
+    co_return std::nullopt;
 
-  if (args.size() == 0) {
-    return cmd_cntx->SendSimpleString("PONG");
-  }
-
-  msg = ArgS(args, 0);
-  DVLOG(2) << "Ping " << msg;
-
-  auto replier = [msg = string(msg)](RedisReplyBuilder* rb) { rb->SendBulkString(msg); };
-  return cmd_cntx->ReplyWith(std::move(replier));
 }
 
 void GenericFamily::Exists(CmdArgList args, CommandContext* cmd_cntx) {
-  VLOG(1) << "Exists " << ArgS(args, 0);
-
-  atomic_uint32_t result{0};
-
-  auto cb = [&result](Transaction* t, EngineShard* shard) {
-    ShardArgs args = t->GetShardArgs(shard->shard_id());
-    auto res = OpExists(t->GetOpArgs(shard), args);
-    result.fetch_add(res.value_or(0), memory_order_relaxed);
-
-    return OpStatus::OK;
-  };
-
-  OpStatus status = cmd_cntx->tx()->ScheduleSingleHop(std::move(cb));
-  CHECK_EQ(OpStatus::OK, status);
-
-  return cmd_cntx->SendLong(result.load(memory_order_acquire));
+    OpExists(args, cmd_cntx);
 }
 
+
+
+CoroTask OpExpire(const OpArgs& op_args, string_view key, const ExpireParams& params) {
+
+
+    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
+        auto& db_slice = op_args.GetDbSlice();
+        auto find_res = db_slice.FindMutable(op_args.db_cntx, key);
+        if (!IsValid(find_res.it_)) {
+          return {OpStatus::KEY_NOTFOUND};
+        }
+
+        return db_slice.UpdateExpire(op_args.db_cntx, find_res.it, params);     
+    };
+    auto res = co_await cmd::SingleHopT(cb);
+
+    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    if(res.status() == OpStatus::OK)
+    {
+        
+        conn->SendOK();
+    }
+    else 
+    {
+        conn->SendError();
+    }
+
+    co_return std::nullopt;
+}
 
 void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
-  string_view key = ArgS(args, 0);
-  string_view sec = ArgS(args, 1);
-  int64_t int_arg;
-
-  if (!absl::SimpleAtoi(sec, &int_arg)) {
-    return cmd_cntx->SendError(kInvalidIntErr);
-  }
-
-  int_arg = std::max<int64_t>(int_arg, -1);
-
-  // silently cap the expire time to kMaxExpireDeadlineSec which is more than 8 years.
-  if (int_arg > kMaxExpireDeadlineSec) {
-    int_arg = kMaxExpireDeadlineSec;
-  }
-
-  auto expire_options = ParseExpireOptionsOrReply(args.subspan(2));
-  if (!expire_options) {
-    return cmd_cntx->SendError(expire_options.error());
-  }
-  DbSlice::ExpireParams params{.value = int_arg, .expire_options = expire_options.value()};
-
-  auto cb = [&](Transaction* t, EngineShard* shard) {
-    return OpExpire(t->GetOpArgs(shard), key, params);
-  };
-
-  OpStatus status = cmd_cntx->tx()->ScheduleSingleHop(std::move(cb));
-  cmd_cntx->SendLong(status == OpStatus::OK);
+    std::string_view key = args[0];
+    std::string_view sec = args[1];
+    int64_t int_arg = std::atoi(sec);
+    OpExpire(t->GetOpArgs(shard), key, int_arg);
 }
+
+
+
+
 
 void GenericFamily::Keys(CmdArgList args, CommandContext* cmd_cntx) {
   string_view pattern(ArgS(args, 0));
@@ -1283,31 +1056,6 @@ void GenericFamily::Keys(CmdArgList args, CommandContext* cmd_cntx) {
   return cmd_cntx->ReplyWith(std::move(replier));
 }
 
-
-
-
-void GenericFamily::Stick(CmdArgList args, CommandContext* cmd_cntx) {
-  Transaction* transaction = cmd_cntx->tx();
-  VLOG(1) << "Stick " << ArgS(args, 0);
-
-  atomic_uint32_t result{0};
-
-  auto cb = [&result](const Transaction* t, EngineShard* shard) {
-    ShardArgs args = t->GetShardArgs(shard->shard_id());
-    auto res = OpStick(t->GetOpArgs(shard), args);
-    result.fetch_add(res.value_or(0), memory_order_relaxed);
-
-    return OpStatus::OK;
-  };
-
-  OpStatus status = transaction->ScheduleSingleHop(std::move(cb));
-  CHECK_EQ(OpStatus::OK, status);
-
-  DVLOG(2) << "Stick ts " << transaction->txid();
-
-  uint32_t match_cnt = result.load(memory_order_relaxed);
-  cmd_cntx->SendLong(match_cnt);
-}
 
 struct SortEntryBase {
   string key;
@@ -1393,7 +1141,8 @@ SortEntryList MakeSortEntryList(bool alpha) {
 }
 
 // Iterate over container with generic function that accepts strings and ints
-template <typename F> bool Iterate(const PrimeValue& pv, F&& func) {
+template <typename F> 
+bool Iterate(const PrimeValue& pv, F&& func) {
   switch (pv.ObjType()) {
     case OBJ_LIST:
       return container_utils::IterateList(pv, func);
@@ -1997,12 +1746,6 @@ void SortGeneric(CmdArgList args, CommandContext* cmd_cntx, bool is_read_only) {
 
 
 
-
-
-
-
-
-
 void GenericFamily::ExpireTime(CmdArgList args, CommandContext* cmd_cntx) {
   ExpireTimeGeneric(args, TimeUnit::SEC, cmd_cntx);
 }
@@ -2055,23 +1798,7 @@ void GenericFamily::Select(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-
-OpResult<uint32_t> GenericFamily::OpExists(const OpArgs& op_args, const ShardArgs& keys) {
-  DVLOG(1) << "Exists: " << keys.Front();
-  auto& db_slice = op_args.GetDbSlice();
-  uint32_t res = 0;
-
-  for (string_view key : keys) {
-    auto find_res = db_slice.FindReadOnly(op_args.db_cntx, key);
-    res += IsValid(find_res);
-  }
-  return res;
-}
-
-
-using CI = CommandId;
-
-#define HFUNC(x) SetHandler(&GenericFamily::x)
+// #define HFUNC(x) SetHandler(&GenericFamily::x)
 
 namespace acl {
 

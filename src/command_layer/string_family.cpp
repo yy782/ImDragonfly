@@ -2,9 +2,6 @@
 // See LICENSE for licensing terms.
 //
 
-#include <absl/container/inlined_vector.h>
-#include <absl/strings/match.h>
-#include <absl/strings/str_cat.h>
 
 #include <algorithm>
 #include <array>
@@ -141,81 +138,13 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
                 return ErrorReply{};
 
             sparams.flags |= SetCmd::SET_EXPIRE_AFTER_MS;
+        }
     }
     return sparams;
 }
 
-
-cppcoro::Task<void, Coro> CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
-    facade::CmdArgParser parser{args};
-
-    auto [key, value] = parser.Next<string_view, string_view>();
-    auto params_result = ParseSetParams(parser, cmd_cntx);
-
-    auto& sparams = std::get<SetCmd::SetParams>(params_result);
-
-    std::optional<StringResult> prev;
-    if (sparams.flags & SetCmd::SET_GET)
-        sparams.prev_val = &prev;
-
-    std::optional<util::fb2::Future<bool>> backpressure;
-    sparams.backpressure = &backpressure;
-
-    auto cb = [&](Transaction* t, EngineShard* shard) {
-        return SetCmd(t->GetOpArgs(shard), true).Set(sparams, key, value);
-    };
-
-    facade::OpStatus result = co_await cmd::SingleHop(cb);
-    auto* rb = cmd_cntx->rb();
-
-    switch (result) {
-        case OpStatus::WRONG_TYPE:
-            rb->SendError(kWrongTypeErr);  // TODO(vlad): use co_return after await?
-            co_return std::nullopt;
-        case OpStatus::OUT_OF_MEMORY:
-            rb->SendError(kOutOfMemory);
-            co_return std::nullopt;
-        default:
-            break;
-    };
-
-
-    if (sparams.flags & SetCmd::SET_GET) {
-        GetReplies{rb}.Send(std::move(prev));
-        co_return std::nullopt;
-    }
-
-    if (result == OpStatus::OK) {
-        rb->SendOk();
-    } else {
-        static_cast<RedisReplyBuilder*>(rb)->SendNull();
-    }
-
-    co_return std::nullopt;
-}
-
-
-
-cmd::CmdR CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
-    auto cb = [key = ArgS(args, 0)](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
-      auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key, OBJ_STRING);
-      if (!it_res.ok())
-          return it_res.status();
-
-      return ReadString(tx->GetDbIndex(), key, (*it_res)->second, es);
-    };
-
-    GetReplies{cmd_cntx->rb()}.Send(co_await cmd::SingleHopT(cb));
-    co_return std::nullopt;
-}
-
-
-}  // namespace
-
-}
-
-
 using CoroTask = cppcoro::task<void, cmd::Coro>;
+
 
 CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     facade::CmdArgParser parser{args};
@@ -254,7 +183,7 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-
+    auto* conn = cmd_cntx->conn_cntx()->owner_;
     if (result.status() == OpStatus::OK) {
         conn->Send(result.value());
     } else {
@@ -263,6 +192,8 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
     co_return std::nullopt;
 }
 
+
+}  // namespace
 
 
 void RegisterStringFamily(CommandRegistry* registry) {

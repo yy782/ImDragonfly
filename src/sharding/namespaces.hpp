@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <absl/container/node_hash_map.h>
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,14 +39,14 @@ class Namespaces {
   Namespaces();
   ~Namespaces();
 
-  void Clear() ABSL_LOCKS_EXCLUDED(mu_);  // Thread unsafe, use in tear-down or tests
+  void Clear();  // Thread unsafe, use in tear-down or tests
 
   Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
-  Namespace& GetOrInsert(std::string_view ns) ABSL_LOCKS_EXCLUDED(mu_); // 方式2：用空字符串获取
+  Namespace& GetOrInsert(std::string_view ns); // 方式2：用空字符串获取
 
  private:
   util::fb2::SharedMutex mu_{};
-  absl::node_hash_map<std::string, Namespace> namespaces_ ABSL_GUARDED_BY(mu_);
+  std::unordered_map<std::string, Namespace> namespaces_ ;
   Namespace* default_namespace_ = nullptr;
 };
 

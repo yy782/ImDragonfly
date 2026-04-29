@@ -1,9 +1,9 @@
 #pragma once
 
-#include <absl/types/span.h>
+#include <span>
 
 #include <concepts>
 #include <string_view>
 namespace facade{
-using CmdArgList = absl::Span<const std::string_view>;    
+using CmdArgList = std::span<const std::string_view>;    
 }

@@ -2,10 +2,10 @@
 #include "common_types.hpp"
 
 #include "namespaces.hpp"
-#include <absl/types/span.h>
+#include <span>
 namespace dfly {
 
-using ArgSlice = absl::Span<const std::string_view>; // from arg_range.h
+using ArgSlice = std::span<const std::string_view>; // from arg_range.h
 using IndexSlice = std::pair<uint32_t, uint32_t>;
 
 
@@ -20,14 +20,8 @@ struct DbContext {
 
 struct OpArgs {
     EngineShard* shard_ = nullptr;
-    // const Transaction* tx = nullptr;
+    const Transaction* tx_ = nullptr;
     DbContext db_cntx_;
-
-    OpArgs() = default;
-
-    OpArgs(EngineShard* s,  const DbContext& cntx)
-        : shard_(s),  db_cntx_(cntx) {
-    }
 
     // Convenience method.
     DbSlice& GetDbSlice() const;
@@ -38,7 +32,7 @@ class ShardArgs {
 public:
     class Iterator {
         ArgSlice arglist_;
-        absl::Span<const IndexSlice>::const_iterator index_it_;
+        std::span<const IndexSlice>::const_iterator index_it_;
         uint32_t delta_ = 0;
 
     public:

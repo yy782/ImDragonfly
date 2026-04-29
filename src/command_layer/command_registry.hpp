@@ -3,11 +3,6 @@
 //
 
 #pragma once
-
-#include <absl/container/flat_hash_map.h>
-#include <absl/container/flat_hash_set.h>
-#include <absl/types/span.h>
-
 #include <functional>
 #include <optional>
 
@@ -173,7 +168,7 @@ public:
     std::pair<const CommandId*, facade::ParsedArgs> FindExtended(facade::ParsedArgs args) const;
 
  private:
-    absl::flat_hash_map<std::string, CommandId> cmd_map_;
+    std::unordered_map<std::string, CommandId> cmd_map_;
 
     FamiliesVec family_of_commands_;
     size_t bit_index_;

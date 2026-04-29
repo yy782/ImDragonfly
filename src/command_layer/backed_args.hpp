@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <absl/container/inlined_vector.h>
+#include <vector>
 
 #include <cstdint>
 #include <ranges>
@@ -19,7 +19,10 @@ class BackedArguments {
 public:
     using value_type = std::string_view;
 
-    BackedArguments() {
+    BackedArguments() 
+    {
+        offsets_.reserve(kLenCap);
+        storage_.reserve(kStorageCap);
     }
 
 
@@ -119,8 +122,10 @@ public:
     }
 
 protected:
-    absl::InlinedVector<uint32_t, kLenCap> offsets_; // 存储每个参数的起始偏移量
-    absl::InlinedVector<char, kStorageCap> storage_; // 存储参数的实际数据
+    // absl::InlinedVector<uint32_t, kLenCap> offsets_; // 存储每个参数的起始偏移量
+    // absl::InlinedVector<char, kStorageCap> storage_; // 存储参数的实际数据
+    std::vector<uint32_t> offsets_;
+    std::vector<char> storage_;
 };
 
 static_assert(sizeof(BackedArguments) == 128);

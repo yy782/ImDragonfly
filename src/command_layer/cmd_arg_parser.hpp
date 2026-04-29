@@ -4,14 +4,13 @@
 
 #pragma once
 
-#include <absl/strings/match.h>
-#include <absl/strings/numbers.h>
 
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <charconv>
 
-#include "facade_types.h"
+#include "utils/EqualsIgnoreCase.hpp"
 
 namespace facade {
 
@@ -19,7 +18,7 @@ struct CmdArgParser {
 public:
     CmdArgParser(ArgSlice args) : args_{args} {
     }
-    ~CmdArgParser();
+    ~CmdArgParser()=default;
 
     std::string_view Peek() {
       return SafeSV(cur_i_);
@@ -29,7 +28,7 @@ public:
     template <class T = std::string_view, class... Ts> 
     auto Next() {
         if (cur_i_ + sizeof...(Ts) >= args_.size()) {
-            Report(OUT_OF_BOUNDS, cur_i_);
+            Report();
             return std::conditional_t<sizeof...(Ts) == 0, T, std::tuple<T, Ts...>>();
         }
 
@@ -51,12 +50,13 @@ public:
     }
 
 
-    void ExpectTag(std::string_view tag);
+    // void ExpectTag(std::string_view tag);
 
 
-    template <class... Cases> auto MapNext(Cases&&... cases) {
+    template <class... Cases> 
+    auto MapNext(Cases&&... cases) {
       if (cur_i_ >= args_.size()) {
-        Report(OUT_OF_BOUNDS, cur_i_);
+        Report();
         return typename decltype(MapImpl(std::string_view(),
                                         std::forward<Cases>(cases)...))::value_type{};
       }
@@ -64,7 +64,7 @@ public:
       auto idx = cur_i_++;
       auto res = MapImpl(SafeSV(idx), std::forward<Cases>(cases)...);
       if (!res) {
-        Report(INVALID_CASES, idx);
+        Report();
         return typename decltype(res)::value_type{};
       }
       return *res;
@@ -88,7 +88,7 @@ public:
             return false;
 
         std::string_view arg = SafeSV(cur_i_);
-        if (!absl::EqualsIgnoreCase(arg, tag))
+        if (!utils::EqualsIgnoreCase(arg, tag))
             return false;
 
         ++cur_i_;
@@ -99,7 +99,7 @@ public:
     // Skip specified number of arguments
     CmdArgParser& Skip(size_t n) {
       if (cur_i_ + n > args_.size()) {
-        Report(OUT_OF_BOUNDS, cur_i_);
+        Report();
       } else {
         cur_i_ += n;
       }
@@ -139,7 +139,7 @@ private:
     template <class T, class... Cases>
     std::optional<std::decay_t<T>> MapImpl(std::string_view arg, std::string_view tag, T&& value,
                                           Cases&&... cases) {
-      if (absl::EqualsIgnoreCase(arg, tag))
+      if (utils::EqualsIgnoreCase(arg, tag))
         return std::forward<T>(value);
 
       if constexpr (sizeof...(cases) > 0)
@@ -148,13 +148,15 @@ private:
       return std::nullopt;
     }
 
-    template <size_t shift, class Tuple> void NextImpl(Tuple* t) {
+    template <size_t shift, class Tuple> 
+    void NextImpl(Tuple* t) {
       std::get<shift>(*t) = Convert<std::tuple_element_t<shift, Tuple>>(cur_i_ + shift);
       if constexpr (constexpr auto next = shift + 1; next < std::tuple_size_v<Tuple>)
         NextImpl<next>(t);
     }
 
-    template <class T> T Convert(size_t idx) {
+    template <class T> 
+    T Convert(size_t idx) {
       static_assert(
           std::is_arithmetic_v<T> || std::is_constructible_v<T, std::string_view> || is_fint<T>,
           "incorrect type");
@@ -162,7 +164,7 @@ private:
         return Num<T>(idx);
       } else if constexpr (std::is_constructible_v<T, std::string_view>) {
         return static_cast<T>(SafeSV(idx));
-      } else if constexpr (is_fint<T>) {
+      } else if constexpr (std::is_fint<T>) {
         return {ConvertFInt<T::kMin, T::kMax>(idx)};
       }
     }
@@ -171,35 +173,20 @@ private:
       using namespace std::literals::string_view_literals;
       if (i >= args_.size())
         return ""sv;
-      return args_[i].empty() ? ""sv : ToSV(args_[i]);
+      return args_[i].empty() ? ""sv : args_[i];
     }
 
-    template <typename T> T Num(size_t idx) {
-      auto arg = SafeSV(idx);
-      T out;
-      if constexpr (std::is_same_v<T, float>) {
-        if (absl::SimpleAtof(arg, &out))
-          return out;
-      } else if constexpr (std::is_same_v<T, double>) {
-        if (absl::SimpleAtod(arg, &out))
-          return out;
-      } else if constexpr (std::is_integral_v<T> && sizeof(T) >= sizeof(int32_t)) {
-        if (absl::SimpleAtoi(arg, &out))
-          return out;
-      } else if constexpr (std::is_integral_v<T> && sizeof(T) < sizeof(int32_t)) {
-        int32_t tmp;
-        if (absl::SimpleAtoi(arg, &tmp)) {
-          out = tmp;  // out can not store the whole tmp
-          if (tmp == out)
-            return out;
-        }
-      }
+    
+    int64_t Num(size_t idx) {
+      std::string_view arg = SafeSV(idx);
+      int64_t out;
 
-      if constexpr (std::is_floating_point_v<T>) {
-        Report(INVALID_FLOAT, idx);
-      } else {
-        Report(INVALID_INT, idx);
+      auto result = std::from_chars(arg.data(), arg.data()+arg.size(), &out);
+
+      if(result.ec == std::errc() && result.ptr == sv.data() + sv.size()){
+        return out;
       }
+      Report();
       return {};
     }
 

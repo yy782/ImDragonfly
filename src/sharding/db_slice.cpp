@@ -146,19 +146,19 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx
 }
 
 
-void DbSlice::Del(Context cntx, Iterator it, DbTable* db_table, bool async) {
+void DbSlice::Del(Context cntx, Iterator it, DbTable* db_table) {
     DbTable* table = db_table ? db_table : db_arr_[cntx.db_index].get();
     // auto obj_type = it->second.ObjType();
 
 
-    PerformDeletionAtomic(it, table, async); // 执行实际删除
+    PerformDeletionAtomic(it, table); // 执行实际删除
 }
 
 void DbSlice::DelMutable(Context cntx, ItAndUpdater it_updater) {
     Del(cntx, it_updater.it_);
 }
 
-void DbSlice::PerformDeletionAtomic(const Iterator& del_it, DbTable* table, bool async) {
+void DbSlice::PerformDeletionAtomic(const Iterator& del_it, DbTable* table) {
     util::FiberAtomicGuard guard; // 确保删除操作在纤程中是原子的
     table->prime_.Erase(del_it.GetInnerIt()); // 执行实际删除
 }
