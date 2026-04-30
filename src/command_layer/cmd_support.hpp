@@ -15,7 +15,6 @@
 #include "conn_context2.hpp"
 #include "engine_shard.hpp"
 #include "transaction.hpp"
-#include "util/fibers/synchronization.h"
 
 #include "cppcoro/task.hpp"
 

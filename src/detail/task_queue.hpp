@@ -2,17 +2,29 @@
 #include <vector>
 #include <string>
 
-#include "util/fibers/fiberqueue_threadpool.h"
-#include "util/fibers/fibers.h"
+
 
 namespace dfly {
 
-using namespace util::fb2;
+
+
+
+struct Worker{
+    using Task = cppcoro::task<void, task_promise<void, false>>;
+    template<class Func>
+    Task run(Func&& func){
+        func();
+        co_return;
+    }
+    std::string name;
+    Task task;
+};    
+
 
 class TaskQueue {
 public:
     TaskQueue(unsigned queue_size, unsigned start_size, unsigned pool_max_size):
-    queue_(queue_size), consumer_fibers_(start_size){}
+    queue_(queue_size), consumers_(start_size){}
 
     template <typename F> 
     bool TryAdd(F&& f) {
@@ -31,14 +43,14 @@ public:
 
     template <typename F> 
     auto Await(F&& f) -> decltype(f()) {
-        util::fb2::Done done;
+        util::Done done;
         using ResultType = decltype(f());
         util::detail::ResultMover<ResultType> mover;
 
         ++blocked_submitters_;
         Add([&mover, f = std::forward<F>(f), done]() mutable {
-        mover.Apply(f);
-        done.Notify();
+            mover.Apply(f);
+            done.Notify();
         });
         --blocked_submitters_;
         done.Wait();
@@ -46,28 +58,30 @@ public:
     }
 
     void Start(std::string_view base_name){
-  for (size_t i = 0; i < consumer_fibers_.size(); ++i) {
-        auto& fb = consumer_fibers_[i];
+        for (size_t i = 0; i < consumers_.size(); ++i) {
+                auto& worker = consumers_[i];
 
-        std::string name = std::string(base_name)+std::to_string(i);
-        fb =
-            Fiber(Fiber::Opts{.priority = FiberPriority::HIGH, .name = name}, [this] { queue_.Run(); });
-    }
+                std::string name = std::string(base_name)+std::to_string(i);
+                worker.name = std::move(name);
+                worker.task = worker.run([this]()mutable{
+                    queue_.Run();
+                });
+        }
     }
 
-    void Shutdown(){
+    auto Shutdown(){
         queue_.Shutdown();
-        for (auto& fb : consumer_fibers_)
-            fb.JoinIfNeeded();
+        for(const auto worker : consumers_){
+            co_await worker.task;
+        }        
     }
-
     static unsigned blocked_submitters() {
         return blocked_submitters_;
     }
 
 private:
-    util::fb2::FiberQueue queue_;
-    std::vector<util::fb2::Fiber> consumer_fibers_;
+    util::TaskQueue queue_;
+    std::vector<Worker> consumers_;
 
     static __thread unsigned blocked_submitters_;
 };

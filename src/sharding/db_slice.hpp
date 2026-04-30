@@ -5,8 +5,7 @@
 #include "string_or_view.hpp"
 #include "tx_base.hpp"
 
-#include "util/fibers/fibers.h"
-#include "util/fibers/synchronization.h"
+
 namespace dfly{
 using namespace cmn;
 class EngineShard;
@@ -19,7 +18,7 @@ public:
         IteratorT() = default;
         IteratorT(T it, StringOrView key) : 
         it_(it), 
-        fiber_epoch_(util::fb2::FiberSwitchEpoch()), key_(std::move(key)) 
+        key_(std::move(key)) 
         {}
         
         // 核心方法：在访问前自动清洁迭代器
@@ -45,7 +44,6 @@ public:
         void LaunderIfNeeded() const;  // 清洁逻辑
         
         mutable T it_;                          // 底层迭代器
-        mutable uint64_t fiber_epoch_ = 0;     // 上次清洁时的纤程切换计数
         StringOrView key_;                      // 对应的 key（用于重新查找）
     };
 
@@ -138,14 +136,10 @@ void DbSlice::IteratorT<T>::LaunderIfNeeded() const {
         return;
     }
 
-    uint64_t current_epoch = util::fb2::FiberSwitchEpoch();//  获取当前的“纤程切换纪元”
-
-    if (current_epoch != fiber_epoch_) {
-        if (!it_.IsOccupied() || it_->first != key_.view()) {
-            //  迭代器已失效，根据原 key 重新查找
-            it_ = it_.owner().Find(key_.view());
-        }
-        fiber_epoch_ = current_epoch;
+    if (!it_.IsOccupied() || it_->first != key_.view()) {
+        //  迭代器已失效，根据原 key 重新查找
+        it_ = it_.owner().Find(key_.view());
     }
+\
 }
 }  // namespace dfly

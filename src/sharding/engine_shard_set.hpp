@@ -12,13 +12,6 @@ class EngineShardSet;
 
 class EngineShardSet {
 public:
-    struct CachedStats {
-        std::atomic_uint64_t used_memory;
-        CachedStats() : used_memory(0) {}
-
-        CachedStats(const CachedStats& o) : 
-        used_memory(o.used_memory.load()) {}
-    };
 
     explicit EngineShardSet(util::ProactorPool* pp) : 
     pp_(pp) {}

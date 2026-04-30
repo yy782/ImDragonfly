@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "util/fibers/fibers.h"
 #include "util/fibers/synchronization.h"
 
 namespace dfly {
@@ -12,13 +11,13 @@ namespace dfly {
 class EngineShard;
 
 // Helper class used to guarantee atomicity between serialization of buckets
-class ABSL_LOCKABLE ThreadLocalMutex {
+class ThreadLocalMutex {
 public:
     ThreadLocalMutex();
     ~ThreadLocalMutex();
 
-    void lock() ABSL_EXCLUSIVE_LOCK_FUNCTION();
-    void unlock() ABSL_UNLOCK_FUNCTION();
+    void lock();
+    void unlock();
     bool is_locked() const {
         return flag_;
     }

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "common_types.hpp"
-#include "util/fibers/synchronization.h"
+#include "util/synchronization.hpp"
 
 namespace dfly {
 
@@ -45,7 +45,7 @@ class Namespaces {
   Namespace& GetOrInsert(std::string_view ns); // 方式2：用空字符串获取
 
  private:
-  util::fb2::SharedMutex mu_{};
+  util::SharedMutex mu_{};
   std::unordered_map<std::string, Namespace> namespaces_ ;
   Namespace* default_namespace_ = nullptr;
 };

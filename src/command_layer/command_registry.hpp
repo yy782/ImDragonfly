@@ -6,7 +6,7 @@
 #include <functional>
 #include <optional>
 
-#include "base/function2.hpp"
+
 #include "command_id.hpp"
 #include "facade_types.hpp"
 
