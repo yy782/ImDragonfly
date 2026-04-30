@@ -170,7 +170,7 @@ public:
     {
         assert(vec_.size()==0);
 
-        for(const std::string_view sv : view(1))
+        for(const std::string_view sv : view(0))
         {
             vec_.push_back(sv);
         }
@@ -179,9 +179,14 @@ public:
         auto slic = full_span.subspan(1);
         return {slic};
     }
-};
+
 private:
 
-    std::vector<std::string_view> vec_;
+    std::vector<std::string_view> vec_;    
+};
+
+
+
+
 
 }  // namespace cmn

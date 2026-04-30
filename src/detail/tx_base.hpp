@@ -5,8 +5,7 @@
 #include <span>
 namespace dfly {
 
-using ArgSlice = std::span<const std::string_view>; // from arg_range.h
-using IndexSlice = std::pair<uint32_t, uint32_t>;
+
 
 
 struct DbContext {

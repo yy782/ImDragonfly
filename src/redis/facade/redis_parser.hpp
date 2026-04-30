@@ -12,9 +12,11 @@ namespace dfly{
 
 
 inline BackedArguments ParseRESP(/* data */) {
-    std::vector<std::string> result;
+    std::vector<std::string_view> result;
+    BackedArguments bdArgments;
+
     if (data.empty() || data[0] != '*') {
-        return result;
+        return bdArgments;
     }
     
     size_t pos = 1;
@@ -55,8 +57,8 @@ inline BackedArguments ParseRESP(/* data */) {
         if (pos < data.size() && data[pos] == '\r') pos++;
         if (pos < data.size() && data[pos] == '\n') pos++;
     }
-    
-    return BackedArguments(result.begin(), result.end(), result.size());
+    bdArgments.Assign(result.begin(), result.end(), result.size());
+    return bdArgments;
 }
 
 }

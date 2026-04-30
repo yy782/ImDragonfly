@@ -4,9 +4,9 @@
 #include "tx_base.hpp"
 #include "common_types.hpp"
 #include "utils/function_ref.hpp"
-#include "engine_shard_set.hpp"
+
 #include "cmn_types.hpp"
-#include "tx_base.hpp"
+
 
 namespace dfly{
 
@@ -19,35 +19,38 @@ class Transaction{
 public:
     using RunnableType = utils::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
 
+    explicit Transaction(const CommandId* cid);
+
+    OpStatus InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args);
+
+
+
     OpArgs GetOpArgs(EngineShard* shard) const;
-    ShardArgs GetShardArgs(ShardId sid) const;    
-    DbContext GetDbContext() const {
-        return DbContext{namespace_, db_index_, time_now_ms_};
+
+    ShardArgs GetShardArgs(ShardId sid) const;
+
+    DbContext& GetDbContext() const {
+        return db_cntx_;
     }   
 
-    DbSlice& Transaction::GetDbSlice(ShardId shard_id) const {
+    DbSlice& GetDbSlice(ShardId shard_id) const {
         return namespace_->GetDbSlice(shard_id);
     }
 
-    void Execute(std::coroutine_handle<Coro> handle, RunnableType cb) // not same 
-    {
-        shard_set->Add(unique_shard_id_, [this]()mutable{
-            cb(this, GetDbSlice(unique_shard_id_).shard_owner());
-            handle.resume();
-        });
-    }
+
+
+    
+    void Scheduling(std::coroutine_handle<Coro> handle, RunnableType cb); // not same
 
 
 private:
-    // const CommandId* cid_ = nullptr;
-    Namespace* namespace_ = nullptr;
-    DbIndex db_index_ = 0;
-    uint64_t time_now_ms_ = 0;
+    const CommandId* cid_ = nullptr;
 
-    ShardId unique_shard_id_ = kInvalidSid;
+    DbContext db_cntx_;
 
-    std::vector<IndexSlice> args_slices_;
-    facade::CmdArgList full_args_;
+    cmn::CmdArgList full_args_;
+    std::vector<IndexSlice> args_slices_; // IndexSlice from tx_base.hpp, 处理full_args_的分片事务
+    
 
 };
 

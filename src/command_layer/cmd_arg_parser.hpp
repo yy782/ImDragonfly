@@ -13,8 +13,7 @@
 #include "utils/Strings.hpp"
 
 namespace cmd {
-
-struct CmdArgParser {
+class CmdArgParser {
 public:
     CmdArgParser(ArgSlice args) : args_{args} {
     }
@@ -199,5 +198,6 @@ private:
     ArgSlice args_;
     ErrorType error_=NO_ERROR;
 };
+
 
 }  // namespace facade

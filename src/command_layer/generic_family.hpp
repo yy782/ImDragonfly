@@ -16,7 +16,7 @@ ABSL_DECLARE_FLAG(uint32_t, dbnum);
 
 namespace dfly {
 
-using facade::CmdArgList;
+using cmd::CmdArgList;
 
 class GenericFamily { // 通用命令家族，处理 Redis 通用命令
 public:
