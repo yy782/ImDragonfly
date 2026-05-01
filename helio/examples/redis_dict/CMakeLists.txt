@@ -1,1 +1,0 @@
-add_library(redis_dict alloc.c dict.c sds.c)
