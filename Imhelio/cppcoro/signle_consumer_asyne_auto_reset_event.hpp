@@ -1,6 +1,5 @@
-#ifndef XYNET_COROUTINE_SINGLE_CONSUMER_ASYNC_AUTO_RESET_EVENT_HPP_INCLUDED
-#define XYNET_COROUTINE_SINGLE_CONSUMER_ASYNC_AUTO_RESET_EVENT_HPP_INCLUDED
 
+#pragma once 
 #include <coroutine>
 #include <atomic>
 #include <cstdint>

@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include <absl/flags/declare.h>
-#include <absl/flags/flag.h>
+
 #include "detail/tx_base.h"
 
 
 #include "facade_types.hpp"
 
-
-ABSL_DECLARE_FLAG(uint32_t, dbnum);
 
 namespace dfly {
 

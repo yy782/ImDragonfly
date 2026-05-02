@@ -1,6 +1,5 @@
 
-#ifndef CPPCORO_FMAP_HPP_INCLUDED
-#define CPPCORO_FMAP_HPP_INCLUDED
+
 
 #include "detail/awaiter_impl.hpp"
 

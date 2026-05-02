@@ -1,10 +1,6 @@
 
 
-#ifndef WHEN_ALL_H
-#define WHEN_ALL_H
 
-#ifndef CPPCORO_WHEN_ALL_HPP_INCLUDED
-#define CPPCORO_WHEN_ALL_HPP_INCLUDED
 
 #include "detail/when_all_ready.hpp"
 #include "detail/awaiter_impl.hpp"
