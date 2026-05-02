@@ -9,27 +9,16 @@
 
 namespace base{
 
+    template <typename T, typename E = ::std::error_code> 
+    using Result = utils::expected<T, E>;
 
-
-class SocketBase: public io::Sink,
-                        public io::AsyncSink,
-                        public io::Source,
-                        public io::AsyncSource {
-    FiberSocketBase(const FiberSocketBase&) = delete;
-    void operator=(const FiberSocketBase&) = delete;
-    FiberSocketBase(FiberSocketBase&& other) = delete;
-    FiberSocketBase& operator=(FiberSocketBase&& other) = delete;
+class SocketBase{
+    SocketBase(const SocketBase&) = delete;
+    void operator=(const SocketBase&) = delete;
+    SocketBase(SocketBase&& other) = delete;
+    SocketBase& operator=(SocketBase&& other) = delete;
     int fd() const { return fd_;}
-
-    using endpoint_type = ::boost::asio::ip::tcp::endpoint;
-    using error_code = std::error_code;
-    using AcceptResult = io::Result<SocketBase*>;
-
-    template <typename T> 
-    using Result = io::Result<T>;    
-
-
-
+  
 
 protected:
     int fd_;
@@ -39,30 +28,38 @@ protected:
 class UringProactor;
 
 class UringSocket : public SocketBase{
-
+public:
     UringSocket(UringProactor*);
     ~UringProactor();
 
 
-    error_code Create(unsigned short protocol_family = 2);
+    Result<int> Create(unsigned short protocol_family = AF_INET);
 
-    [[nodiscard]] AcceptResult Accept();
+    [[nodiscard]] auto Accept();
 
-    [[nodiscard]] error_code Connect(const endpoint_type& ep,
-                                            std::function<void(int)> on_pre_connect);
-    [[nodiscard]] error_code Close();
+    [[nodiscard]] Result<void> Close();
 
-    io::Result<size_t> WriteSome(const iovec* v, uint32_t len);
-    void AsyncWriteSome(const iovec* v, uint32_t len, io::AsyncProgressCb cb);
-    void AsyncReadSome(const iovec* v, uint32_t len, io::AsyncProgressCb cb);
+    [[nodiscard]] auto AsyncRead(char* buf, ssize_t size, off_t offset);
 
-    Result<size_t> RecvMsg(const msghdr& msg, int flags);
-    Result<size_t> Recv(const io::MutableBytes& mb, int flags = 0);
+    [[nodiscard]] auto AsyncWrite(char* buf, ssize_t size, off_t offset);
 
 
 private:
     UringProactor* proactor_;
 };
+
+inline bool posix_err_wrap(ssize_t res, std::error_code* ec) {
+    if (res == -1) {
+        *ec = std::error_code(errno, std::system_category());
+        return true;
+    } else if (res < 0) {
+        LOG(WARNING) << "Bad posix error " << res;
+    }
+    return false;
+}
+
+
+
 
 
 }

@@ -158,7 +158,7 @@ private:
 
 
 template<typename Mutex>
-using LockGuard<Mutex> = std::lock_guard<Mutex>;
+using LockGuard = std::lock_guard<Mutex>;
 
 
 class Mutex {
