@@ -29,7 +29,7 @@ class UringProactor;
 
 class UringSocket : public SocketBase{
 public:
-    UringSocket(UringProactor*);
+    UringSocket(UringProactor* proactor,int fd) :fd_(fd), proactor_(proactor) {}
     ~UringProactor();
 
 
