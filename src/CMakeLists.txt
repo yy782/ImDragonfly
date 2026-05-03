@@ -16,23 +16,16 @@ add_library(incomplete-imdragonfly STATIC ${STORAGE_SOURCES} )
 # 包含目录
 target_include_directories(incomplete-imdragonfly PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/helio
-
-    ${CMAKE_CURRENT_SOURCE_DIR}/command_layer
-    ${CMAKE_CURRENT_SOURCE_DIR}/detail
-    ${CMAKE_CURRENT_SOURCE_DIR}/redis
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharding
+    ${CMAKE_SOURCE_DIR}/net
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 # 链接库
 target_link_libraries(incomplete-imdragonfly PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
-    absl::flags
-    absl::strings
-    absl::hash
-    absl::base
-    base
-    fibers2
-    io
+    net
 )
 

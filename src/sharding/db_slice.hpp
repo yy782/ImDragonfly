@@ -2,8 +2,8 @@
 
 #include "db_table.hpp"
 #include "op_status.hpp"
-#include "string_or_view.hpp"
-#include "tx_base.hpp"
+#include "detail/string_or_view.hpp"
+#include "detail/tx_base.hpp"
 
 
 namespace dfly{

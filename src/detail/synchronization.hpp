@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "util/fibers/synchronization.h"
+#include "util/synchronization.h"
 
 namespace dfly {
 
@@ -31,9 +31,9 @@ private:
 
 // Replacement of std::SharedLock that allows -Wthread-safety
 template <typename Mutex> 
-class ABSL_SCOPED_LOCKABLE SharedLock {
+class SharedLock {
 public:
-    explicit SharedLock(Mutex& m) ABSL_EXCLUSIVE_LOCK_FUNCTION(m) : m_(m) {
+    explicit SharedLock(Mutex& m) : m_(m) {
         m_.lock_shared();
         is_locked_ = true;
     }

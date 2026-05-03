@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "common_types.hpp"
+#include "detail/common_types.hpp"
 #include "util/synchronization.hpp"
 
 namespace dfly {

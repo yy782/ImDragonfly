@@ -1,7 +1,7 @@
 #pragma once
 #include "common_types.hpp"
 
-#include "namespaces.hpp"
+#include "sharding/namespaces.hpp"
 #include <span>
 namespace dfly {
 

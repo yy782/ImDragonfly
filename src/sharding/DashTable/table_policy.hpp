@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DashTable/dash_table.hpp"
+#include "dash_table.hpp"
 
 
 namespace dfly {

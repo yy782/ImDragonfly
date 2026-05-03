@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <immintrin.h>
 
-#include "memory_resource.hpp"
+#include "detail/memory_resource.hpp"
 
 namespace dfly {
 namespace detail {

@@ -9,11 +9,7 @@ namespace {
 
     void wait_for_cqe(io_uring* ring, unsigned wait_nr, __kernel_timespec* ts, sigset_t* sig = NULL) {
         struct io_uring_cqe* cqe_ptr = nullptr;
-
-        int res = io_uring_wait_cqes(ring, &cqe_ptr, wait_nr, ts, sig);
-        if (res < 0) {
-            res = -res;
-        }
+        io_uring_wait_cqes(ring, &cqe_ptr, wait_nr, ts, sig);
     }
 
     constexpr uint32_t kTaskQueueLen = 256;
@@ -36,7 +32,7 @@ UringProactor::UringProactor() {
 UringProactor::~UringProactor() {  
 }
 
-void UringProactor::Init(unsigned pool_index, size_t ring_size, int wq_fd) {
+void UringProactor::Init(unsigned pool_index, size_t ring_size) {
 
     assert(ring_size & (ring_size-1));
 
@@ -77,6 +73,8 @@ void UringProactor::loop(){
     ts.tv_sec = 5;
     ts.tv_nsec = 0;    
 
+    uint32_t tq_seq = 0;
+
     while(!is_stopped_){
         int num_submitted = io_uring_submit_and_get_events(&ring_);       
         bool ring_busy = num_submitted == -EBUSY ? true : false;
@@ -86,7 +84,17 @@ void UringProactor::loop(){
         if (cqe_count) {
             ReapCompletions(cqe_count, cqes);
         }
-        wait_for_cqe(&ring, 1, &ts);
+
+        tq_seq = tq_seq_.load(memory_order_acquire);
+        DoingTaskQueue();
+
+        if (task_queue_.empty() &&     
+        tq_seq_.compare_exchange_weak(tq_seq, WAIT_SECTION_STATE, memory_order_acq_rel,
+                                  memory_order_relaxed)){
+            wait_for_cqe(&ring, 1, &ts);
+            tq_seq_.store(0, std::memory_order_release);
+        }
+        
     }
 }
 
@@ -175,11 +183,23 @@ void UringProactor::sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, st
 }
 
 void UringProactor::WakeupIfNeeded() {
-    auto current = tq_seq_.fetch_add(2, std::memory_order_acq_rel);
+    auto current = tq_seq_.fetch_add(1, std::memory_order_acq_rel);
     if (current == WAIT_SECTION_STATE) {
         WakeRing();
     } 
 }
+
+
+void UringProactor::DoingTaskQueue(){
+    Fun task;
+    while(task_queue_.try_dequeue(task)){
+        task();
+        
+    }
+    task_queue_avail_.notifyAll();
+}
+
+
 
 
 }

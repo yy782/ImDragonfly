@@ -1,8 +1,8 @@
 #pragma once
 #include "engine_shard.hpp"
-#include "util/proactor_pool.h"
+#include "base/proactor_pool.hpp"
 
-#include "utils/Time.hpp"
+#include "util/Time.hpp"
 
 namespace dfly{
 class TieredStorage;
@@ -73,7 +73,7 @@ public:
     }
 private:
     void InitThreadLocal(util::ProactorBase* pb);
-    util::ProactorPool* pp_;
+    base::ProactorPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;
 };

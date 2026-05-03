@@ -16,27 +16,14 @@ public:
 
     bool InMyThread() const { return pthread_self() = thread_id_; }
 
+    size_t GetPoolIndex() const { return pool_index_; }
 
 
 protected:
     ProactorBase();
     pthread_t thread_id_ = 0U;
     int32_t pool_index_ = 0;
-    int wake_fd_ = -1;
     
-    using Fun = std::function<void()>;
-
-    util::mpmc_bounded_queue<Fun> task_queue_;
-    util::EventCount task_queue_avail_;
-
-    std::atomic<uint32_t> tq_seq_;
-
-// ┌─────────────────┬─────────────────────────────────────────┐
-// │  bit 31         │           bits 0-30                     │
-// │  WAIT_SECTION   │           序列计数器（奇偶标志）          │
-// └─────────────────┴─────────────────────────────────────────┘
-
-
 };
 
 
@@ -46,7 +33,7 @@ class UringProactor : public ProactorBase{
 public:    
     UringProactor();
     ~UringProactor();    
-    void Init(unsigned pool_index, size_t ring_size, int wq_fd = -1);
+    void Init(unsigned pool_index, size_t ring_size);
 
     void loop();
     void stop();
@@ -69,12 +56,13 @@ public:
 
     template <typename Func> 
     bool DispatchBrief(Func&& f);
+    
 
-
+    
 private:
     template <typename Func> 
     bool EmplaceTaskQueue(Func&& f);
-
+    void DoingTaskQueue();
     void WakeupIfNeeded();
     void WakeRing();
     void ProcessCqeBatch(unsigned count, io_uring_cqe** cqes);
@@ -87,6 +75,9 @@ private:
         fu2::function_base<true /*owns*/, false /*non-copyable*/, fu2::capacity_fixed<16, 8>,
                             false /* non-throwing*/, false /* strong exceptions guarantees*/,
                             void(struct io_uring_cqe*)>;
+
+
+
     
     struct CompletionEntry {
         CbType cb;
@@ -100,6 +91,14 @@ private:
     struct io_uring ring_;
 
     thread_local UringProactor* owner_;
+
+
+    using Fun = std::function<void()>;
+    using CorFun = std::function<cppcoro::task<void>()>;
+    util::mpmc_bounded_queue<Fun> task_queue_, cor_task_queue_;
+    util::EventCount task_queue_avail_;
+
+    std::atomic<uint32_t> tq_seq_;
 
 };
 

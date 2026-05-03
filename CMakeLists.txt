@@ -46,7 +46,7 @@ else()
     )
 endif()    
 # 主代码
-add_subdirectory(helio)
+add_subdirectory(net)
 add_subdirectory(src)
 # 测试
 if(BUILD_TESTS)
@@ -57,18 +57,11 @@ endif()
 add_executable(imdragonfly main.cpp)
 target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/helio
+    ${CMAKE_SOURCE_DIR}/net
 )
 
 
 target_link_libraries(imdragonfly PRIVATE
     incomplete-imdragonfly
-    mimalloc
-    fibers2
-    base
-    io
-    absl::flags
-    absl::strings
-    absl::hash
-    absl::base
+    net
 )

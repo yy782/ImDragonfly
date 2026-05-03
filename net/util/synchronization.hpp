@@ -1,6 +1,6 @@
 // Copyright 2023, Roman Gershman.  All rights reserved.
 // See LICENSE for licensing terms.
-//
+// synchronization
 
 #pragma once
 
@@ -32,7 +32,7 @@ public:
         Key(const Key&) = delete;
     public:
         Key(Key&& o) noexcept : me_{o.me_}, epoch_{o.epoch_} {
-        o.me_ = nullptr;
+            o.me_ = nullptr;
         };
 
         ~Key() {
@@ -41,7 +41,7 @@ public:
         }
 
         uint32_t epoch() const {
-        return epoch_;
+            return epoch_;
         }
     };
 
@@ -197,12 +197,14 @@ public:
     Done() : impl_(new Impl) {
     }
     ~Done() {
+        delete Impl_;
+        Impl_ = nullptr;
     }
 
     void Notify() {
         impl_->Notify();
     }
-    bool Wait(DoneWaitDirective reset = AND_NOTHING) {
+    auto Wait(DoneWaitDirective reset = AND_NOTHING) {
         return impl_->Wait(reset);
     }
 
@@ -229,11 +231,11 @@ private:
         }
     }
 
-    bool Wait(DoneWaitDirective reset) {
-        bool res = ec_.await([this] { return ready_.load(std::memory_order_acquire); });
+    cppcoro::task<bool> Wait(DoneWaitDirective reset) {
+        bool res = co_await ec_.await([this] { return ready_.load(std::memory_order_acquire); });
         if (reset == AND_RESET)
             ready_.store(false, std::memory_order_release);
-        return res;
+        co_return res;
     }
 
     // We use EventCount to wake threads without blocking.
@@ -254,7 +256,7 @@ private:
     Impl impl_;
     EventCount ec_;
     std::atomic<std::uint32_t> use_count_{0};
-    std::atomic_bool ready_;
+    std::atomic<bool> ready_;
 };
 
 
@@ -334,48 +336,8 @@ class BlockingCounter {
   std::shared_ptr<EmbeddedBlockingCounter> counter_;
 };
 
-class SharedMutex {
-public:
-    bool try_lock() ABSL_EXCLUSIVE_TRYLOCK_FUNCTION(true) {
-        uint32_t expect = 0;
-        return state_.compare_exchange_strong(expect, WRITER, std::memory_order_acq_rel);
-    }
 
-    void lock() ABSL_EXCLUSIVE_LOCK_FUNCTION() {
-        ec_.await([this] { return try_lock(); });
-    }
 
-    bool try_lock_shared() ABSL_SHARED_TRYLOCK_FUNCTION(true) {
-        uint32_t value = state_.fetch_add(READER, std::memory_order_acquire);
-        if (value & WRITER) {
-            state_.fetch_add(-READER, std::memory_order_release);
-            return false;
-        }
-        return true;
-    }
-
-    void lock_shared() ABSL_SHARED_LOCK_FUNCTION() {
-        ec_.await([this] { return try_lock_shared(); });
-    }
-
-    void unlock() ABSL_UNLOCK_FUNCTION() {
-        state_.fetch_and(~(WRITER), std::memory_order_relaxed);
-        ec_.notifyAll();
-    }
-
-    void unlock_shared() ABSL_UNLOCK_FUNCTION() {
-        state_.fetch_add(-READER, std::memory_order_relaxed);
-        ec_.notifyAll();
-    }
-
-private:
-    enum : int32_t { 
-        READER = 4, 
-        WRITER = 1 
-    };
-    EventCount ec_;
-    std::atomic_uint32_t state_{0};
-};
 
 
 

@@ -68,7 +68,8 @@ public:
     
     std::string retrieveAllToString();
     
-    const char* peek()const noexcept{return begin()+read_index_;}
+    const char* peek() const noexcept{return begin()+read_index_;}
+
     
     stringPiece readView()const noexcept{return stringPiece(peek(),readable_size()+1);}
     
@@ -76,9 +77,9 @@ public:
 
     void shrink(size_t reserve);
 
-    size_t readable_size()const noexcept{return write_index_-read_index_;}
+    size_t readable_size() const noexcept{return write_index_-read_index_;}
     
-    size_t writable_size()const noexcept{return buffer_.size()-write_index_;}
+    size_t writable_size() const noexcept{return buffer_.size()-write_index_;}
     
     size_t prependable_size()const noexcept{return read_index_;}
 

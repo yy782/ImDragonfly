@@ -10,7 +10,7 @@
 #include <utility>
 #include <charconv>
 
-#include "utils/Strings.hpp"
+#include "util/Strings.hpp"
 
 namespace cmd {
 class CmdArgParser {

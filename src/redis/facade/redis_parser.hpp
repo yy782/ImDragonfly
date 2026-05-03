@@ -6,7 +6,7 @@
 #include <cctype>
 #include <sstream>
 
-#include "parsed_command.hpp"
+#include "command_layer/parsed_command.hpp"
 
 namespace dfly{
 

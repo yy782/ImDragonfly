@@ -5,10 +5,8 @@
 #pragma once
 
 
-#include "detail/tx_base.h"
+#include "detail/tx_base.hpp"
 
-
-#include "facade_types.hpp"
 
 
 namespace dfly {
