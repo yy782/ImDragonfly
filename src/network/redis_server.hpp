@@ -5,14 +5,13 @@ using namespace boost;
 
 namespace dfly{
 
-
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
     RedisSession(int fd, UringProactor* proactor)
         : socket_(proactor, fd) {
     }
     
-    auto DoRead(){
+    cppcoro::task<void> DoRead(){
 
         while (true) {
             auto n = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
@@ -23,6 +22,7 @@ public:
             // 处理逻辑            
         }
         // 关闭连接了
+        co_return;
     }   
     
     
@@ -35,34 +35,34 @@ private:
     DbIndex index_ = 0;
 };
 
-
-// 这里IO用的是io_uring, 回调也只是恢复线程，还需要IO线程吗，没有IO需求了?
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
         : pool_(size),
-          socket_(pool_.NextProactor(), listenfd)
+          socket_(&main_proactor_, listenfd)
     {
 
     }
     
-    cppcoro::task<void> Start() {
-        
-
-
+    void Start() {
         isRuning = true;
+        pool_.AsyncLoop();
 
-        pool_.loop();
+        main_proactor_.DispatchBrief([this]{
+            while(isRunning){
+                auto r = co_await socket_.AsyncAccept();
 
-        while (isRuning) {
-            auto r = co_await socket_.Accept();
-
-            if (r.has_value()){
-                auto session = RedisSession(r, pool_.NextProactor());
-
-                // 这里应该交给线程池处理session::DoRead()吗?
+                if (r.has_value()){
+                    auto session = std::make_shared<RedisSession>(r, pool_.NextProactor());
+                    
+                    auto& p = NextProactor();
+                    p->DispatchBrief([session](){
+                        session->DoRead();
+                    });                    
+                }                 
             }
-        }
+        });
+        main_proactor_.loop();
     }
     
     void Stop() {
@@ -71,9 +71,17 @@ public:
     }
     
 private:
+
+    auto& NextProactor() const {
+        return pool_[NextProIndex_%pool_.size()];
+    }
+
+    ssize_t NextProIndex_ = 0;
+
+
+    UringProactor main_proactor_;
     UringProactorPool pool_;
     UringSocket ListenSocket_;
-
     bool isRuning = false;
 };
 
