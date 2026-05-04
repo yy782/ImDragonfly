@@ -5,7 +5,7 @@
 #include "namespaces.hpp"
 #include "engine_shard_set.hpp"
 #include "db_slice.hpp"
-#include "synchronization.hpp"
+
 
 
 namespace dfly {
@@ -13,8 +13,7 @@ namespace dfly {
 
 Namespace::Namespace() {
     shard_db_slices_.resize(shard_set->size());
-    // shard_blocking_controller_.resize(shard_set->size());
-    shard_set->RunBriefInParallel([&](EngineShard* es) { // 并行执行
+    shard_set->RunBlockingInParallel([&](EngineShard* es) { // 并行执行
         ShardId sid = es->shard_id();
         shard_db_slices_[sid] = std::make_unique<DbSlice>(sid, false, es);
     });
@@ -28,19 +27,6 @@ DbSlice& Namespace::GetCurrentDbSlice() {
 DbSlice& Namespace::GetDbSlice(ShardId sid) {
     return *shard_db_slices_[sid];
 }
-
-// BlockingController* Namespace::GetOrAddBlockingController(EngineShard* shard) {
-//     if (!shard_blocking_controller_[shard->shard_id()]) {
-//         shard_blocking_controller_[shard->shard_id()] = make_unique<BlockingController>(shard, this);
-//     }
-
-//     return shard_blocking_controller_[shard->shard_id()].get();
-// }
-
-// BlockingController* Namespace::GetBlockingController(ShardId sid) {
-//   return shard_blocking_controller_[sid].get();
-// }
-
 Namespaces::Namespaces() {
     default_namespace_ = &GetOrInsert("");
 }
@@ -50,7 +36,7 @@ Namespaces::~Namespaces() {
 }
 
 void Namespaces::Clear() {
-    util::fb2::LockGuard guard(mu_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
     default_namespace_ = nullptr;
 
@@ -58,7 +44,7 @@ void Namespaces::Clear() {
         return;
     }
 
-    shard_set->RunBriefInParallel([&](EngineShard* es) {
+    shard_set->RunBlockingInParallel([&](EngineShard* es) {
         for (auto& ns : namespaces_) {
             ns.second.shard_db_slices_[es->shard_id()].reset();
         }
@@ -72,20 +58,19 @@ Namespace& Namespaces::GetDefaultNamespace() const {
 }
 
 Namespace& Namespaces::GetOrInsert(std::string_view ns) {
-    std::string nns=std::string(ns);                // not same
     {
         // Try to look up under a shared lock
-        SharedLock guard(mu_);
-        auto it = namespaces_.find(nns);            
+        std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+        auto it = namespaces_.find(std::string(ns));            
         if (it != namespaces_.end()) {
-        return it->second;
+            return it->second;
         }
     }
 
     {
         // Key was not found, so we create create it under unique lock
-        util::fb2::LockGuard guard(mu_);
-        return namespaces_[nns];
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+        return namespaces_[std::string(ns)];
     }
 }
 

@@ -9,8 +9,8 @@
 #include <concepts>
 #include <coroutine>
 #include <variant>
-
-#include "util/function_ref.hpp"
+#include "command_layer/cmn_types.hpp"
+#include "util/function.hpp"
 #include "sharding/op_status.hpp"
 #include "conn_context.hpp"
 #include "sharding/engine_shard.hpp"
@@ -18,45 +18,62 @@
 #include "cppcoro/task.hpp"
 
 namespace dfly::cmd {
-
-using SingleHopSentinel = Transaction::RunnableType; // 一个回调
-
+using ::cmn::CmdArgList;
 template <typename RT> 
-using SingleHopSentinelT = utils::FunctionRef<RT(Transaction*, EngineShard*)>;
+using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, EngineShard*)>;
 
-SingleHopSentinel SingleHop(const auto& f) {
-    return f;
-}
 
 auto SingleHopT(const auto& f) -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {
     return f;
 }
 
-class Coro : cppcoro::detail::task_promise_base<false>{
+class Coro;
+
+struct CoroTask {
+    using promise_type = Coro;
+    CoroTask(std::coroutine_handle<promise_type> coroutine) : coro_(coroutine) {}
+    CoroTask(CoroTask&&) = delete;
+    CoroTask(const CoroTask&) = delete;
+    CoroTask& operator=(const CoroTask&) = delete;
+    CoroTask& operator=(CoroTask&&) = delete;
+    ~CoroTask() = default;
+
+
+    std::coroutine_handle<promise_type> coro_;
+};
+
+class Coro {
 public:
-  Coro(facade::CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx{cmd_cntx} {
-  }
+    Coro() = default;
+    Coro(CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx_{cmd_cntx} {
+      (void)arg;
+    }
+    CoroTask get_return_object() noexcept{
+      return CoroTask{ std::coroutine_handle<Coro>::from_promise(*this) };
+    }
+    void return_void() {}
+    void unhandled_exception() { 
+          std::terminate(); 
+    }
+    template <typename RT>
+    auto await_transform(SingleHopSentinelT<RT> callback) const {
+        return SingleHopWaiterT{cmd_cntx_, callback};
+    }
 
-  task<void> get_return_object() noexcept{
-    return task<void>{ std::coroutine_handle<Coro>::from_promise(*this) };
-  }
-
-  void return_value() noexcept {}
-
-  void result() noexcept {}
-
-
-  auto await_transform(SingleHopSentinel callback) const {
-      return SingleHopWaiter{cmd_cntx_, callback};
-  }
+    auto initial_suspend() const noexcept {
+        return std::suspend_never{};
+    }
+    auto final_suspend() const noexcept {
+        return std::suspend_never{};
+    }
 
 private:
-
   template <typename RT> 
   struct SingleHopWaiterT  {
     SingleHopWaiterT(CommandContext* cmd_cntx,
-                    utils::FunctionRef<RT(Transaction*, EngineShard*)> callback)
-        :  callback{callback} {
+                    SingleHopSentinelT<RT> callback)
+        :  callback_{callback} {
+          (void)cmd_cntx;
     }
 
     bool await_ready() const noexcept { 
@@ -66,20 +83,20 @@ private:
     void await_suspend(
       std::coroutine_handle<Coro> coro) noexcept
     {
-      cmd_cntx_->tx()->Execute(coro, *this); // tx执行完恢复权柄
+      cmd_cntx_->tx()->Scheduling(coro, *this); // tx执行完恢复权柄
     }
 
     void operator()(Transaction* tx, EngineShard* es) const {
-      result = callback(tx, es);
+      result_ = callback_(tx, es);
       return;
     }
 
     RT&& await_resume() noexcept {
-      return std::move(result);
+      return std::move(result_);
     }
 
     CommandContext* cmd_cntx_;
-    utils::FunctionRef<RT(Transaction*, EngineShard*)> callback_;
+    mutable SingleHopSentinelT<RT> callback_;
     mutable RT result_;
   };
 
@@ -88,7 +105,7 @@ private:
   CommandContext* cmd_cntx_;
 };
 
-using CoroTask = cppcoro::task<void, cmd::Coro>;
+
 
 
 }  // namespace dfly::cmd

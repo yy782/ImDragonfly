@@ -1,15 +1,22 @@
 
 #pragma once
-
-#include "tx_base.hpp"
-#include "common_types.hpp"
-#include "utils/function_ref.hpp"
-
-#include "cmn_types.hpp"
-
+#include <cstdint>
+#include <shared_mutex>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <span> 
+#include <utility>
+#include <coroutine>
+#include "detail/tx_base.hpp"
+#include "detail/common_types.hpp"
+#include "util/function.hpp"
+#include "command_layer/command_registry.hpp"
+#include "command_layer/cmn_types.hpp"
+#include "sharding/op_status.hpp"
 
 namespace dfly{
-
+using ::cmn::CmdArgList;
 
 class CommandId;
 class Namespace;
@@ -17,11 +24,14 @@ class Namespace;
 
 class Transaction{
 public:
-    using RunnableType = utils::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
+
+    using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
+ 
 
     explicit Transaction(const CommandId* cid);
 
-    OpStatus InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args);
+    void InitByArgs(Namespace* ns, DbIndex index, CmdArgList args);
+
 
 
 
@@ -29,18 +39,25 @@ public:
 
     ShardArgs GetShardArgs(ShardId sid) const;
 
-    DbContext& GetDbContext() const {
+    const DbContext& GetDbContext() const {
         return db_cntx_;
     }   
-
-    DbSlice& GetDbSlice(ShardId shard_id) const {
-        return namespace_->GetDbSlice(shard_id);
+    DbContext& GetDbContext() {
+        return db_cntx_;
+    }  
+    const DbSlice& GetDbSlice(ShardId shard_id) const {
+        return ns_->GetDbSlice(shard_id);
+    }
+    DbSlice& GetDbSlice(ShardId shard_id) {
+        return ns_->GetDbSlice(shard_id);
+    }    
+    DbIndex& GetDbIndex() {
+        return db_cntx_.db_index_;
     }
 
 
-
     
-    void Scheduling(std::coroutine_handle<Coro> handle, RunnableType cb); // not same
+    void Scheduling(std::coroutine_handle<> handle, RunnableType cb); // not same
 
 
 private:
@@ -48,8 +65,10 @@ private:
 
     DbContext db_cntx_;
 
-    cmn::CmdArgList full_args_;
-    std::vector<IndexSlice> args_slices_; // IndexSlice from tx_base.hpp, 处理full_args_的分片事务
+    CmdArgList full_args_;
+    ShardId unique_shard_id_;
+
+    Namespace* ns_ = nullptr; // 事务所属的命名空间
     
 
 };

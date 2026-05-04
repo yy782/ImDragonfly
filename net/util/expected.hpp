@@ -3,7 +3,10 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-namespace utils{
+namespace util{
+
+// TODO expected 不能区别有没有结果
+
 
 template <typename E>
 class unexpected {
@@ -38,39 +41,37 @@ private:
     };
     
     Storage storage_;
-    bool has_value_ : 1;  
-    bool engaged_ : 1;    
+    bool has_value_ = false;
+
+
 
     void destroy() {
-        if (engaged_) {
-            if (has_value_) {
-                storage_.value.~T();
-            } else {
-                storage_.error.~E();
-            }
-            engaged_ = false;
+        if (has_value_) {
+            storage_.value.~T();
+        } else {
+            storage_.error.~E();
         }
     }
     
 public:
-    expected() : has_value_(true), engaged_(true) {
+    expected() : has_value_(true){
         new (&storage_.value) T();
     }
     
     template<typename U>
-    expected(U&& u) : has_value_(true), engaged_(true) {
+    expected(U&& u) : has_value_(true) {
         new (&storage_.value) T(u);
     }
     
-    expected(const unexpected<E>& u) : has_value_(false), engaged_(true) {
+    expected(const unexpected<E>& u) : has_value_(false){
         new (&storage_.error) E(u.value());
     }
     
-    expected(unexpected<E>&& u) : has_value_(false), engaged_(true) {
+    expected(unexpected<E>&& u) : has_value_(false){
         new (&storage_.error) E(std::move(u.value()));
     }
     
-    expected(const expected& other) : has_value_(other.has_value_), engaged_(true) {
+    expected(const expected& other) : has_value_(other.has_value_) {
         if (has_value_) {
             new (&storage_.value) T(other.storage_.value);
         } else {
@@ -81,13 +82,12 @@ public:
     expected(expected&& other) noexcept(
         std::is_nothrow_move_constructible<T>::value &&
         std::is_nothrow_move_constructible<E>::value
-    ) : has_value_(other.has_value_), engaged_(true) {
+    ) : has_value_(other.has_value_) {
         if (has_value_) {
             new (&storage_.value) T(std::move(other.storage_.value));
         } else {
             new (&storage_.error) E(std::move(other.storage_.error));
         }
-        other.engaged_ = false;
     }
     
     ~expected() {
@@ -99,7 +99,6 @@ public:
         if (this != &other) {
             destroy();
             has_value_ = other.has_value_;
-            engaged_ = true;
             if (has_value_) {
                 new (&storage_.value) T(other.storage_.value);
             } else {
@@ -116,13 +115,11 @@ public:
         if (this != &other) {
             destroy();
             has_value_ = other.has_value_;
-            engaged_ = true;
             if (has_value_) {
                 new (&storage_.value) T(std::move(other.storage_.value));
             } else {
                 new (&storage_.error) E(std::move(other.storage_.error));
             }
-            other.engaged_ = false;
         }
         return *this;
     }
@@ -134,77 +131,79 @@ public:
 
     const T& value() const {
         if (!has_value_) {
-            throw std::runtime_error("expected has error, not value");
+            throw std::runtime_error("expected has error_, not value");
         }
         return storage_.value;
     }
     
-    T& value() {
+    T& value() { // 移动会更好吗
         if (!has_value_) {
-            throw std::runtime_error("expected has error, not value");
+            throw std::runtime_error("expected has error_, not value");
         }
         return storage_.value;
     }
     
     
-    const E& error() const {
+    const E& error_() const {
         if (has_value_) {
-            throw std::runtime_error("expected has value, not error");
+            throw std::runtime_error("expected has value, not error_");
         }
         return storage_.error;
     }
     
     E& error() {
         if (has_value_) {
-            throw std::runtime_error("expected has value, not error");
+            throw std::runtime_error("expected has value, not error_");
         }
         return storage_.error;
     }
     
-    
-    const T& operator*() const { return storage_.value; }
-    T& operator*() { return storage_.value; }
-    
-    const T* operator->() const { return &storage_.value; }
-    T* operator->() { return &storage_.value; }
-    
-    
-    operator T() const {
-        return value();
-    }
-    
-    expected& operator=(const T& v) {
-        destroy();
-        has_value_ = true;
-        engaged_ = true;
-        new (&storage_.value) T(v);
-        return *this;
-    }
-    
-    expected& operator=(T&& v) {
-        destroy();
-        has_value_ = true;
-        engaged_ = true;
-        new (&storage_.value) T(std::move(v));
-        return *this;
-    }
-    
-    expected& operator=(const unexpected<E>& u) {
-        destroy();
-        has_value_ = false;
-        engaged_ = true;
-        new (&storage_.error) E(u.value());
-        return *this;
-    }
-    
-    expected& operator=(unexpected<E>&& u) {
-        destroy();
-        has_value_ = false;
-        engaged_ = true;
-        new (&storage_.error) E(std::move(u.value()));
-        return *this;
-    }
 };
+
+
+template <typename E>
+class expected<void, E> {
+private:
+    E error_; 
+    void destroy() {
+        error_.~E();
+    }
+    
+public:
+    expected() = default;
+    
+    expected(unexpected<E>&& u) {
+        new (&error_) E(std::move(u.value()));
+    }
+    
+    expected(const expected& other){
+        // TODO 检查other是否有错误，error是不是空
+        new (&error_) E(other.error_);
+    }
+    
+    expected(expected&& other) = delete;
+    expected& operator=(const expected& other) = delete;
+    expected& operator=(expected&& other) = delete;    
+    ~expected() {
+        destroy();
+    }
+    
+    
+
+    bool has_value() const { return false; }
+    explicit operator bool() const { return error_ == E{}; } // 注意这里的实现，表示没有错误时为true
+
+    const E& error() const {
+        return error_;
+    }
+    
+    E& error() {
+        return error_;
+    }
+    
+};
+
+
 
 
 template <typename T, typename E>
@@ -224,7 +223,7 @@ bool operator==(const expected<T, E>& a, const expected<T, E>& b) {
     if (a.has_value()) {
         return *a == *b;
     } else {
-        return a.error() == b.error();
+        return a.error_() == b.error_();
     }
 }
 

@@ -11,5 +11,6 @@ namespace dfly {
 class CommandRegistry;
 
 void RegisterStringFamily(CommandRegistry*);
+void RegisterGeneric(CommandRegistry*);
 
 }  // namespace dfly

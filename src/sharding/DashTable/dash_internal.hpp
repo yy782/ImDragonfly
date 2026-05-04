@@ -410,7 +410,7 @@ class Segment {
         template <typename U, typename V>
         void Insert(uint8_t slot, U&& u, V&& v, uint8_t meta_hash, bool probe);
         template <typename U, typename V>
-        int TryInsertToBucket(U&& key, V&& value, uint8_t meta_hash, bool probe);  
+        int TryInsertToBucket(U&& new_key, V&& new_value, uint8_t meta_hash, bool probe);  
         template <typename Pred> 
         SlotId FindByFp(uint8_t fp_hash, bool probe, Pred&& pred) const;
 
@@ -678,7 +678,7 @@ private:
 
 template <typename Key, typename Value, typename Policy>
 template <typename U, typename V>
-int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& key, V&& value, 
+int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key, V&& new_value, 
                                                             uint8_t meta_hash, bool probe)
 {
     if (this->IsFull()) { // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
@@ -687,7 +687,7 @@ int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& key, V&& value,
 
     int slot = this->slotb_.FindEmptySlot();
     assert(slot >= 0);
-    Insert(slot, std::forward<U>(key), std::forward<V>(value), meta_hash, probe);
+    Insert(slot, std::forward<U>(new_key), std::forward<V>(new_value), meta_hash, probe);
     return slot;    
 }
 
@@ -801,7 +801,7 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
     }
 
     if (!spread) {
-        int slot =
+        slot =
             neighbor.TryInsertToBucket(std::forward<U>(key), std::forward<V>(value), meta_hash, true);
         if (slot >= 0) {
             return Iterator{nid, uint8_t(slot)};
@@ -865,6 +865,9 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
     }
 
     auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
+
+        (void)overflow_index;
+
         assert(pos < kStashBucketNum);
 
         pos += kBucketNum;
@@ -874,9 +877,9 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
 
     if (target.HasStashOverflow()) { // Stash 溢出
         for (unsigned i = 0; i < kStashBucketNum; ++i) {
-        auto sid = stash_cb(0, i);
-            if (sid != BucketType::kNanSlot) {
-                return Iterator{PhysicalBid(kBucketNum + i), sid};
+        auto st_sid = stash_cb(0, i);
+            if (st_sid != BucketType::kNanSlot) {
+                return Iterator{PhysicalBid(kBucketNum + i), st_sid};
             }
         }
         return Iterator{};
@@ -928,6 +931,9 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right, MoveCb
         uint32_t invalid_mask = 0;
 
         auto cb = [&](auto* bucket, unsigned slot, bool probe) {
+
+            (void)probe;
+
             auto& key = bucket->key[slot];
             Hash_t hash = hfn(key);
 
@@ -952,6 +958,9 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right, MoveCb
         Bucket& stash = bucket_[bid];
 
         auto cb = [&](auto* bucket, unsigned slot, bool probe) {
+
+            (void)probe;
+
             auto& key = bucket->key[slot];
             Hash_t hash = hfn(key);
 
@@ -1085,6 +1094,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
     bool found = false;
     if (b.GetProbe(false)) {  // Check items that this bucket owns.
         b.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)bucket;
+
             if (!probe) {
                 found = true;
                 cb(Iterator{bid, slot});
@@ -1098,6 +1110,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
     // check for probing entries in the next bucket, i.e. those that should reside in b.
     if (next.GetProbe(true)) {
         next.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)bucket;
+
             if (probe) {
                 found = true;
                 assert(HomeIndex(hfun(bucket->key[slot])) == bid);
@@ -1112,6 +1127,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
         for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
         const auto& stashb = bucket_[j];
         stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)probe;
+
             if (HomeIndex(hfun(bucket->key[slot])) == bid) {
                 found = true;
                 cb(Iterator{j, slot});

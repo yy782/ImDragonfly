@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <utils/function_ref.hpp>
-
 #include <boost/intrusive/list.hpp>
 #include <functional>
 #include <variant>
-
+#include <coroutine>
+#include <assert.h>
 namespace util {
 namespace detail {
 
@@ -18,12 +17,15 @@ struct Waiter{
     std::coroutine_handle<> handler;
     using ListHookType =
     boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::safe_link>>;
-    ListHookType wait_hook;
+    ListHookType wait_hook{};
 
     bool IsLinked() const {
         return wait_hook.is_linked();
     }
 
+    ~Waiter() {
+        assert(!IsLinked());
+    }
 };
 
 class WaitQueue {
@@ -51,7 +53,7 @@ public:
 
       wait_list_.pop_front();
 
-      waiter->handler.resume();
+      waiter->handler.resume(); // 后面不能对waiter进行访问了，因为它被销毁了
       return true;
     }
 

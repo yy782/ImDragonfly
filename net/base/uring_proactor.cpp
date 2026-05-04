@@ -3,7 +3,7 @@
 
 
 namespace base{
-
+thread_local UringProactor* UringProactor::owner_ = nullptr;
 namespace {
     constexpr uint16_t kCqeBatchLen = 128;
 
@@ -18,7 +18,7 @@ namespace {
     const static uint64_t wake_val = 1;
 }
  
-ProactorBase::ProactorBase() : task_queue_(kTaskQueueLen) {
+ProactorBase::ProactorBase()  {
 }
 
 
@@ -26,7 +26,12 @@ ProactorBase::ProactorBase() : task_queue_(kTaskQueueLen) {
 
 
 
-UringProactor::UringProactor() {
+UringProactor::UringProactor() : task_queue_(kTaskQueueLen){
+}
+
+
+UringProactor::UringProactor(unsigned pool_index, size_t ring_size) : task_queue_(kTaskQueueLen){
+    Init(pool_index, ring_size);
 }
 
 UringProactor::~UringProactor() {  
@@ -34,7 +39,7 @@ UringProactor::~UringProactor() {
 
 void UringProactor::Init(unsigned pool_index, size_t ring_size) {
 
-    assert(ring_size & (ring_size-1));
+    assert((ring_size & (ring_size-1)) == 0);
 
     pool_index_ = pool_index;
     thread_id_ = pthread_self();
@@ -78,6 +83,10 @@ void UringProactor::loop(){
     while(!is_stopped_){
         int num_submitted = io_uring_submit_and_get_events(&ring_);       
         bool ring_busy = num_submitted == -EBUSY ? true : false;
+
+
+        (void)ring_busy;
+
         if(num_submitted == -ETIME) continue;
 
         uint32_t cqe_count = io_uring_peek_batch_cqe(&ring_, cqes, kCqeBatchLen); 
@@ -85,13 +94,13 @@ void UringProactor::loop(){
             ReapCompletions(cqe_count, cqes);
         }
 
-        tq_seq = tq_seq_.load(memory_order_acquire);
+        tq_seq = tq_seq_.load(std::memory_order_acquire);
         DoingTaskQueue();
 
         if (task_queue_.empty() &&     
-        tq_seq_.compare_exchange_weak(tq_seq, WAIT_SECTION_STATE, memory_order_acq_rel,
-                                  memory_order_relaxed)){
-            wait_for_cqe(&ring, 1, &ts);
+        tq_seq_.compare_exchange_weak(tq_seq, WAIT_SECTION_STATE, std::memory_order_acq_rel,
+                                  std::memory_order_relaxed)){
+            wait_for_cqe(&ring_, 1, &ts);
             tq_seq_.store(0, std::memory_order_release);
         }
         
@@ -113,10 +122,10 @@ void UringProactor::ProcessCqeBatch(unsigned count, io_uring_cqe** cqes
         io_uring_cqe cqe = *cqes[i];
         uint32_t idx = cqe.user_data & 0xFFFFFFFF;
 
-        if (idx < centries.size()){
-            CbType cb = std::move(centries[idx].cb);
+        if (idx < centries_.size()){
+            CbType cb = std::move(centries_[idx].cb);
 
-            centries[idx].index = static_cast<uint64_t>(next_free_ce_);
+            centries_[idx].index = static_cast<uint64_t>(next_free_ce_);
             next_free_ce_ = idx;
             cb(&cqe);
         }
@@ -146,7 +155,7 @@ void UringProactor::RegrowCentries() {
         centries_[prev].index = prev + 1;
 }
 
-CompletionEntry& UringProactor::NextEntry(){
+UringProactor::CompletionEntry& UringProactor::NextEntry(){
     if (next_free_ce_ < 0){
         RegrowCentries();
     }
@@ -154,15 +163,15 @@ CompletionEntry& UringProactor::NextEntry(){
 }
 
 void UringProactor::WakeRing(){
-    UringProactor* caller = ProactorBase::me();
+    UringProactor* caller = UringProactor::me();
 
     struct io_uring_sqe* sqe = nullptr;
-    caller->sqe(&sqe); // sqe 的回调是空，可能有问题
+    caller->Sqe(&sqe); // sqe 的回调是空，可能有问题
 
     io_uring_prep_msg_ring(sqe, ring_.ring_fd, 0, 0, 0);
 }
 
-void UringProactor::sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, struct CompletionEntry* e){
+void UringProactor::Sqe(struct io_uring_sqe** sqe, uint32_t* index, struct CompletionEntry** e){
     *sqe = io_uring_get_sqe(&ring_);
     if (*sqe == nullptr) {
         do{
@@ -178,7 +187,7 @@ void UringProactor::sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, st
     next_free_ce_ = ce.index;
 
     if (index != nullptr) *index = dx;
-    if (e != nullptr) *e = ce;
+    if (e != nullptr) *e = &ce;
 
 }
 

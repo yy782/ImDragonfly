@@ -11,8 +11,9 @@
 #include <charconv>
 
 #include "util/Strings.hpp"
-
+#include "cmn_types.hpp"
 namespace cmd {
+using ::cmn::ArgSlice;
 class CmdArgParser {
 public:
     CmdArgParser(ArgSlice args) : args_{args} {
@@ -81,13 +82,13 @@ public:
       cur_i_ = res ? cur_i_ + 1 : cur_i_;
       return res;
     }
-.
+
     bool Check(std::string_view tag) {
         if (cur_i_  >= args_.size())
             return false;
 
         std::string_view arg = SafeSV(cur_i_);
-        if (!utils::EqualsIgnoreCase(arg, tag))
+        if (!util::EqualsIgnoreCaseStd(arg, tag))
             return false;
 
         ++cur_i_;
@@ -107,7 +108,7 @@ public:
 
 
   // Return remaining arguments
-    ArgSlice Tail() const {
+    ::cmn::ArgSlice Tail() const {
       return args_.subspan(cur_i_);
     }
 
@@ -138,7 +139,7 @@ private:
     template <class T, class... Cases>
     std::optional<std::decay_t<T>> MapImpl(std::string_view arg, std::string_view tag, T&& value,
                                           Cases&&... cases) {
-      if (utils::EqualsIgnoreCase(arg, tag))
+      if (util::EqualsIgnoreCaseStd(arg, tag))
         return std::forward<T>(value);
 
       if constexpr (sizeof...(cases) > 0)
@@ -156,16 +157,11 @@ private:
 
     template <class T> 
     T Convert(size_t idx) {
-      static_assert(
-          std::is_arithmetic_v<T> || std::is_constructible_v<T, std::string_view> || is_fint<T>,
-          "incorrect type");
       if constexpr (std::is_arithmetic_v<T>) {
         return Num<T>(idx);
       } else if constexpr (std::is_constructible_v<T, std::string_view>) {
         return static_cast<T>(SafeSV(idx));
-      } else if constexpr (std::is_fint<T>) {
-        return {ConvertFInt<T::kMin, T::kMax>(idx)};
-      }
+      } 
     }
 
     std::string_view SafeSV(size_t i) const {
@@ -180,9 +176,9 @@ private:
       std::string_view arg = SafeSV(idx);
       int64_t out;
 
-      auto result = std::from_chars(arg.data(), arg.data()+arg.size(), &out);
+      auto result = std::from_chars(arg.data(), arg.data()+arg.size(), out);
 
-      if(result.ec == std::errc() && result.ptr == sv.data() + sv.size()){
+      if(result.ec == std::errc() && result.ptr == arg.data() + arg.size()){
         return out;
       }
       Report();

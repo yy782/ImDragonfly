@@ -1,9 +1,9 @@
 #pragma once
 #include "engine_shard.hpp"
-#include "base/proactor_pool.hpp"
+#include "base/uring_proactor_pool.hpp"
 
 #include "util/Time.hpp"
-
+#include <latch>
 namespace dfly{
 class TieredStorage;
 class ShardDocIndices;
@@ -13,110 +13,61 @@ class EngineShardSet;
 class EngineShardSet {
 public:
 
-    explicit EngineShardSet(util::ProactorPool* pp) : 
+    explicit EngineShardSet(base::UringProactorPool* pp) : 
     pp_(pp) {}
-
     uint32_t size() const { return size_; }
-
-    util::ProactorPool* pool() { return pp_; }
-
-    void Init(uint32_t size, std::function<void()> shard_handler);
-
-    // Shutdown sequence:
-    // - EngineShardSet.PreShutDown()
-    // - Namespaces.Clear()
-    // - EngineShardSet.Shutdown()
+    base::UringProactorPool* pool() { return pp_; }
+    void Init(uint32_t size);
     void PreShutdown();
     void Shutdown();
 
 
-    template <typename F> 
-    auto Await(ShardId sid, F&& f) { // 同步等待
-        return shards_[sid]->GetFiberQueue()->Await(std::forward<F>(f));
-    }
-
-    // Uses a shard queue to dispatch. Callback runs in a dedicated fiber.
+    // template <typename F> 
+    // auto Await(ShardId sid, F&& f) { // 同步等待
+    //     return shards_[sid]->GetQueue()->Await(std::forward<F>(f));
+    // }
     template <typename F> 
     auto Add(ShardId sid, F&& f) { // 异步执行
         assert(sid < size_);
-        return shards_[sid]->GetFiberQueue()->Add(std::forward<F>(f));
+        return shards_[sid]->GetQueue()->Add(std::forward<F>(f));
     }
-
-    template <typename F> auto 
-    AddL2(ShardId sid, F&& f) { // 异步执行
-        return shards_[sid]->GetSecondaryQueue()->Add(std::forward<F>(f));
-    }
-
-    template <typename U> 
-    void RunBriefInParallel(U&& func) const { // 在所有分片上并行执行
-        RunBriefInParallel(std::forward<U>(func), [](auto i) { return true; });
-    }
-    template <typename U, typename P> 
-    void RunBriefInParallel(U&& func, P&& pred) const; // 在满足条件的分片上并行执行
     template <typename U> 
     void RunBlockingInParallel(U&& func) {
-        RunBlockingInParallel(std::forward<U>(func), [](auto i) { return true; });
+        RunBlockingInParallel(std::forward<U>(func), [](uint32_t) {
+                return true; 
+            });
     }
     template <typename U, typename P> 
-    void RunBlockingInParallel(U&& func, P&& pred);
-    template <typename U> 
-    void AwaitRunningOnShardQueue(U&& func) {
-        util::fb2::BlockingCounter bc(size_);
-        for (size_t i = 0; i < size_; ++i) {
-        Add(i, [&func, bc]() mutable {
-            func(EngineShard::tlocal());
-            bc->Dec();
-        });
+    void RunBlockingInParallel(U&& func, P&& pred) {
+        uint32_t Count = 0;
+        for (uint32_t i = 0; i < size(); ++i) {
+            if (!pred(i))
+                continue;
+            Count++;
         }
-
-        bc->Wait();
+        std::latch latch(Count);
+        for (uint32_t i = 0; i < size(); ++i) {
+            if (!pred(i))
+                continue;
+            auto dest = pp_->at(i);
+            dest->DispatchBrief([&func, &latch]() mutable {
+                func(EngineShard::tlocal());
+                latch.count_down();
+            });            
+        }
+        latch.wait();
     }
+
 private:
-    void InitThreadLocal(util::ProactorBase* pb);
-    base::ProactorPool* pp_;
+    void InitThreadLocal(base::UringProactorPtr pb);
+    base::UringProactorPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;
 };
 
-template <typename U, typename P>
-void EngineShardSet::RunBriefInParallel(U&& func, P&& pred) const {
-    util::fb2::BlockingCounter bc{0};
 
-    for (uint32_t i = 0; i < size(); ++i) {
-        if (!pred(i))
-            continue;
 
-        bc->Add(1);
-        util::ProactorBase* dest = pp_->at(i);
-        dest->DispatchBrief([&func, bc]() mutable {
-            func(EngineShard::tlocal());
-            bc->Dec();
-        });
-    }
-    bc->Wait();
-}
 
-template <typename U, typename P> void EngineShardSet::RunBlockingInParallel(U&& func, P&& pred) {
-    util::fb2::BlockingCounter bc{0};
-    static_assert(std::is_invocable_v<U, EngineShard*>,
-                    "Argument must be invocable EngineShard* as argument.");
-    static_assert(std::is_void_v<std::invoke_result_t<U, EngineShard*>>,
-                    "Callable must not have a return value!");
-
-    for (uint32_t i = 0; i < size(); ++i) {
-        if (!pred(i))
-            continue;
-        bc->Add(1);
-        util::ProactorBase* dest = pp_->at(i);
-
-        // the "Dispatch" call spawns a fiber underneath.
-        dest->Dispatch([&func, bc]() mutable {
-            func(EngineShard::tlocal());
-            bc->Dec();
-        });
-    }
-    bc->Wait();
-}
 
 ShardId Shard(std::string_view key);
 

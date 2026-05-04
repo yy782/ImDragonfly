@@ -1,82 +1,193 @@
 // network/redis_server.h
 #pragma once
 
-using namespace boost;
-
+#include "sharding/engine_shard_set.hpp"
+#include "redis/facade/resp_buf.hpp"
+#include "redis/facade/reply_builder.hpp"
+#include "command_layer/parsed_command.hpp"
+#include "command_layer/command_registry.hpp"
+#include "command_layer/command_families.hpp"
+#include "command_layer/conn_context.hpp"
+#include "base/socket.hpp"
+#include "sharding/namespaces.hpp"
+#include "base/uring_proactor_pool.hpp"
+#include "transaction_layer/transaction.hpp"
 namespace dfly{
-
+using base::UringProactorPtr;
+inline CommandRegistry* CIs = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
-    RedisSession(int fd, UringProactor* proactor)
+    RedisSession(int fd, UringProactorPtr proactor)
         : socket_(proactor, fd) {
+            
     }
     
-    auto DoRead(){
+    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
 
+        ctxt_.owner_ = shared_from_this();
         while (true) {
-            auto n = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
-            // 处理逻辑
+            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+            if (r>0) {
+                RecvBuf_.hasWritten(r);
+                auto res = RecvBuf_.ParseRESP();
+                if (res.empty()) continue;
+                CommandId* ci = CIs->Find(res[0]);
+                ::cmn::CmdArgList args = ::cmn::ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
+                Transaction t(ci);
+                t.InitByArgs(ns_, index_, args);
+                CommandContext cm_txt(&ctxt_, &t, ci);
+                ci->Invoke(args, &cm_txt);
+            }
+            else if (r == 0 ) { 
+                (void)socket_.Close();
 
-            auto n = co_await socket_.AsyncWrite(SendBuf_.peek(), SendBuf_.readable_size(), -1);
-
-            // 处理逻辑            
+                break;
+            }
+            else {
+                // TODO
+            }            
         }
-        // 关闭连接了
-    }   
-    
-    
-private:
-    UringSocket socket_; 
-    base::IoBuf RecvBuf_;
-    base::IoBuf SendBuf_;
+        co_return;
+    }    
 
-    Namespace* ns_ = &GetDefaultNamespace(); 
+    void SendERROR() {
+        SendImp(BuildError({"NULL"}));
+    }
+
+    void Send(int64_t n) {
+        SendImp(BuildInteger(n));
+    }
+
+    void Send(const std::string& s){
+        SendImp(BuildBulkString(s));
+    }
+    void Send(const std::string_view& s){
+        Send(std::string(s));
+    }
+
+    void SendStatus(const std::string& s){
+        SendImp(BuildSimpleString(s));
+    }
+    void SendStatus(const std::string_view& s){
+        SendStatus(std::string(s)); 
+    }
+    void SendStatus(const char* s){
+        SendStatus(std::string(s)); 
+    }
+private:
+
+
+    void SendImp(std::string&& s) {
+        auto p = socket_.Proactor();
+        p->DispatchBrief([this, s = std::move(s)](){
+            SendBuf_.append(s);
+            DoWrite();            
+        });
+    }
+
+    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoWrite() {
+        while (SendBuf_.readable_size()) {
+            auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
+            if (wr>0) {
+                SendBuf_.retrieve(wr);
+            }else {
+                // TODO
+            }
+        }
+        co_return;
+    }
+
+
+    
+
+    base::UringSocket socket_; 
+    RESP_Buf RecvBuf_;
+    RESP_Buf SendBuf_;
+
+    Namespace* ns_ = &namespaces->GetDefaultNamespace(); 
     DbIndex index_ = 0;
+
+    ConnectionContext ctxt_;
 };
 
-
-// 这里IO用的是io_uring, 回调也只是恢复线程，还需要IO线程吗，没有IO需求了?
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        : pool_(size),
-          socket_(pool_.NextProactor(), listenfd)
+        :   main_proactor_(std::make_shared<base::UringProactor>(0, 4096)),
+            pool_(size),
+            ListenSocket_(main_proactor_, listenFd)
     {
 
+
+        CIs = new CommandRegistry();
+        RegisterStringFamily(CIs);
+        RegisterGeneric(CIs);
+    }
+
+    ~RedisServer() {
+        delete CIs;
+        CIs = nullptr;
+
+        if (shard_set) {
+            delete shard_set;
+            shard_set = nullptr;
+        }
     }
     
-    cppcoro::task<void> Start() {
-        
-
-
+    void Start() {
         isRuning = true;
+        pool_.AsyncLoop();
 
-        pool_.loop();
+        shard_set = new EngineShardSet(&pool_);
+        shard_set->Init(pool_.size());
 
-        while (isRuning) {
-            auto r = co_await socket_.Accept();
 
-            if (r.has_value()){
-                auto session = RedisSession(r, pool_.NextProactor());
+        main_proactor_->DispatchBrief([this]{
+            auto cb = [this]() -> cppcoro::AsyncTask<cppcoro::AsyncPromise> {
+                while(isRuning){
+                    auto r = co_await ListenSocket_.AsyncAccept();
 
-                // 这里应该交给线程池处理session::DoRead()吗?
-            }
-        }
+                    if (r.has_value()){
+
+                        auto p = NextProactor();
+
+                        auto session = std::make_shared<RedisSession>(r.value(), p);
+                        
+                        p->DispatchBrief([session](){
+                            session->DoRead();
+                        });                    
+                    }                 
+                }
+                co_return;
+            };
+            cb();
+        });
+        main_proactor_->loop();
     }
     
     void Stop() {
         isRuning = false;
         pool_.stop();
+
+        shard_set->Shutdown();
     }
     
 private:
-    UringProactorPool pool_;
-    UringSocket ListenSocket_;
 
+    auto NextProactor() const -> UringProactorPtr {
+        return pool_[NextProIndex_%pool_.size()];
+    }
+
+    ssize_t NextProIndex_ = 0;
+
+
+    base::UringProactorPtr main_proactor_;
+    base::UringProactorPool pool_;
+    base::UringSocket ListenSocket_;
     bool isRuning = false;
-};
 
+};
 
 
 }

@@ -1,6 +1,6 @@
 #pragma once
-#include "common_types.hpp"
-
+#include "detail/common_types.hpp"
+#include "command_layer/cmn_types.hpp"
 #include "sharding/namespaces.hpp"
 #include <span>
 namespace dfly {
@@ -11,9 +11,9 @@ namespace dfly {
 struct DbContext {
     Namespace* ns_ = nullptr; 
     DbIndex db_index_ = 0;
-    uint64_t time_now_ms = 0;
+    uint64_t time_now_ms_ = 0;
     DbSlice& GetDbSlice(ShardId shard_id) const{
-        return ns->GetDbSlice(shard_id);        
+        return ns_->GetDbSlice(shard_id);        
     }  
 };
 
@@ -31,7 +31,7 @@ class ShardArgs {
 public:
     class Iterator {
         ArgSlice arglist_;
-        std::span<const IndexSlice>::const_iterator index_it_;
+        std::span<const IndexSlice>::iterator index_it_; // not same
         uint32_t delta_ = 0;
 
     public:
@@ -42,7 +42,7 @@ public:
         using reference = value_type&;
 
         // First version, corresponds to spans over arguments.
-        Iterator(cmn::ArgSlice list, absl::Span<const IndexSlice>::const_iterator it)
+        Iterator(::cmn::ArgSlice list, std::span<const IndexSlice>::iterator it)
             : arglist_(list), index_it_(it) {
         }
 
@@ -80,7 +80,7 @@ public:
 
     using const_iterator = Iterator;
 
-    ShardArgs(ArgSlice fa, std::span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
+    ShardArgs(::cmn::ArgSlice fa, std::span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
     }
 
     ShardArgs() : slice_(ArgsIndexPair{}) {
@@ -112,7 +112,7 @@ public:
         return *cbegin();
     }
 private:
-    using ArgsIndexPair = std::pair<ArgSlice, std::span<const IndexSlice>>;
+    using ArgsIndexPair = std::pair<::cmn::ArgSlice, std::span<const IndexSlice>>;
     ArgsIndexPair slice_;
 };
 

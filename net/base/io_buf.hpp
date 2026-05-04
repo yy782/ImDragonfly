@@ -6,8 +6,8 @@
 
 #include <cstring>
 #include <vector>
-
-
+#include <string>
+#include <assert.h>
 namespace base {
 
 class TcpBuffer;
@@ -31,14 +31,18 @@ public:
     
     void swap(TcpBuffer& other) noexcept;
     
-    template<typename T>
-    void append(T&& value);
-    
 
+    
+    void append(const std::string& s){
+        append(s.data(), s.size());
+    }
+    void append(const std::string_view& s){
+        append(s.data(), s.size());
+    }
     void append(const char* data,size_t size);
     
 
-    void append(const char*){assert(false&&"请指明长度");}
+    void append(const char* data){append(data, strlen(data));}
     
 
     ssize_t appendFormFd(int fd);
@@ -69,9 +73,9 @@ public:
     std::string retrieveAllToString();
     
     const char* peek() const noexcept{return begin()+read_index_;}
-
+    char* BeginRead() {return begin()+read_index_;}
     
-    stringPiece readView()const noexcept{return stringPiece(peek(),readable_size()+1);}
+    std::string_view readView()const noexcept{return std::string_view(peek(),readable_size());}
     
     char* ModifyData(){return begin()+read_index_;}
 
@@ -123,7 +127,7 @@ public:
         read_index_=8;
         write_index_=8;
     }
-private:
+protected:
     void move_write_index(size_t size);
     
     void move_read_index(size_t size);
@@ -159,33 +163,8 @@ private:
 
 
 };
-/**
- * @brief 添加数据
- * 
- * @tparam T 数据类型
- * @param value 要添加的数据
- */
-template<typename T>
-void TcpBuffer::append(T&& value)
-{
-    using DecayedT = std::decay_t<T>;
-    static_assert(!std::is_same_v<DecayedT,std::string>);
-    if constexpr(std::is_same_v<DecayedT,stringPiece>)
-    {
-        appendImp(value.data(),value.size());
-    }
-    else
-        appendImp(reinterpret_cast<const char*>(&value), sizeof(T));
-    
-}
 
-/**
- * @brief 流式添加数据
- * 
- * @tparam T 数据类型
- * @param value 要添加的数据
- * @return TcpBuffer& 缓冲区引用
- */
+
 template<typename T>
 TcpBuffer& TcpBuffer::FluentAppend(T&& value)
 {

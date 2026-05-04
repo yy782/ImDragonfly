@@ -14,7 +14,7 @@ namespace detail
 class RobjWrapper;
 }
 
-// namespace PMR_NS = base::pmr;
+
 
 using CompactObjType = unsigned;
 
@@ -33,15 +33,11 @@ protected:
         ROBJ_TAG = 19, // Redis 对象（list/hash/set） 
         SDS_TTL_TAG = 24, 
     };
-    enum EncodingEnum : uint8_t;
 public:
-    struct StrEncoding;
-    // using MemoryResource = PMR_NS::memory_resource;  
     
     explicit CompactObj(bool is_key)
-        : is_key_{is_key}, taglen_{0} {  // default - empty string
+        : is_key_{is_key}, taglen_{0} {  
     }
-
     CompactObj(std::string_view str, bool is_key) : CompactObj(is_key) {
         SetString(str);
     }
@@ -67,15 +63,32 @@ public:
     }
     CompactObjType ObjType() const;
 
+    std::string_view GetSlice(std::string* scratch) const {
+
+        if (taglen_ == STR_TAG) {
+            *scratch = std::string_view(*scratch);
+            return *scratch;
+        }
+
+        if (taglen_ == SDS_TTL_TAG) {
+            return u_.str_ttl_.view();
+        }
+
+        return std::string_view{};
+    }
+
+
 protected:
     void SetMeta(uint8_t taglen);
 
     struct TtlString {
-        std::string str_;    // 可能内存泄漏，FIXME
+        std::string str_;   
         uint64_t exp_ms_;  
 
-        std::string_view view() const;
-    } __attribute__((packed));
+        std::string_view view() const {
+            return std::string_view(str_);
+        }
+    };
 
     union U {
         std::string str_;

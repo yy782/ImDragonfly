@@ -116,6 +116,4 @@ struct is_awaitable<T, std::void_t<decltype(get_awaiter(std::declval<T>()))>>
 
 template<typename T>
 constexpr bool is_awaitable_v = is_awaitable<T>::value;
-} // namespace detail
-
-#endif
+} // namespace cppcoro::detail

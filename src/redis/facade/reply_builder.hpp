@@ -9,7 +9,7 @@ inline std::string BuildNull() {
     return "$-1\r\n";
 }
 
-inline std::string BuildString(const std::string& s) {
+inline std::string BuildSimpleString(const std::string& s) {
     return "+" + s + "\r\n";
 }
 
@@ -29,7 +29,7 @@ inline std::string BuildBulkString(const std::string& s) {
 inline std::string BuildArray(const std::vector<std::string>& items) {
     std::string res = "*" + std::to_string(items.size()) + "\r\n";
     for (const auto& item : items) {
-        res += BuildString(item);
+        res += BuildSimpleString(item);
     }
     return res;
 }

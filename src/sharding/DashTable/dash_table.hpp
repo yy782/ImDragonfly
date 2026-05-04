@@ -21,7 +21,7 @@ incomplete type 类型不完整
 
 namespace dfly{
 
-// 实现缓存淘汰，分层存储暂缓
+
 
 template<typename _Key, typename _Value, typename Policy>
 class DashTable : public detail::DashTableBase{
@@ -60,14 +60,17 @@ public:
         }
 
         void OnMove(Cursor source, Cursor dest) {
+            (void)source;
+            (void)dest;
         }
 
         void RecordSplit(SegmentType* segment) {
+            (void)segment;
         }        
 
     };
 
-    DashTable(size_t capacity_log = 1, const Policy& policy = Policy{},
+    explicit DashTable(size_t capacity_log = 1, const Policy& policy = Policy{},
             PMR_NS::memory_resource* mr = PMR_NS::get_default_resource());
     ~DashTable();
     template <typename U, typename V> 
@@ -85,8 +88,8 @@ public:
     }    
 
     template <typename U, typename V, typename EvictionPolicy>
-    iterator InsertNew(U&& key, V&& value, EvictionPolicy& ev){
-        return InsertInternal(std::forward<U>(key), std::forward<V>(value), ev,
+    iterator InsertNew(U&& key, V&& value, EvictionPolicy&& ev){
+        return InsertInternal(std::forward<U>(key), std::forward<V>(value), std::forward<EvictionPolicy>(ev),
                             InsertMode::kForceInsert).first;
     }
 
@@ -142,9 +145,8 @@ public:
         return policy_.HashFn(std::forward<U>(k));                       
     } 
     
-    template <typename _Key, typename _Value, typename Policy>
     template <typename Cb>
-    auto DashTable<_Key, _Value, Policy>::Traverse(Cursor curs, Cb&& cb) -> Cursor;    
+    auto Traverse(Cursor curs, Cb&& cb) -> Cursor;    
 
 
 private:
@@ -486,8 +488,6 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
         if (it.found()) {
             return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
         }
-
-        bool consider_throw = true; // 决定是否抛出内存不足异常
 
         // if constexpr (EvictionPolicy::can_evict || EvictionPolicy::can_gc) {
 

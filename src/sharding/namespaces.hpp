@@ -7,9 +7,9 @@
 #include <memory>
 #include <string>
 #include <vector>
-
+#include <shared_mutex>
+#include <unordered_map>
 #include "detail/common_types.hpp"
-#include "util/synchronization.hpp"
 
 namespace dfly {
 
@@ -35,19 +35,19 @@ class Namespace {
 };
 
 class Namespaces {
- public:
-  Namespaces();
-  ~Namespaces();
+public:
+    Namespaces();
+    ~Namespaces();
 
-  void Clear();  // Thread unsafe, use in tear-down or tests
+    void Clear();  
 
-  Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
-  Namespace& GetOrInsert(std::string_view ns); // 方式2：用空字符串获取
+    Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
+    Namespace& GetOrInsert(std::string_view ns); // 方式2：用空字符串获取
 
- private:
-  util::SharedMutex mu_{};
-  std::unordered_map<std::string, Namespace> namespaces_ ;
-  Namespace* default_namespace_ = nullptr;
+private:
+    std::shared_mutex rw_mutex_;
+    std::unordered_map<std::string, Namespace> namespaces_ ;
+    Namespace* default_namespace_ = nullptr;
 };
 
 }  // namespace dfly

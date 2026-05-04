@@ -6,12 +6,12 @@
 
 
 #include "detail/tx_base.hpp"
-
+#include "command_layer/cmn_types.hpp"
 
 
 namespace dfly {
 
-using cmd::CmdArgList;
+using cmn::CmdArgList;
 
 class GenericFamily { // 通用命令家族，处理 Redis 通用命令
 public:

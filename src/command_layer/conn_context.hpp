@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "detail/common.hpp"
 
 namespace dfly {
 
@@ -11,17 +12,15 @@ class Connection;
 class Transaction;
 
 
-struct ConnextionContext{
-
-Connection* owner_;
-
+struct ConnectionContext{    
+RedisSessionPtr owner_;
 };
 
 class CommandId;
 
 class  CommandContext{
 public:
-    CommandContext(ConnextionContext* conn_cntx, Transaction* transaction, CommandId* cid) : 
+    CommandContext(ConnectionContext* conn_cntx, Transaction* transaction, CommandId* cid) : 
     conn_cntx_(conn_cntx), 
     transaction_(transaction),
     cid_(cid) 
@@ -29,7 +28,7 @@ public:
 
     }
 
-    ConnextionContext* conn_cntx() const { return conn_cntx_; }
+    ConnectionContext* conn_cntx() const { return conn_cntx_; }
 
     const CommandId* cid() const {
       return cid_;
@@ -38,7 +37,7 @@ public:
         return transaction_;
     }
 private:
-    ConnextionContext* conn_cntx_;
+    ConnectionContext* conn_cntx_;
     Transaction* transaction_;
     const CommandId* cid_ = nullptr;
 };

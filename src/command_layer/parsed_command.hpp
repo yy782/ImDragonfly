@@ -28,6 +28,8 @@ public:
         storage_.reserve(kStorageCap);
     }
 
+    BackedArguments(const BackedArguments& other) = default;
+
 
     template <typename I> 
     BackedArguments(I begin, I end, size_t len) {
@@ -131,7 +133,6 @@ protected:
     std::vector<char> storage_;
 };
 
-static_assert(sizeof(BackedArguments) == 128);
 
 template <typename I> 
 void BackedArguments::Assign(I begin, I end, size_t len) {
@@ -166,7 +167,7 @@ public:
 
     using BackedArguments::BackedArguments;
 
-    CmdArgParser ToParser() const 
+    CmdArgList ToCmdArgList() &&
     {
         assert(vec_.size()==0);
 
@@ -174,10 +175,10 @@ public:
         {
             vec_.push_back(sv);
         }
-        ArgSlice full_span(vec);
+        CmdArgList full_span(vec_);
 
         auto slic = full_span.subspan(1);
-        return {slic};
+        return slic;
     }
 
 private:

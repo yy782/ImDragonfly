@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <latch>
 
 namespace base{
 
@@ -15,22 +16,23 @@ using UringProactorPtr = std::shared_ptr<UringProactor>;
 class UringProactorPool{
 public:
     UringProactorPool(uint32_t size) : proactors_(size) {
-        for(auto i = 0;i < proactors_.size(); ++i){
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
             proactors_[i] = std::make_shared<UringProactor>(i, 4096);
         }
 
 
-        for(auto i = 0;i < proactors_.size(); ++i){
-            threads.emplace_back(std::make_unique<util::Thread>());
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
+            threads_.emplace_back();
         }
     }
 
     void AsyncLoop() {
 
-        for(auto i = 0;i < proactors_.size(); ++i){
-            threads[i] = util::Thread([this]{
-                proactors[i] ->loop();
-            })            
+        std::string base_name = "proactor_thread_";
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
+            threads_[i] = std::make_unique<util::Thread>((base_name + std::to_string(i)).c_str(), [this, i]{
+                proactors_[i]->loop();
+            });            
         }
     }
 
@@ -41,8 +43,8 @@ public:
             p->stop();
         });
 
-        for(auto i = 0;i < proactors_.size(); ++i){
-            threads[i].join();           
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
+            threads_[i]->join();           
         }        
     }
 
@@ -50,27 +52,27 @@ public:
 
     template <typename Func> 
     void DispatchBrief(Func&& f){
-        for (unsigned i = 0; i < size(); ++i) {
-            auto& p = proactor_[i];
+        for (std::size_t i = 0; i < size(); ++i) {
+            auto& p = proactors_[i];
 
-            p->DispatchBrief([p, func]() mutable { func(p); });
+            p->DispatchBrief([p, f]() mutable { f(p); });
         }        
     }    
     template <typename Func>
     void AwaitOnAll(Func&& func) {
-        util::BlockingCounter bc(size());
-        auto cb = [func = std::forward<Func>(func), bc](UringProactorPtr p) mutable {
+        std::latch latch(size());
+        auto cb = [func = std::forward<Func>(func), &latch](UringProactorPtr p) mutable {
             func(p);
-            bc->Dec();
+            latch.count_down();
         };
         DispatchBrief(std::move(cb));
-        bc->Wait();
+        latch.wait();
     }
 
 
-    auto& at(size_t index) const { return proactors_[index]; }
+    auto at(size_t index) const { return proactors_[index]; }
 
-    auto& operator[](size_t index) const { return at(index); }
+    auto operator[](size_t index) const { return at(index); }
 
 private:
     std::vector<std::shared_ptr<UringProactor>> proactors_;

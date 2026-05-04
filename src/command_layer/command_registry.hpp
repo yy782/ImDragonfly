@@ -7,9 +7,9 @@
 #include <optional>
 
 
-#include "command_id.hpp"
-
-
+#include "command_layer/command_id.hpp"
+#include "command_layer/cmn_types.hpp"
+#include "util/function.hpp"
 
 
 namespace dfly {
@@ -41,7 +41,7 @@ enum CommandOpt : uint32_t { // 命令选项枚举
 };
 
 
-};  // namespace CO
+} // namespace CO
 
 
 
@@ -51,7 +51,7 @@ class CommandContext;
 
 class CommandId : public facade::CommandId {
 public:
-    using CmdArgList = facade::CmdArgList;
+    using CmdArgList = ::cmn::CmdArgList;
 
     CommandId(const char* name, int8_t arity, int8_t first_key, int8_t last_key);
 
@@ -62,28 +62,13 @@ public:
     [[nodiscard]] CommandId Clone(std::string_view name) const;
 
 
-    using Handler = fu2::function_base<true, true, fu2::capacity_default, false, false,
+    using Handler = util::function_base<true, true, fu2::capacity_default, false, false,
                                       void(CmdArgList, CommandContext*) const>;
-    using ArgValidator = fu2::function_base<true, true, fu2::capacity_default, false, false,
-                                            std::optional<facade::ErrorReply>(CmdArgList) const>;
 
     // Returns the invoke time in usec.
     void Invoke(CmdArgList args, CommandContext* cmd_cntx) const {
         handler_(args, cmd_cntx);
     }
-
-
-
-    bool IsReadOnly() const {
-        return opt_mask_ & CO::READONLY;
-    }
-
-
-
-    bool IsBlocking() const {
-        return opt_mask_ & CO::BLOCKING;
-    }
-
 
     template <typename RT> 
     CommandId&& SetAsyncHandler(RT f(CmdArgList, CommandContext*)) && {
@@ -98,21 +83,13 @@ public:
         return std::move(*this);
     }
 
-    CommandId&& SetValidator(ArgValidator f) && {
-        validator_ = std::move(f);
-        return std::move(*this);
-    }
 
-    std::optional<CO::PubSubKind> PubSubKind() const {
-        return kind_pubsub_;
-    }
 
     bool SupportsAsync() const {
         return support_async_;
     }
 
  private:
-    std::optional<CO::PubSubKind> kind_pubsub_;
 
     bool support_async_{false};// 是否支持异步执行
 
@@ -126,12 +103,12 @@ public:
     CommandRegistry& operator<<(CommandId cmd);
 
     const CommandId* Find(std::string_view cmd) const {
-        auto it = cmd_map_.find(cmd);
+        auto it = cmd_map_.find(std::string(cmd));
         return it == cmd_map_.end() ? nullptr : &it->second;
     }
 
     CommandId* Find(std::string_view cmd) {
-        auto it = cmd_map_.find(cmd);
+        auto it = cmd_map_.find(std::string(cmd));
         return it == cmd_map_.end() ? nullptr : &it->second;
     }
 
@@ -143,29 +120,15 @@ public:
         }
     }
 
-    void ResetCallStats(unsigned thread_index) {
-        for (auto& k_v : cmd_map_) {
-          k_v.second.ResetStats(thread_index);
-        }
-    }
 
-    void MergeCallStats(unsigned thread_index,
-                        std::function<void(std::string_view, const CmdCallStats&)> cb) const {
-        for (const auto& k_v : cmd_map_) {
-          auto src = k_v.second.GetStats(thread_index);
-          if (src.first == 0)
-              continue;
-          cb(k_v.second.name(), src);
-        }
-    }
+
+
 
     void StartFamily();
 
 
     using FamiliesVec = std::vector<std::vector<std::string>>;
     FamiliesVec GetFamilies();
-
-    std::pair<const CommandId*, facade::ParsedArgs> FindExtended(facade::ParsedArgs args) const;
 
  private:
     std::unordered_map<std::string, CommandId> cmd_map_;
