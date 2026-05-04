@@ -32,7 +32,7 @@ UringProactor::UringProactor() {
 UringProactor::~UringProactor() {  
 }
 
-void UringProactor::Init(unsigned pool_index, size_t ring_size, int wq_fd) {
+void UringProactor::Init(unsigned pool_index, size_t ring_size) {
 
     assert(ring_size & (ring_size-1));
 

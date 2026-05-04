@@ -16,6 +16,7 @@ public:
 
     bool InMyThread() const { return pthread_self() = thread_id_; }
 
+    size_t GetPoolIndex() const { return pool_index_; }
 
 
 protected:
@@ -23,11 +24,6 @@ protected:
     pthread_t thread_id_ = 0U;
     int32_t pool_index_ = 0;
     
-    
-
-
-
-
 };
 
 
@@ -37,7 +33,7 @@ class UringProactor : public ProactorBase{
 public:    
     UringProactor();
     ~UringProactor();    
-    void Init(unsigned pool_index, size_t ring_size, int wq_fd = -1);
+    void Init(unsigned pool_index, size_t ring_size);
 
     void loop();
     void stop();
@@ -62,6 +58,7 @@ public:
     bool DispatchBrief(Func&& f);
     
 
+    
 private:
     template <typename Func> 
     bool EmplaceTaskQueue(Func&& f);

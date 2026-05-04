@@ -9,11 +9,14 @@
 
 namespace base{
 
+using UringProactorPtr = std::shared_ptr<UringProactor>;
+
+
 class UringProactorPool{
 public:
     UringProactorPool(uint32_t size) : proactors_(size) {
         for(auto i = 0;i < proactors_.size(); ++i){
-            proactors_[i] = std::make_unique<UringProactor>();
+            proactors_[i] = std::make_shared<UringProactor>(i, 4096);
         }
 
 
@@ -33,8 +36,8 @@ public:
 
     void stop() {
 
-        
-        DispatchBrief([this](UringProactor* p){
+
+        DispatchBrief([this](UringProactorPtr p){
             p->stop();
         });
 
@@ -50,9 +53,19 @@ public:
         for (unsigned i = 0; i < size(); ++i) {
             auto& p = proactor_[i];
 
-            p->DispatchBrief([p, func]() mutable { func(&p); });
+            p->DispatchBrief([p, func]() mutable { func(p); });
         }        
     }    
+    template <typename Func>
+    void AwaitOnAll(Func&& func) {
+        util::BlockingCounter bc(size());
+        auto cb = [func = std::forward<Func>(func), bc](UringProactorPtr p) mutable {
+            func(p);
+            bc->Dec();
+        };
+        DispatchBrief(std::move(cb));
+        bc->Wait();
+    }
 
 
     auto& at(size_t index) const { return proactors_[index]; }
@@ -60,7 +73,7 @@ public:
     auto& operator[](size_t index) const { return at(index); }
 
 private:
-    std::vector<std::unique_ptr<UringProactor>> proactors_;
+    std::vector<std::shared_ptr<UringProactor>> proactors_;
     std::vector<std::unique_ptr<util::Thread>> threads_;
 };
 
