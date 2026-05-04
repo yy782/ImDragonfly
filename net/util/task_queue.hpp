@@ -1,5 +1,5 @@
 
-
+#pragma once
 #include "synchronization.hpp"
 
 namespace util{
@@ -23,7 +23,7 @@ public:
     }
 
     template <typename F> 
-    bool Add(F&& f) {
+    cppcoro::task<bool> Add(F&& f) {
         if (TryAdd(std::forward<F>(f))) {
             return false;
         }
@@ -35,38 +35,38 @@ public:
                 break;
             }
             result = true;
-            push_ec_.wait(key.epoch());
+            co_await push_ec_.wait(key.epoch()); // 这里挂起协程后， 负责执行下文的线程是处理任务队列的线程
         }
-        return result;
+        co_return result;
     }
 
-  template <typename F> 
-  auto Await(F&& f) -> decltype(f()) {
-    Done done;
-    using ResultType = decltype(f());
-    util::detail::ResultMover<ResultType> mover;
+    template <typename F> 
+    auto Await(F&& f) -> cppcoro::task<decltype(f())> {
+        util::Done done;
+        using ResultType = decltype(f());
+        util::detail::ResultMover<ResultType> mover;
 
-    Add([&mover, f = std::forward<F>(f), done]() mutable {
-        mover.Apply(f);
-        done.Notify();
-    });
+        Add([&mover, f = std::forward<F>(f), done]() mutable {
+            mover.Apply(f);
+            done.Notify();
+        });
 
-    done.Wait();
-    return std::move(mover).get();
-  }
+        co_await done.Wait();
+        co_return std::move(mover).get();
+    }
 
     void Shutdown(){
         is_closed_.store(true, memory_order_seq_cst);
         pull_ec_.notifyAll();
     }
 
-  void Run(){
+    cppcoro::task<void> Run(){
         bool is_closed = false;
         CbFunc func;
 
         auto cb = [&] {
             if (queue_.try_dequeue(func)) {
-                push_ec_.notify();
+                push_ec_.notify(); 
                 return true;
             }
 
@@ -79,7 +79,7 @@ public:
         };
 
         while (true) {
-            pull_ec_.await(cb);
+            co_await pull_ec_.await(cb);
             if (is_closed)
                 break;
             try {
@@ -90,6 +90,7 @@ public:
         }
     }
 
+    bool isRuning() const { return !is_closed_.load(std::memory_order_relaxed); }
  private:
   // task index since the last preemption.
   using CbFunc = std::function<void()>;
@@ -98,7 +99,7 @@ public:
   FuncQ queue_;
 
   EventCount push_ec_, pull_ec_;
-  std::atomic_bool is_closed_{false};
+  std::atomic<bool> is_closed_{false};
 };
 
 }
