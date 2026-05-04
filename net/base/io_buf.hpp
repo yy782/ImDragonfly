@@ -38,7 +38,7 @@ public:
     void append(const char* data,size_t size);
     
 
-    void append(const char*){assert(false&&"请指明长度");}
+    void append(const char* data){append(data, strlen(data));}
     
 
     ssize_t appendFormFd(int fd);
@@ -123,7 +123,7 @@ public:
         read_index_=8;
         write_index_=8;
     }
-private:
+protected:
     void move_write_index(size_t size);
     
     void move_read_index(size_t size);

@@ -8,7 +8,7 @@ namespace dfly{
 
 EngineShardSet* shard_set = nullptr;
 
-void EngineShardSet::Init(uint32_t sz, std::function<void()> shard_handler) {
+void EngineShardSet::Init(uint32_t sz) {
     shards_.reset(new EngineShard*[sz]);
     size_ = sz;
     //size_t max_shard_file_size = GetTieredFileLimit(sz);
@@ -34,7 +34,7 @@ void EngineShardSet::Shutdown() {
 }
 
 
-void EngineShardSet::InitThreadLocal(ProactorBase* pb) {
+void EngineShardSet::InitThreadLocal(UringProactorPtr pb) {
     EngineShard::InitThreadLocal(pb);
     EngineShard* es = EngineShard::tlocal();
     shards_[es->shard_id()] = es;

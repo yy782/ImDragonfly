@@ -10,7 +10,7 @@
 #include <variant>
 
 
-
+#include "cmd_arg_parser.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard.hpp"
 #include "command_registry.hpp"
@@ -194,14 +194,13 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 void RegisterStringFamily(CommandRegistry* registry) {
-  constexpr uint32_t kMSetMask = CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL;
 
-  registry->StartFamily();
-  *registry
-      << CI{"SET", -3, 1, 1}.SetAsyncHandler(
-             CmdSet)
-      << CI{"GET", 2, 1, 1}.SetAsyncHandler(CmdGet)
-      ;
+    registry->StartFamily();
+    *registry
+        << CI{"SET", -3, 1, 1}.SetAsyncHandler(
+                CmdSet)
+        << CI{"GET", 2, 1, 1}.SetAsyncHandler(CmdGet)
+        ;
 }
 
 }  // namespace dfly

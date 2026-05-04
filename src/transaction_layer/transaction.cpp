@@ -15,9 +15,13 @@ cid_(cid)
 
 
 
-OpStatus Transaction::InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args){
+void Transaction::InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args){
     db_cntx_ = DbContext(ns, db_index, GetCurrentTimeMs()); 
     full_args_ = args;
+}
+
+auto Transaction::Execute() {
+    
 }
 
 

@@ -1,38 +1,100 @@
 // network/redis_server.h
 #pragma once
 
-using namespace boost;
+#include "sharding/engine_shard_set.hpp"
+#include "redis/facade/resp_buf.hpp"
+#include "redis/facade/redis_parser.hpp"
+#include "command_layer/parsed_command.hpp"
+#include "command_layer/command_registry.hpp"
+#include "command_layer/command_families.hpp"
+#include "command_layer/conn_context.hpp"
+
 
 namespace dfly{
+
+CommandRegistry* CIs = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
     RedisSession(int fd, UringProactor* proactor)
         : socket_(proactor, fd) {
+            
     }
     
     cppcoro::task<void> DoRead(){
 
+        ctxt_.owner = shared_from_this();
         while (true) {
-            auto n = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
-            // 处理逻辑
+            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+            if (r>0) {
+                RecvBuf_.hasWritten(r);
+                auto res = RecvBuf_.ParseRESP();
+                if (res.empty()) continue;
+                cmn::BackedArguments bdArgments(res.begin(), res.end(), res.size());
+                CommandId* ci = CIs.Find(bdArgments.Front());
+                CmdArgList args = ParsedCommand(bdArgments).ToCmdArgList();
+                Transaction t(ci);
+                t.InitByArgs(ns_, index_, args);
+                CommandContext cm_txt(ctxt_, &t, ci);
+                ci->Invoke(args, cm_txt);
+            }
+            else if (n ==0 ) {
+                socket_.Close();
 
-            auto n = co_await socket_.AsyncWrite(SendBuf_.peek(), SendBuf_.readable_size(), -1);
-
-            // 处理逻辑            
+                break;
+            }
+            else {
+                // TODO
+            }            
         }
-        // 关闭连接了
         co_return;
-    }   
-    
-    
+    }    
+
+    void SendOk() {
+        SendBuf_.append(BuildSimpleString({"OK"}));
+
+        DoWrite();
+    }
+
+    void SendERROR() {
+        SendBuf_.append(BuildError({"NULL"}));
+
+        DoWrite();
+    }
+
+    template<typename T>
+    void Send(T&& t) {
+        if constexpr (std::is_constructible<std::string, T>::value) {
+            SendBuf_.append(BuildBulkString({t}));
+        } else {
+            SendBuf_.append(BuildInteger(static_cast<int64_t>(t)));
+        }
+
+        DoWrite();
+    }
 private:
+
+    cppcoro::task<void> DoWrite() {
+        while (SendBuf_.readable_size()) {
+            auto wr = co_await socket_.AsyncWrite(SendBuf_.peek(), SendBuf_.readable_size(), -1);
+            if (wr>0) {
+                SendBuf_.retrieve(wr);
+            }else {
+                // TODO
+            }
+        }
+        co_return;
+    }
+
+
     UringSocket socket_; 
-    base::IoBuf RecvBuf_;
-    base::IoBuf SendBuf_;
+    RESP_Buf RecvBuf_;
+    RESP_Buf SendBuf_;
 
     Namespace* ns_ = &GetDefaultNamespace(); 
     DbIndex index_ = 0;
+
+    ConnextionContext ctxt_;
 };
 
 class RedisServer {
@@ -41,7 +103,16 @@ public:
         : pool_(size),
           socket_(&main_proactor_, listenfd)
     {
+        shard_set = new EngineShardSet(&pool_);
+        shard_set->Init(4);
 
+        CIs = new CommandRegistry();
+        RegisterStringFamily(cis_);
+    }
+
+    ~RedisServer() {
+        delete CIs;
+        CIs = nullptr;
     }
     
     void Start() {
@@ -83,6 +154,7 @@ private:
     UringProactorPool pool_;
     UringSocket ListenSocket_;
     bool isRuning = false;
+
 };
 
 

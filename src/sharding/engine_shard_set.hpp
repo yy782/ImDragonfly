@@ -20,7 +20,7 @@ public:
 
     util::UringProactorPool* pool() { return pp_; }
 
-    void Init(uint32_t size, std::function<void()> shard_handler);
+    void Init(uint32_t size);
 
     // Shutdown sequence:
     // - EngineShardSet.PreShutDown()

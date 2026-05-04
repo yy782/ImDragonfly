@@ -93,11 +93,11 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
     if(res.status() == OpStatus::OK)
     {
         
-        conn->Send(result);  // FIXME
+        conn->Send(result.load());  // FIXME
     }
     else 
     {
-        conn->SendError();
+        conn->SendERROR();
     }
 
     co_return std::nullopt;
@@ -132,7 +132,7 @@ CoroTask CmdExpire(const OpArgs& op_args, string_view key, const ExpireParams& p
     }
     else 
     {
-        conn->SendError();
+        conn->SendERROR();
     }
 
     co_return std::nullopt;

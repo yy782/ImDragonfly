@@ -14,7 +14,7 @@ class EngineShard
 public:
     friend class EngineShardSet;
 
-    static void InitThreadLocal(util::UringProactorPtr pb); // 在当前线程中创建并初始化 EngineShard 实例，并绑定到线程本地存储
+    static void InitThreadLocal(base::UringProactorPtr pb); // 在当前线程中创建并初始化 EngineShard 实例，并绑定到线程本地存储
     static void DestroyThreadLocal(); // 销毁当前线程的 EngineShard 实例，释放资源。    
     static EngineShard* tlocal() { return shard_; } // 获取当前线程绑定的 EngineShard 实例。
     bool IsMyThread() const { return this == shard_;}
@@ -22,18 +22,10 @@ public:
     PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
     TaskQueue* GetFiberQueue() { return &queue_; }
     TaskQueue* GetSecondaryQueue() { return &queue2_; }  
-    IntentLock* shard_lock() { return &shard_lock_; }    
-    bool journal() const { return journal_; }
-    void set_journal(bool enable) { journal_ = enable; }
-    void SetReplica(bool replica) { is_replica_ = replica; }
-    bool IsReplica() const { return is_replica_; }   
-    void StopPeriodicFiber(); // 停止后台任务     
-    
-    
-    
+    IntentLock* shard_lock() { return &shard_lock_; }         
 
 private:
-    EngineShard(UringProactorPtr pb, mi_heap_t* heap);
+    EngineShard(base::UringProactorPtr pb, mi_heap_t* heap);
     void Shutdown(); 
     TaskQueue queue_,queue2_;
     ShardId shard_id_;

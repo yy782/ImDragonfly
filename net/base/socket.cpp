@@ -131,7 +131,7 @@ auto UringSocket::AsyncRead(char* buf, ssize_t size, off_t offset){
             } /*data*/);
 
         }
-        Result<int> await_resume(){
+        int await_resume(){
             return {n};
         }
         UringSocket* socket_;
@@ -159,7 +159,7 @@ auto UringSocket::AsyncWrite(char* buf, ssize_t size, off_t offset){
             } /*data*/);
 
         }
-        Result<int> await_resume(){
+        int await_resume(){
             return {n};
         }
         UringSocket* socket_;

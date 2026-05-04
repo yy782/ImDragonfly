@@ -41,7 +41,7 @@ enum CommandOpt : uint32_t { // 命令选项枚举
 };
 
 
-};  // namespace CO
+} // namespace CO
 
 
 
@@ -72,19 +72,6 @@ public:
         handler_(args, cmd_cntx);
     }
 
-
-
-    bool IsReadOnly() const {
-        return opt_mask_ & CO::READONLY;
-    }
-
-
-
-    bool IsBlocking() const {
-        return opt_mask_ & CO::BLOCKING;
-    }
-
-
     template <typename RT> 
     CommandId&& SetAsyncHandler(RT f(CmdArgList, CommandContext*)) && {
         support_async_ = true;
@@ -98,21 +85,13 @@ public:
         return std::move(*this);
     }
 
-    CommandId&& SetValidator(ArgValidator f) && {
-        validator_ = std::move(f);
-        return std::move(*this);
-    }
 
-    std::optional<CO::PubSubKind> PubSubKind() const {
-        return kind_pubsub_;
-    }
 
     bool SupportsAsync() const {
         return support_async_;
     }
 
  private:
-    std::optional<CO::PubSubKind> kind_pubsub_;
 
     bool support_async_{false};// 是否支持异步执行
 

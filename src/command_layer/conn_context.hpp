@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "detail/common.hpp"
 
 namespace dfly {
 
@@ -11,10 +12,8 @@ class Connection;
 class Transaction;
 
 
-struct ConnextionContext{
-
-Connection* owner_;
-
+struct ConnextionContext{    
+RedisSessionPtr owner;
 };
 
 class CommandId;

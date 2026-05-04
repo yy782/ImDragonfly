@@ -4,7 +4,7 @@
 #include "tx_base.hpp"
 #include "common_types.hpp"
 #include "utils/function_ref.hpp"
-
+#include "command_layer/command_registry.hpp"
 #include "cmn_types.hpp"
 
 
@@ -21,7 +21,9 @@ public:
 
     explicit Transaction(const CommandId* cid);
 
-    OpStatus InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args);
+    void InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args);
+
+    auto Execute();
 
 
 
