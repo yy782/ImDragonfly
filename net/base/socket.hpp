@@ -35,7 +35,7 @@ public:
 
     Result<int> Create(unsigned short protocol_family = AF_INET);
 
-    [[nodiscard]] auto Accept();
+    [[nodiscard]] auto AsyncAccept();
 
     [[nodiscard]] Result<void> Close();
 
