@@ -60,9 +60,12 @@ public:
         }
 
         void OnMove(Cursor source, Cursor dest) {
+            (void)source;
+            (void)dest;
         }
 
         void RecordSplit(SegmentType* segment) {
+            (void)segment;
         }        
 
     };
@@ -485,8 +488,6 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
         if (it.found()) {
             return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
         }
-
-        bool consider_throw = true; // 决定是否抛出内存不足异常
 
         // if constexpr (EvictionPolicy::can_evict || EvictionPolicy::can_gc) {
 

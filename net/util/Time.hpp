@@ -2,7 +2,7 @@
 
 #include <time.h>
 
-namespace utils{
+namespace util{
 
 inline uint64_t GetCurrentTimeMs() {
     struct timespec ts;

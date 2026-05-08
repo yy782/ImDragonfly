@@ -49,13 +49,21 @@ public:
 
     template <typename U> 
     void RunBriefInParallel(U&& func) const { // 在所有分片上并行执行
-        RunBriefInParallel(std::forward<U>(func), [](auto i) { return true; });
+        RunBriefInParallel(std::forward<U>(func), [](auto i) {  
+            (void)i;
+
+            return true; 
+        });
     }
     template <typename U, typename P> 
     void RunBriefInParallel(U&& func, P&& pred) const; // 在满足条件的分片上并行执行
     template <typename U> 
     void RunBlockingInParallel(U&& func) {
-        RunBlockingInParallel(std::forward<U>(func), [](auto i) { return true; });
+        RunBlockingInParallel(std::forward<U>(func), [](auto i) {
+            (void)i;
+            
+             return true; 
+            });
     }
     template <typename U, typename P> 
     void RunBlockingInParallel(U&& func, P&& pred);

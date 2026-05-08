@@ -116,6 +116,9 @@ facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, std::string_
 
 void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it, std::string_view key,
                     std::string_view value) {
+
+    (void)key;                    
+
   auto& db_slice = op_args_.GetDbSlice();
   it->second = PrimeValue{value};
 
@@ -133,6 +136,9 @@ struct ErrorReply{};
 std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     CmdArgParser parser, const CommandContext* cmd_cntx) {
     SetCmd::SetParams sparams;
+
+
+    (void)cmd_cntx;
 
     while (parser.HasNext()) {
         if (parser.Check("EX")) { // not same

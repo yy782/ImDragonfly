@@ -42,7 +42,15 @@ public:
         std::string_view key() const {
             return key_.view();
         }
-        
+        static IteratorT FromPrime(T it) {
+            if (!IsValid(it)) {
+                return IteratorT();
+            }
+
+            std::string key;
+            return IteratorT(it, StringOrView::FromString(std::move(key)));
+        }
+
     private:
         void LaunderIfNeeded() const;  // 清洁逻辑
         

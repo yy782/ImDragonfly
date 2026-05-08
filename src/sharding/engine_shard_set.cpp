@@ -13,7 +13,7 @@ void EngineShardSet::Init(uint32_t sz) {
     shards_.reset(new EngineShard*[sz]);
     size_ = sz;
     //size_t max_shard_file_size = GetTieredFileLimit(sz);
-    pp_->AwaitOnAll([this](UringProactorPtr pb) {
+    pp_->AwaitOnAll([this](base::UringProactorPtr pb) {
         InitThreadLocal(pb);
     });
 
@@ -35,7 +35,7 @@ void EngineShardSet::Shutdown() {
 }
 
 
-void EngineShardSet::InitThreadLocal(UringProactorPtr pb) {
+void EngineShardSet::InitThreadLocal(base::UringProactorPtr pb) {
     EngineShard::InitThreadLocal(pb);
     EngineShard* es = EngineShard::tlocal();
     shards_[es->shard_id()] = es;
@@ -43,7 +43,7 @@ void EngineShardSet::InitThreadLocal(UringProactorPtr pb) {
 
 ShardId Shard(std::string_view key)
 {
-    auto size = shard_set.size();
+    auto size = shard_set->size();
     size_t hash = std::hash<std::string_view>{}(key);
 
     if(util::isPowerOfTwo(size))
@@ -52,6 +52,9 @@ ShardId Shard(std::string_view key)
     }
     else 
         return hash % size;
+
+
+    return hash;    
 }
 
 

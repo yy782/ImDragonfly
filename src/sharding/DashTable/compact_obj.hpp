@@ -63,6 +63,21 @@ public:
     }
     CompactObjType ObjType() const;
 
+    std::string_view GetSlice(std::string* scratch) const {
+
+        if (taglen_ == STR_TAG) {
+            *scratch = std::string_view(*scratch);
+            return *scratch;
+        }
+
+        if (taglen_ == SDS_TTL_TAG) {
+            return u_.str_ttl_.view();
+        }
+
+        return std::string_view{};
+    }
+
+
 protected:
     void SetMeta(uint8_t taglen);
 
@@ -70,7 +85,9 @@ protected:
         std::string str_;    // 可能内存泄漏，FIXME
         uint64_t exp_ms_;  
 
-        std::string_view view() const;
+        std::string_view view() const {
+            return std::string_view(str_);
+        }
     } __attribute__((packed));
 
     union U {

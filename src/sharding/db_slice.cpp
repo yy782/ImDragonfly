@@ -1,12 +1,16 @@
 #include "db_slice.hpp"
 #include <optional>
 #include "engine_shard.hpp"
+#include "util/Time.hpp"
 namespace dfly{ 
 
 
 DbSlice::DbSlice(uint32_t index, bool cache_mode, EngineShard* owner)
     : shard_id_(index),
       owner_(owner) {
+
+    (void)cache_mode;
+
     db_arr_.emplace_back();
     CreateDb(0);
 }
@@ -68,6 +72,11 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
         return OpStatus::WRONG_TYPE;
     }
     auto& pv = it->second;
+
+
+    (void)pv;
+    (void)miss_weight;
+
     return it;
 }
 
@@ -111,6 +120,9 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
     } catch (std::bad_alloc& e) {
         return OpStatus::WRONG_TYPE; // 这里的错误类型不太准确，但我们没有更合适的选项了
     }
+
+    (void)status;
+
     return ItAndUpdater{
         .it_ = Iterator(it, StringOrView::FromView(key)),
         .is_new_ = true};
@@ -173,9 +185,10 @@ void DbSlice::CreateDb(DbIndex db_ind) {
 
 facade::OpResult<void> DbSlice::UpdateExpire(const Context& cntx, Iterator main_it,
                                     int64_t sec){
+    (void)cntx;
     main_it->first.SetExpireTime(sec);                                    
 
-
+   return {OpStatus::OK};                                     
 }
 
 void DbSlice::AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at) {
@@ -186,6 +199,9 @@ void DbSlice::AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at) {
 }
 
 bool DbSlice::RemoveExpire(DbIndex db_ind, const Iterator& main_it) {
+
+    (void)db_ind;
+
     if (!main_it->first.HasExpire())
         return false;
 
@@ -211,8 +227,8 @@ DbSlice::Iterator DbSlice::ExpireIfNeeded(const Context& cntx, Iterator it) cons
 }
 
 PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) const {
+    (void)cntx;
     if (!it->first.HasExpire()) {
-        LOG(DFATAL) << "Invalid call to ExpireIfNeeded";
         return it;
     }
 
@@ -222,8 +238,8 @@ PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) con
         return it;
     }
 
-    string scratch;
-    string_view key = it->first.GetSlice(&scratch);
+    std::string scratch;
+    std::string_view key = it->first.GetSlice(&scratch);
 
     auto& db = db_arr_[cntx.db_index_];
     const_cast<DbSlice*>(this)->PerformDeletionAtomic(Iterator(it, StringOrView::FromView(key)),
@@ -241,13 +257,13 @@ void DbSlice::ExpireAllIfNeeded() {
 
         auto cb = [&](PrimeTable::iterator prime_it) {
             if (prime_it->first.HasExpire()) {
-                ExpireIfNeeded(Context{nullptr, db_index, GetCurrentTimeMs()}, prime_it);
+                ExpireIfNeeded(Context{nullptr, db_index, util::GetCurrentTimeMs()}, prime_it);
             }
         };
 
         PrimeTable::Cursor cursor;
         do {
-            cursor = db.prime.Traverse(cursor, cb);
+            cursor = db.prime_.Traverse(cursor, cb);
         } while (cursor);
     }
 }

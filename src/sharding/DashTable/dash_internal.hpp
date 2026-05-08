@@ -931,6 +931,9 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right, MoveCb
         uint32_t invalid_mask = 0;
 
         auto cb = [&](auto* bucket, unsigned slot, bool probe) {
+
+            (void)probe;
+
             auto& key = bucket->key[slot];
             Hash_t hash = hfn(key);
 
@@ -955,6 +958,9 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right, MoveCb
         Bucket& stash = bucket_[bid];
 
         auto cb = [&](auto* bucket, unsigned slot, bool probe) {
+
+            (void)probe;
+
             auto& key = bucket->key[slot];
             Hash_t hash = hfn(key);
 
@@ -1088,6 +1094,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
     bool found = false;
     if (b.GetProbe(false)) {  // Check items that this bucket owns.
         b.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)bucket;
+
             if (!probe) {
                 found = true;
                 cb(Iterator{bid, slot});
@@ -1101,6 +1110,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
     // check for probing entries in the next bucket, i.e. those that should reside in b.
     if (next.GetProbe(true)) {
         next.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)bucket;
+
             if (probe) {
                 found = true;
                 assert(HomeIndex(hfun(bucket->key[slot])) == bid);
@@ -1115,6 +1127,9 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
         for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
         const auto& stashb = bucket_[j];
         stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
+
+            (void)probe;
+
             if (HomeIndex(hfun(bucket->key[slot])) == bid) {
                 found = true;
                 cb(Iterator{j, slot});
