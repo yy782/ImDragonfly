@@ -51,7 +51,7 @@ class CommandContext;
 
 class CommandId : public facade::CommandId {
 public:
-    using CmdArgList = cmn::CmdArgList;
+    using CmdArgList = ::cmn::CmdArgList;
 
     CommandId(const char* name, int8_t arity, int8_t first_key, int8_t last_key);
 

@@ -29,6 +29,11 @@ ProactorBase::ProactorBase()  {
 UringProactor::UringProactor() : task_queue_(kTaskQueueLen){
 }
 
+
+UringProactor::UringProactor(unsigned pool_index, size_t ring_size) : task_queue_(kTaskQueueLen){
+    Init(pool_index, ring_size);
+}
+
 UringProactor::~UringProactor() {  
 }
 

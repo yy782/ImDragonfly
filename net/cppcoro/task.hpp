@@ -23,7 +23,7 @@ class task_promise;
 
 
 template<typename T, typename TaskPromise>
-class [[nodiscard]] task
+class task
 {
 
 public:  

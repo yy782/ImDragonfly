@@ -15,19 +15,19 @@ using UringProactorPtr = std::shared_ptr<UringProactor>;
 class UringProactorPool{
 public:
     UringProactorPool(uint32_t size) : proactors_(size) {
-        for(auto i = 0;i < proactors_.size(); ++i){
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
             proactors_[i] = std::make_shared<UringProactor>(i, 4096);
         }
 
 
-        for(auto i = 0;i < proactors_.size(); ++i){
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_.emplace_back();
         }
     }
 
     void AsyncLoop() {
 
-        for(auto i = 0;i < proactors_.size(); ++i){
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_[i] = std::make_unique<util::Thread>([this, i]{
                 proactors_[i]->loop();
             });            
@@ -41,7 +41,7 @@ public:
             p->stop();
         });
 
-        for(auto i = 0;i < proactors_.size(); ++i){
+        for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_[i]->join();           
         }        
     }
@@ -50,7 +50,7 @@ public:
 
     template <typename Func> 
     void DispatchBrief(Func&& f){
-        for (unsigned i = 0; i < size(); ++i) {
+        for (std::size_t i = 0; i < size(); ++i) {
             auto& p = proactors_[i];
 
             p->DispatchBrief([p, f]() mutable { f(p); });
@@ -68,9 +68,9 @@ public:
     }
 
 
-    auto& at(size_t index) const { return proactors_[index]; }
+    auto at(size_t index) const { return proactors_[index]; }
 
-    auto& operator[](size_t index) const { return at(index); }
+    auto operator[](size_t index) const { return at(index); }
 
 private:
     std::vector<std::shared_ptr<UringProactor>> proactors_;

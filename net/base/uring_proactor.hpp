@@ -41,6 +41,7 @@ class UringProactor : public ProactorBase{
     struct CompletionEntry;
 public:    
     UringProactor();
+    UringProactor(unsigned pool_index, size_t ring_size);
     ~UringProactor();    
     void Init(unsigned pool_index, size_t ring_size);
 
@@ -126,7 +127,7 @@ void UringProactor::submit_accept_sqe(int fd, Cb&& cb){
     e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, (void*)index);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
     io_uring_prep_accept(sqe, fd, NULL, NULL, 0);
     io_uring_submit(&ring_);
 }
@@ -141,7 +142,7 @@ void UringProactor::submit_read_sqe(int fd, char* buf, ssize_t size, off_t offse
     e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, (void*)index);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
     io_uring_prep_read(sqe, fd, buf, size, offset);
     io_uring_submit(&ring_);
 }
@@ -158,7 +159,7 @@ void UringProactor::submit_write_sqe(int fd, char* buf, ssize_t size, off_t offs
     e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, (void*)index);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
     io_uring_prep_write(sqe, fd, buf, size, offset);
     io_uring_submit(&ring_);
 

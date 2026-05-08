@@ -865,6 +865,9 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
     }
 
     auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
+
+        (void)overflow_index;
+
         assert(pos < kStashBucketNum);
 
         pos += kBucketNum;

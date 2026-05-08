@@ -91,7 +91,7 @@ public:
     bool IsDbValid(DbIndex id) const { return id < db_arr_.size() && bool(db_arr_[id]); } 
 
 
-    facade::OpResult<void> UpdateExpire(const Context& cntx, Iterator prime_it,
+    facade::OpResult<void> UpdateExpire(const Context& cntx, Iterator main_it,
                                         int64_t sec);    
     void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);
 

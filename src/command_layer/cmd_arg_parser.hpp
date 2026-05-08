@@ -13,7 +13,7 @@
 #include "util/Strings.hpp"
 #include "cmn_types.hpp"
 namespace cmd {
-using namespace cmn;
+using ::cmn::ArgSlice;
 class CmdArgParser {
 public:
     CmdArgParser(ArgSlice args) : args_{args} {
@@ -108,7 +108,7 @@ public:
 
 
   // Return remaining arguments
-    ArgSlice Tail() const {
+    ::cmn::ArgSlice Tail() const {
       return args_.subspan(cur_i_);
     }
 
@@ -176,9 +176,9 @@ private:
       std::string_view arg = SafeSV(idx);
       int64_t out;
 
-      auto result = std::from_chars(arg.data(), arg.data()+arg.size(), &out);
+      auto result = std::from_chars(arg.data(), arg.data()+arg.size(), out);
 
-      if(result.ec == std::errc() && result.ptr == sv.data() + sv.size()){
+      if(result.ec == std::errc() && result.ptr == arg.data() + arg.size()){
         return out;
       }
       Report();

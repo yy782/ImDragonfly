@@ -7,7 +7,14 @@
 #include <sys/socket.h>
 #include "base/uring_proactor_pool.hpp"
 namespace base{
-
+inline bool posix_err_wrap(ssize_t res, std::error_code* ec) {
+  if (res == -1) {
+    *ec = std::error_code(errno, std::system_category());
+    return true;
+  } else if (res < 0) {
+  }
+  return false;
+}
     template <typename T, typename E = ::std::error_code> 
     using Result = util::expected<T, E>;
 
@@ -41,7 +48,7 @@ public:
         void await_suspend(
                 std::coroutine_handle<> awaitingCoroutine) noexcept
         {
-            auto* proactor = socket_->Proactor();
+            auto proactor = socket_->Proactor();
             proactor->submit_accept_sqe(socket_->fd(), [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
                 fd = cqe->res;
                 awaitingCoroutine.resume();
@@ -66,7 +73,7 @@ public:
         void await_suspend(
                 std::coroutine_handle<> awaitingCoroutine) noexcept
         {
-            auto* proactor = socket_->Proactor();
+            auto proactor = socket_->Proactor();
             proactor->submit_read_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
                 n = cqe->res;
                 awaitingCoroutine.resume();
@@ -74,7 +81,7 @@ public:
 
         }
         int await_resume(){
-            return {n};
+            return n;
         }
         UringSocket* socket_;
         char* buf;
@@ -90,7 +97,7 @@ public:
         void await_suspend(
                 std::coroutine_handle<> awaitingCoroutine) noexcept
         {
-            auto* proactor = socket_->Proactor();
+            auto proactor = socket_->Proactor();
             proactor->submit_write_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
                 n = cqe->res;
                 awaitingCoroutine.resume();
@@ -98,7 +105,7 @@ public:
 
         }
         int await_resume(){
-            return {n};
+            return n;
         }
         UringSocket* socket_;
         char* buf;
@@ -121,14 +128,6 @@ private:
     UringProactorPtr proactor_;
 };
 
-inline bool posix_err_wrap(ssize_t res, std::error_code* ec) {
-    if (res == -1) {
-        *ec = std::error_code(errno, std::system_category());
-        return true;
-    } else if (res < 0) {
-    }
-    return false;
-}
 
 
 

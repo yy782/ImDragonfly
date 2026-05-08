@@ -17,8 +17,8 @@
 #include "sharding/op_status.hpp"
 #include "conn_context.hpp"
 #include "transaction_layer/transaction.hpp"
-
-
+#include "cmd_support.hpp"
+#include "network/redis_server.hpp"
 
 namespace dfly {
 
@@ -31,12 +31,17 @@ constexpr uint32_t kMaxStrLen = 1 << 28;
 using StringResult = std::string;
 
 StringResult ReadString(DbIndex dbid, std::string_view key, const PrimeValue& pv, EngineShard* es) {
+    (void)dbid;
+    (void)key;
+    (void)es;
+
     return StringResult{pv.ToString()};
 }
 
 
-
-
+using ::cmd::CmdArgParser;
+using cmd::CoroTask;
+using ::cmd::CmdArgParser;
 // Helper for performing SET operations with various options
 class SetCmd { // SET 命令处理器
 public:
@@ -74,35 +79,35 @@ private:
 
 
 
-facade::OpResult<void> SetCmd::Set(const SetParams& params, string_view key, string_view value) {
+facade::OpResult<void> SetCmd::Set(const SetParams& params, std::string_view key, std::string_view value) {
     auto& db_slice = op_args_.GetDbSlice();
-    auto op_res = db_slice.AddOrFind(op_args_.db_cntx, key, std::nullopt);
+    auto op_res = db_slice.AddOrFind(op_args_.db_cntx_, key, std::nullopt);
 
 
-    if (!op_res->is_new) {
+    if (!op_res->is_new_) {
         return SetExisting(params, value, &(*op_res));
     } else {
-        AddNew(params, op_res->it, key, value);
+        AddNew(params, op_res->it_, key, value);
         return OpStatus::OK;
     }
 }
 
-facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, string_view value,
+facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, std::string_view value,
                              DbSlice::ItAndUpdater* it_upd) {
 
-    PrimeKey& key = it_upd->it->first;
-    PrimeValue& prime_value = it_upd->it->second;
-    EngineShard* shard = op_args_.shard_;
+  
+    PrimeValue& prime_value = it_upd->it_->second;
+
 
     auto& db_slice = op_args_.GetDbSlice();
     uint64_t at_ms =
-        params.expire_after_ms ? params.expire_after_ms + op_args_.db_cntx_.time_now_ms : 0;
+        params.expire_after_ms_ ? params.expire_after_ms_ + op_args_.db_cntx_.time_now_ms_ : 0;
 
-    if (!(params.flags & SET_KEEP_EXPIRE)) {
+    if (!(params.flags_ & SET_KEEP_EXPIRE)) {
         if (at_ms) {
-            db_slice.AddExpire(op_args_.db_cntx.db_index, it_upd->it, at_ms);
+            db_slice.AddExpire(op_args_.db_cntx_.db_index_, it_upd->it_, at_ms);
         } else {
-            db_slice.RemoveExpire(op_args_.db_cntx.db_index, it_upd->it);
+            db_slice.RemoveExpire(op_args_.db_cntx_.db_index_, it_upd->it_);
         }
     }
     prime_value.SetString(value);
@@ -114,9 +119,9 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it, std::s
   auto& db_slice = op_args_.GetDbSlice();
   it->second = PrimeValue{value};
 
-  if (params.expire_after_ms) {
-      db_slice.AddExpire(op_args_.db_cntx.db_index, it,
-                        params.expire_after_ms + op_args_.db_cntx.time_now_ms);
+  if (params.expire_after_ms_) {
+      db_slice.AddExpire(op_args_.db_cntx_.db_index_, it,
+                        params.expire_after_ms_ + op_args_.db_cntx_.time_now_ms_);
   }
 }
 
@@ -130,11 +135,11 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     SetCmd::SetParams sparams;
 
     while (parser.HasNext()) {
-        if (parser.check("EX")) { // not same
+        if (parser.Check("EX")) { // not same
             if (parser.HasError())
                 return ErrorReply{};
 
-            sparams.flags |= SetCmd::SET_EXPIRE_AFTER_MS;
+            sparams.flags_ |= SetCmd::SET_EXPIRE_AFTER_MS;
         }
     }
     return sparams;
@@ -144,9 +149,9 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
 
 
 CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
-    cmn::CmdArgParser parser{args};
+    CmdArgParser parser{args};
 
-    auto [key, value] = parser.Next<string_view, string_view>();
+    auto [key, value] = parser.Next<std::string_view, std::string_view>();
     auto params_result = ParseSetParams(parser, cmd_cntx); // 解析 SET 命令的选项（如 EX 、 PX 、 NX 等）
 
 
@@ -159,47 +164,55 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     auto result = co_await cmd::SingleHopT(cb);
 
 
-    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner_;
 
     if (result.status() == OpStatus::OK) {
-        conn->SendOk();
+        conn->SendOK(); 
     } else {
         conn->SendERROR();
     }
 
-    co_return std::nullopt;
+    co_return;
 }
 
 CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
     auto cb = [key = args[0]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
-        auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key, OBJ_STRING);
-        if (!it_res.ok())
-            return it_res.status();
+        auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
-        return ReadString(tx->GetDbIndex(), key, (*it_res)->second, es);
+        return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto* conn = cmd_cntx->conn_cntx()->owner_;
-    if (result.status() == OpStatus::OK) {
+    auto conn = cmd_cntx->conn_cntx()->owner_;
+    if (result.status() == OpStatus::OK) {   
         conn->Send(result.value());
     } else {
         conn->SendERROR();
     }    
-    co_return std::nullopt;
+    co_return;
 }
 
 
 }  // namespace
 
 
+
+void Set(CmdArgList args, CommandContext* cmd_cntx){
+    CmdSet(args, cmd_cntx);
+}
+
+void Get(CmdArgList args, CommandContext* cmd_cntx){
+    CmdGet(args, cmd_cntx);
+}
+
 void RegisterStringFamily(CommandRegistry* registry) {
 
     registry->StartFamily();
     *registry
         << CI{"SET", -3, 1, 1}.SetAsyncHandler(
-                CmdSet)
-        << CI{"GET", 2, 1, 1}.SetAsyncHandler(CmdGet)
+                Set)
+        << CI{"GET", 2, 1, 1}.SetAsyncHandler(
+                Get)
         ;
 }
 

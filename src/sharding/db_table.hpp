@@ -26,7 +26,6 @@ using DbIndex = uint16_t;
 struct DbTable : 
     boost::intrusive_ref_counter<DbTable, boost::thread_unsafe_counter> 
 {
-public:
     explicit DbTable(PMR_NS::memory_resource* mr, DbIndex index); // explicit多余???
     ~DbTable();
 
@@ -36,7 +35,6 @@ public:
     DbIndex index() const { return index_; } 
 
 
-private:
     PrimeTable prime_;
     DbIndex index_;
 };

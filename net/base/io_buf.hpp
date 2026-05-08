@@ -31,10 +31,14 @@ public:
     
     void swap(TcpBuffer& other) noexcept;
     
-    template<typename T>
-    void append(T&& value);
-    
 
+    
+    void append(const std::string& s){
+        append(s.data(), s.size());
+    }
+    void append(const std::string_view& s){
+        append(s.data(), s.size());
+    }
     void append(const char* data,size_t size);
     
 
@@ -69,7 +73,7 @@ public:
     std::string retrieveAllToString();
     
     const char* peek() const noexcept{return begin()+read_index_;}
-
+    char* BeginRead() {return begin()+read_index_;}
     
     std::string_view readView()const noexcept{return std::string_view(peek(),readable_size());}
     
@@ -159,25 +163,7 @@ protected:
 
 
 };
-/**
- * @brief 添加数据
- * 
- * @tparam T 数据类型
- * @param value 要添加的数据
- */
-template<typename T>
-void TcpBuffer::append(T&& value)
-{
-    using DecayedT = std::decay_t<T>;
-    static_assert(!std::is_same_v<DecayedT,std::string>);
-    if constexpr(std::is_same_v<DecayedT,std::string_view>)
-    {
-        appendImp(value.data(),value.size());
-    }
-    else
-        appendImp(reinterpret_cast<const char*>(&value), sizeof(T));
-    
-}
+
 
 template<typename T>
 TcpBuffer& TcpBuffer::FluentAppend(T&& value)

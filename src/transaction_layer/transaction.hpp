@@ -15,7 +15,7 @@
 #include "sharding/op_status.hpp"
 
 namespace dfly{
-
+using ::cmn::CmdArgList;
 
 class CommandId;
 class Namespace;
@@ -24,14 +24,13 @@ class Namespace;
 class Transaction{
 public:
 
-    using RunnableResult = facade::OpStatus;
-    using RunnableType = util::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
+    using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
+ 
 
     explicit Transaction(const CommandId* cid);
 
-    void InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args);
+    void InitByArgs(Namespace* ns, DbIndex index, CmdArgList args);
 
-    auto Execute();
 
 
 
@@ -51,7 +50,9 @@ public:
     DbSlice& GetDbSlice(ShardId shard_id) {
         return ns_->GetDbSlice(shard_id);
     }    
-
+    DbIndex& GetDbIndex() {
+        return db_cntx_.db_index_;
+    }
 
 
     
@@ -63,7 +64,7 @@ private:
 
     DbContext db_cntx_;
 
-    cmn::CmdArgList full_args_;
+    CmdArgList full_args_;
     std::vector<IndexSlice> args_slices_; // IndexSlice from tx_base.hpp, 处理full_args_的分片事务
 
     Namespace* ns_ = nullptr; // 事务所属的命名空间

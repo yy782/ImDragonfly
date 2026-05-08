@@ -12,13 +12,14 @@
 #include "cppcoro/detail/task_promise.hpp"
 #include "base/socket.hpp"
 #include "sharding/namespaces.hpp"
+#include "base/uring_proactor_pool.hpp"
 namespace dfly{
-
+using base::UringProactorPtr;
 CommandRegistry* CIs = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
-    RedisSession(int fd, UringProactor* proactor)
+    RedisSession(int fd, UringProactorPtr proactor)
         : socket_(proactor, fd) {
             
     }
@@ -32,15 +33,15 @@ public:
                 RecvBuf_.hasWritten(r);
                 auto res = RecvBuf_.ParseRESP();
                 if (res.empty()) continue;
-                CommandId* ci = CIs.Find(res[0]);
-                CmdArgList args = ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
+                CommandId* ci = CIs->Find(res[0]);
+                CmdArgList args = ::cmn::ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
                 Transaction t(ci);
                 t.InitByArgs(ns_, index_, args);
-                CommandContext cm_txt(ctxt_, &t, ci);
-                ci->Invoke(args, cm_txt);
+                CommandContext cm_txt(&ctxt_, &t, ci);
+                ci->Invoke(args, &cm_txt);
             }
-            else if (n ==0 ) {
-                socket_.Close();
+            else if (r == 0 ) { 
+                (void)socket_.Close();
 
                 break;
             }
@@ -51,7 +52,7 @@ public:
         co_return;
     }    
 
-    void SendOk() {
+    void SendOK() {
         SendBuf_.append(BuildSimpleString({"OK"}));
 
         DoWrite();
@@ -63,21 +64,29 @@ public:
         DoWrite();
     }
 
-    template<typename T>
-    void Send(T&& t) {
-        if constexpr (std::is_constructible<std::string, T>::value) {
-            SendBuf_.append(BuildBulkString({t}));
-        } else {
-            SendBuf_.append(BuildInteger(static_cast<int64_t>(t)));
-        }
+    void Send(int64_t n) {
+        SendBuf_.append(BuildInteger(n));
 
         DoWrite();
     }
+
+    void Send(const std::string& s){
+        SendBuf_.append(BuildBulkString(s));
+
+        DoWrite();
+    }
+    void Send(const std::string_view& s){
+        SendBuf_.append(BuildBulkString(std::string(s)));
+
+        DoWrite();
+
+    }
+
 private:
 
     cppcoro::task<void, cppcoro::detail::task_promise<void, false>> DoWrite() {
         while (SendBuf_.readable_size()) {
-            auto wr = co_await socket_.AsyncWrite(SendBuf_.peek(), SendBuf_.readable_size(), -1);
+            auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
             if (wr>0) {
                 SendBuf_.retrieve(wr);
             }else {
@@ -95,20 +104,21 @@ private:
     Namespace* ns_ = &namespaces->GetDefaultNamespace(); 
     DbIndex index_ = 0;
 
-    ConnextionContext ctxt_;
+    ConnectionContext ctxt_;
 };
 
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        : pool_(size),
-          socket_(&main_proactor_, listenfd)
+        :   main_proactor_(std::make_shared<base::UringProactor>(0, 4096)),
+            pool_(size),
+            ListenSocket_(main_proactor_, listenFd)
     {
         shard_set = new EngineShardSet(&pool_);
         shard_set->Init(size);
 
         CIs = new CommandRegistry();
-        RegisterStringFamily(cis_);
+        RegisterStringFamily(CIs);
     }
 
     ~RedisServer() {
@@ -120,21 +130,27 @@ public:
         isRuning = true;
         pool_.AsyncLoop();
 
-        main_proactor_.DispatchBrief([this]{
-            while(isRunning){
-                auto r = co_await socket_.AsyncAccept();
+        main_proactor_->DispatchBrief([this]{
+            auto cb = [this]() -> cppcoro::task<void, cppcoro::detail::task_promise<void, false>> {
+                while(isRuning){
+                    auto r = co_await ListenSocket_.AsyncAccept();
 
-                if (r.has_value()){
-                    auto session = std::make_shared<RedisSession>(r, pool_.NextProactor());
-                    
-                    auto& p = NextProactor();
-                    p->DispatchBrief([session](){
-                        session->DoRead();
-                    });                    
-                }                 
-            }
+                    if (r.has_value()){
+
+                        auto p = NextProactor();
+
+                        auto session = std::make_shared<RedisSession>(r.value(), p);
+                        
+                        p->DispatchBrief([session](){
+                            session->DoRead();
+                        });                    
+                    }                 
+                }
+                co_return;
+            };
+            cb();
         });
-        main_proactor_.loop();
+        main_proactor_->loop();
     }
     
     void Stop() {
@@ -146,14 +162,14 @@ public:
     
 private:
 
-    auto& NextProactor() const {
+    auto NextProactor() const -> UringProactorPtr {
         return pool_[NextProIndex_%pool_.size()];
     }
 
     ssize_t NextProIndex_ = 0;
 
 
-    base::UringProactor main_proactor_;
+    base::UringProactorPtr main_proactor_;
     base::UringProactorPool pool_;
     base::UringSocket ListenSocket_;
     bool isRuning = false;

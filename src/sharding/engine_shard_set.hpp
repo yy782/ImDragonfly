@@ -72,7 +72,7 @@ public:
         bc->Wait();
     }
 private:
-    void InitThreadLocal(base::UringProactor* pb);
+    void InitThreadLocal(base::UringProactorPtr pb);
     base::UringProactorPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;

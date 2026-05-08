@@ -6,6 +6,7 @@ enum class OpStatus : uint16_t {
     OK,
     KEY_NOTFOUND,
     WRONG_TYPE,
+    SKIPPED,
 };
 
 class OpResultBase {
