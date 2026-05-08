@@ -1,12 +1,18 @@
 
 #pragma once
-
-#include "tx_base.hpp"
-#include "common_types.hpp"
-#include "utils/function_ref.hpp"
+#include <cstdint>
+#include <shared_mutex>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <span> 
+#include <utility>
+#include "detail/tx_base.hpp"
+#include "detail/common_types.hpp"
+#include "util/function.hpp"
 #include "command_layer/command_registry.hpp"
-#include "cmn_types.hpp"
-
+#include "command_layer/cmn_types.hpp"
+#include "sharding/op_status.hpp"
 
 namespace dfly{
 
@@ -17,7 +23,9 @@ class Namespace;
 
 class Transaction{
 public:
-    using RunnableType = utils::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
+
+    using RunnableResult = facade::OpStatus;
+    using RunnableType = util::FunctionRef<RunnableResult(Transaction* t, EngineShard*)>; 
 
     explicit Transaction(const CommandId* cid);
 
@@ -31,18 +39,23 @@ public:
 
     ShardArgs GetShardArgs(ShardId sid) const;
 
-    DbContext& GetDbContext() const {
+    const DbContext& GetDbContext() const {
         return db_cntx_;
     }   
-
-    DbSlice& GetDbSlice(ShardId shard_id) const {
-        return namespace_->GetDbSlice(shard_id);
+    DbContext& GetDbContext() {
+        return db_cntx_;
+    }  
+    const DbSlice& GetDbSlice(ShardId shard_id) const {
+        return ns_->GetDbSlice(shard_id);
     }
+    DbSlice& GetDbSlice(ShardId shard_id) {
+        return ns_->GetDbSlice(shard_id);
+    }    
 
 
 
     
-    void Scheduling(std::coroutine_handle<Coro> handle, RunnableType cb); // not same
+    void Scheduling(std::coroutine_handle<> handle, RunnableType cb); // not same
 
 
 private:
@@ -52,6 +65,8 @@ private:
 
     cmn::CmdArgList full_args_;
     std::vector<IndexSlice> args_slices_; // IndexSlice from tx_base.hpp, 处理full_args_的分片事务
+
+    Namespace* ns_ = nullptr; // 事务所属的命名空间
     
 
 };

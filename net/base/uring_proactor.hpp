@@ -1,10 +1,19 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <cassert>
+#include <cstring>
+#include <liburing.h>
+#include <vector>
+#include <thread>
+#include <atomic>
+#include <cppcoro/task.hpp>
+#include "util/lock_free_queue.hpp"
+#include "util/function.hpp"
+#include "util/synchronization.hpp"
 
 namespace base{
-
-
-
 
 class ProactorBase{
 
@@ -14,7 +23,7 @@ class ProactorBase{
     void operator=(const ProactorBase&) = delete;
 public:
 
-    bool InMyThread() const { return pthread_self() = thread_id_; }
+    bool InMyThread() const { return pthread_self() == thread_id_; }
 
     size_t GetPoolIndex() const { return pool_index_; }
 
@@ -29,7 +38,7 @@ protected:
 
 class UringProactor : public ProactorBase{
 
-
+    struct CompletionEntry;
 public:    
     UringProactor();
     ~UringProactor();    
@@ -48,9 +57,9 @@ public:
     void submit_write_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb);
 
 
-    void sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, struct CompletionEntry* e = nullptr);
+    void Sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, struct CompletionEntry** e = nullptr);
 
-    static UringProactor* me() {
+    static UringProactor*& me() {
         return owner_;
     }
 
@@ -72,7 +81,7 @@ private:
     CompletionEntry& NextEntry();
 
     using CbType =
-        fu2::function_base<true /*owns*/, false /*non-copyable*/, fu2::capacity_fixed<16, 8>,
+        util::function_base<true /*owns*/, false /*non-copyable*/, fu2::capacity_fixed<16, 8>,
                             false /* non-throwing*/, false /* strong exceptions guarantees*/,
                             void(struct io_uring_cqe*)>;
 
@@ -90,12 +99,12 @@ private:
 
     struct io_uring ring_;
 
-    thread_local UringProactor* owner_;
+    static thread_local UringProactor* owner_;
 
 
     using Fun = std::function<void()>;
-    using CorFun = std::function<cppcoro::task<void>()>;
-    util::mpmc_bounded_queue<Fun> task_queue_, cor_task_queue_;
+    using CorFun = std::function<cppcoro::task<void, cppcoro::detail::task_promise<void, true>>()>;
+    util::mpmc_bounded_queue<Fun> task_queue_;
     util::EventCount task_queue_avail_;
 
     std::atomic<uint32_t> tq_seq_;
@@ -110,31 +119,31 @@ template<typename Cb>
 void UringProactor::submit_accept_sqe(int fd, Cb&& cb){
     io_uring_sqe* sqe = nullptr;
     uint32_t index = -1;
-    struct CompletionEntry e;
+    CompletionEntry* e;
 
-    sqe(&sqe, &index, &e);
+    Sqe(&sqe, &index, &e);
 
-    e.cb = std::move(cb);
+    e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, index);
-    io_uring_prep_accept(sqe, fd, NULL, NULL);
-    io_uring_submit(&ring);
+    io_uring_sqe_set_data(sqe, (void*)index);
+    io_uring_prep_accept(sqe, fd, NULL, NULL, 0);
+    io_uring_submit(&ring_);
 }
 
 template<typename Cb>
 void UringProactor::submit_read_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb){
     io_uring_sqe* sqe = nullptr;
     uint32_t index = -1;
-    struct CompletionEntry e;
+    CompletionEntry* e;
     
-    sqe(&sqe, &index, &e);
-    e.cb = std::move(cb);
+    Sqe(&sqe, &index, &e);
+    e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, index);
+    io_uring_sqe_set_data(sqe, (void*)index);
     io_uring_prep_read(sqe, fd, buf, size, offset);
-    io_uring_submit(&ring);
+    io_uring_submit(&ring_);
 }
 
 
@@ -142,16 +151,16 @@ template<typename Cb>
 void UringProactor::submit_write_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb){
     io_uring_sqe* sqe = nullptr;
     uint32_t index = -1;
-    struct CompletionEntry e;
+    CompletionEntry* e;
     
-    sqe(&sqe, &index, &e);
+    Sqe(&sqe, &index, &e);
 
-    e.cb = std::move(cb);
+    e->cb = std::move(cb);
 
 
-    io_uring_sqe_set_data(sqe, index);
+    io_uring_sqe_set_data(sqe, (void*)index);
     io_uring_prep_write(sqe, fd, buf, size, offset);
-    io_uring_submit(&ring);
+    io_uring_submit(&ring_);
 
 }
 
@@ -171,7 +180,7 @@ bool UringProactor::DispatchBrief(Func&& f) {
     if (EmplaceTaskQueue(std::forward<Func>(f)))
         return false;
     while (true) {
-        EventCount::Key key = task_queue_avail_.prepareWait();
+        util::EventCount::Key key = task_queue_avail_.prepareWait();
 
         if (EmplaceTaskQueue(std::forward<Func>(f))) {
             break;

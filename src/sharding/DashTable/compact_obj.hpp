@@ -14,7 +14,7 @@ namespace detail
 class RobjWrapper;
 }
 
-// namespace PMR_NS = base::pmr;
+
 
 using CompactObjType = unsigned;
 
@@ -33,15 +33,11 @@ protected:
         ROBJ_TAG = 19, // Redis 对象（list/hash/set） 
         SDS_TTL_TAG = 24, 
     };
-    enum EncodingEnum : uint8_t;
 public:
-    struct StrEncoding;
-    // using MemoryResource = PMR_NS::memory_resource;  
     
     explicit CompactObj(bool is_key)
-        : is_key_{is_key}, taglen_{0} {  // default - empty string
+        : is_key_{is_key}, taglen_{0} {  
     }
-
     CompactObj(std::string_view str, bool is_key) : CompactObj(is_key) {
         SetString(str);
     }

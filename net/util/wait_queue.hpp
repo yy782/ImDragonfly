@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include <utils/function_ref.hpp>
-
 #include <boost/intrusive/list.hpp>
 #include <functional>
 #include <variant>
-
+#include <coroutine>
 namespace util {
 namespace detail {
 

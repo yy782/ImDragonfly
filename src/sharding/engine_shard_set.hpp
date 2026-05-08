@@ -1,6 +1,6 @@
 #pragma once
 #include "engine_shard.hpp"
-#include "base/proactor_pool.hpp"
+#include "base/uring_proactor_pool.hpp"
 
 #include "util/Time.hpp"
 
@@ -13,12 +13,12 @@ class EngineShardSet;
 class EngineShardSet {
 public:
 
-    explicit EngineShardSet(util::UringProactorPool* pp) : 
+    explicit EngineShardSet(base::UringProactorPool* pp) : 
     pp_(pp) {}
 
     uint32_t size() const { return size_; }
 
-    util::UringProactorPool* pool() { return pp_; }
+    base::UringProactorPool* pool() { return pp_; }
 
     void Init(uint32_t size);
 
@@ -72,7 +72,7 @@ public:
         bc->Wait();
     }
 private:
-    void InitThreadLocal(util::UringProactor* pb);
+    void InitThreadLocal(base::UringProactor* pb);
     base::UringProactorPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;

@@ -2,8 +2,9 @@
 #pragma once
 
 #include <span>
-#include <pair>
-
+#include <utility> 
+#include <cstdint>
+#include <string_view>
 namespace dfly {
 
 using DbIndex = uint16_t;

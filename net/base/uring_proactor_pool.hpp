@@ -21,16 +21,16 @@ public:
 
 
         for(auto i = 0;i < proactors_.size(); ++i){
-            threads.emplace_back(std::make_unique<util::Thread>());
+            threads_.emplace_back();
         }
     }
 
     void AsyncLoop() {
 
         for(auto i = 0;i < proactors_.size(); ++i){
-            threads[i] = util::Thread([this]{
-                proactors[i] ->loop();
-            })            
+            threads_[i] = std::make_unique<util::Thread>([this, i]{
+                proactors_[i]->loop();
+            });            
         }
     }
 
@@ -42,7 +42,7 @@ public:
         });
 
         for(auto i = 0;i < proactors_.size(); ++i){
-            threads[i].join();           
+            threads_[i]->join();           
         }        
     }
 
@@ -51,9 +51,9 @@ public:
     template <typename Func> 
     void DispatchBrief(Func&& f){
         for (unsigned i = 0; i < size(); ++i) {
-            auto& p = proactor_[i];
+            auto& p = proactors_[i];
 
-            p->DispatchBrief([p, func]() mutable { func(p); });
+            p->DispatchBrief([p, f]() mutable { f(p); });
         }        
     }    
     template <typename Func>

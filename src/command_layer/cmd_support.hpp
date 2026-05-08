@@ -9,8 +9,8 @@
 #include <concepts>
 #include <coroutine>
 #include <variant>
-
-#include "util/function_ref.hpp"
+#include "command_layer/cmn_types.hpp"
+#include "util/function.hpp"
 #include "sharding/op_status.hpp"
 #include "conn_context.hpp"
 #include "sharding/engine_shard.hpp"
@@ -22,7 +22,7 @@ namespace dfly::cmd {
 using SingleHopSentinel = Transaction::RunnableType; // 一个回调
 
 template <typename RT> 
-using SingleHopSentinelT = utils::FunctionRef<RT(Transaction*, EngineShard*)>;
+using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, EngineShard*)>;
 
 SingleHopSentinel SingleHop(const auto& f) {
     return f;
@@ -34,20 +34,23 @@ auto SingleHopT(const auto& f) -> SingleHopSentinelT<decltype(f(nullptr, nullptr
 
 class Coro : cppcoro::detail::task_promise_base<false>{
 public:
-  Coro(facade::CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx{cmd_cntx} {
+  Coro(cmn::CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx_{cmd_cntx} {
   }
 
-  task<void> get_return_object() noexcept{
-    return task<void>{ std::coroutine_handle<Coro>::from_promise(*this) };
+  cppcoro::task<void, cmd::Coro> get_return_object() noexcept{
+    return cppcoro::task<void, cmd::Coro>{ std::coroutine_handle<Coro>::from_promise(*this) };
   }
 
   void return_value() noexcept {}
-
+  void return_void() {}
   void result() noexcept {}
 
-
+  void unhandled_exception() { 
+        std::terminate(); 
+  }
+  
   auto await_transform(SingleHopSentinel callback) const {
-      return SingleHopWaiter{cmd_cntx_, callback};
+      return SingleHopWaiterT{cmd_cntx_, callback};
   }
 
 private:
@@ -55,8 +58,8 @@ private:
   template <typename RT> 
   struct SingleHopWaiterT  {
     SingleHopWaiterT(CommandContext* cmd_cntx,
-                    utils::FunctionRef<RT(Transaction*, EngineShard*)> callback)
-        :  callback{callback} {
+                    util::FunctionRef<RT(Transaction*, EngineShard*)> callback)
+        :  callback_{callback} {
     }
 
     bool await_ready() const noexcept { 
@@ -70,16 +73,16 @@ private:
     }
 
     void operator()(Transaction* tx, EngineShard* es) const {
-      result = callback(tx, es);
+      result_ = callback_(tx, es);
       return;
     }
 
     RT&& await_resume() noexcept {
-      return std::move(result);
+      return std::move(result_);
     }
 
     CommandContext* cmd_cntx_;
-    utils::FunctionRef<RT(Transaction*, EngineShard*)> callback_;
+    util::FunctionRef<RT(Transaction*, EngineShard*)> callback_;
     mutable RT result_;
   };
 

@@ -3,6 +3,7 @@
 #include "namespaces.hpp"
 
 #include <functional>
+#include "util/maths.hpp"
 
 namespace dfly{
 
@@ -40,23 +41,12 @@ void EngineShardSet::InitThreadLocal(UringProactorPtr pb) {
     shards_[es->shard_id()] = es;
 }
 
-
-
-
-
-
-
-
-
-
-
-
 ShardId Shard(std::string_view key)
 {
     auto size = shard_set.size();
     size_t hash = std::hash<std::string_view>{}(key);
 
-    if(isPowerOfTwo(size))
+    if(util::isPowerOfTwo(size))
     {
         return hash & (size-1);
     }

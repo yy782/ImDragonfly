@@ -13,8 +13,6 @@ using PrimeValue = CompactValue;
 struct PrimeTablePolicy {
   enum : uint8_t { kSlotNum = 14, kBucketNum = 56 };
 
-  static constexpr bool kUseVersion = true;
-
   static uint64_t HashFn(const PrimeKey& s) {
     return s.HashCode();
   }

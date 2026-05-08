@@ -39,7 +39,6 @@ private:
     
     void slowLock() {
         uint32_t expected;
-        int spin_count = 0;
         
         for (int i = 0; i < 100; ++i) {
             expected = lockword_.load(std::memory_order_relaxed);

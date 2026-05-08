@@ -2,9 +2,8 @@
 #include <cstdint>
 #include <mimalloc.h> 
 #include "detail/task_queue.hpp"
-#include "util/sliding_counter.h"
-#include "mi_memory_resource.hpp"
-
+#include "detail/mi_memory_resource.hpp"
+#include "net/base/uring_proactor_pool.hpp"
 namespace dfly {
 
 using ShardId = uint16_t;
@@ -21,19 +20,15 @@ public:
     ShardId shard_id() const { return shard_id_; } 
     PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
     TaskQueue* GetFiberQueue() { return &queue_; }
-    TaskQueue* GetSecondaryQueue() { return &queue2_; }  
-    IntentLock* shard_lock() { return &shard_lock_; }         
+    TaskQueue* GetSecondaryQueue() { return &queue2_; }         
 
 private:
     EngineShard(base::UringProactorPtr pb, mi_heap_t* heap);
     void Shutdown(); 
     TaskQueue queue_,queue2_;
     ShardId shard_id_;
-
-    bool is_replica_ = false;  // 是否为副本节点（不主动淘汰）
-    bool journal_ = false;      // 是否启用 Journal（复制日志）  
     MiMemoryResource mi_resource_;
-    static __thread EngineShard* shard_;      
+    static thread_local EngineShard* shard_;      
 };
 
 }  // namespace dfly

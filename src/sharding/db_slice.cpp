@@ -72,23 +72,23 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
 }
 
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, std::string_view key,
+facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, std::string_view key,
                                                    std::optional<unsigned> req_obj_type) {
   return AddOrFindInternal(cntx, key, req_obj_type);
 }
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, std::string_view key,
+facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, std::string_view key,
                                                      PrimeValue obj, uint64_t expire_at_ms) {
     return AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms);
 }
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std::string_view key,
+facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std::string_view key,
                                                 PrimeValue obj, uint64_t expire_at_ms) {
     auto op_result = AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms);
     auto& res = *op_result;
     return DbSlice::ItAndUpdater{.it_ = res.it_};
 }
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, std::string_view key,
+facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, std::string_view key,
                                                            std::optional<unsigned> req_obj_type) {
 
     DbTable& db = *db_arr_[cntx.db_index];
@@ -117,7 +117,7 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, 
 }
 
 
-OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
+facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
                                                              std::string_view key, PrimeValue obj,
                                                              uint64_t expire_at_ms) {
     auto op_result = AddOrFind(cntx, key, std::nullopt);

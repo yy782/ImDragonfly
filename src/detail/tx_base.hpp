@@ -1,6 +1,6 @@
 #pragma once
-#include "common_types.hpp"
-
+#include "detail/common_types.hpp"
+#include "command_layer/cmn_types.hpp"
 #include "sharding/namespaces.hpp"
 #include <span>
 namespace dfly {
@@ -13,7 +13,7 @@ struct DbContext {
     DbIndex db_index_ = 0;
     uint64_t time_now_ms = 0;
     DbSlice& GetDbSlice(ShardId shard_id) const{
-        return ns->GetDbSlice(shard_id);        
+        return ns_->GetDbSlice(shard_id);        
     }  
 };
 
@@ -31,7 +31,7 @@ class ShardArgs {
 public:
     class Iterator {
         ArgSlice arglist_;
-        std::span<const IndexSlice>::const_iterator index_it_;
+        std::span<const IndexSlice>::iterator index_it_; // not same
         uint32_t delta_ = 0;
 
     public:
@@ -42,7 +42,7 @@ public:
         using reference = value_type&;
 
         // First version, corresponds to spans over arguments.
-        Iterator(cmn::ArgSlice list, absl::Span<const IndexSlice>::const_iterator it)
+        Iterator(cmn::ArgSlice list, std::span<const IndexSlice>::iterator it)
             : arglist_(list), index_it_(it) {
         }
 

@@ -1,14 +1,11 @@
 // main.cpp
 // ./imdragonfly
-#include <boost/asio.hpp>
+
 #include <iostream>
 #include <signal.h>
 #include "src/network/redis_server.hpp"
-#include "util/fibers/pool.h"
-#include <memory>
-#include <absl/flags/flag.h>
 
-ABSL_FLAG(bool, cache_mode, false, "Enable cache mode");
+#include <memory>
 
 using namespace dfly;
 std::unique_ptr<RedisServer> g_server;

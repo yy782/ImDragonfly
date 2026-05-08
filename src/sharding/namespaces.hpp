@@ -7,7 +7,8 @@
 #include <memory>
 #include <string>
 #include <vector>
-
+#include <shared_mutex>
+#include <unordered_map>
 #include "detail/common_types.hpp"
 
 namespace dfly {

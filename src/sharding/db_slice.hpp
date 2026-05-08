@@ -8,6 +8,9 @@
 
 namespace dfly{
 using namespace cmn;
+using namespace facade;
+
+
 class EngineShard;
 class DbSlice 
 {
@@ -76,11 +79,11 @@ public:
 
     ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
     ConstIterator FindReadOnly(const Context& cntx, std::string_view key) const; // 查找 key，返回只读迭代器
-    OpResult<ItAndUpdater> AddOrFind(const Context& cntx, std::string_view key, 
+    facade::OpResult<ItAndUpdater> AddOrFind(const Context& cntx, std::string_view key, 
                                     std::optional<unsigned> req_obj_type); // 如果 key 存在就返回它，不存在就创建空值并返回。
-    OpResult<ItAndUpdater> AddOrUpdate(const Context& cntx, std::string_view key, PrimeValue obj,
+    facade::OpResult<ItAndUpdater> AddOrUpdate(const Context& cntx, std::string_view key, PrimeValue obj,
                                         uint64_t expire_at_ms);
-    OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
+    facade::OpResult<ItAndUpdater> AddNew(const Context& cntx, std::string_view key, PrimeValue obj,
                                     uint64_t expire_at_ms);
 
     void Del(Context cntx, Iterator it, DbTable* db_table = nullptr);

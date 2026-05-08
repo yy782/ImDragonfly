@@ -1,7 +1,12 @@
 
 #pragma once
-#include "synchronization.hpp"
-
+#include "util/synchronization.hpp"
+#include "cppcoro/task.hpp"
+#include "cppcoro/detail/task_promise.hpp"
+#include "util/result_mover.hpp"
+#include "util/lock_free_queue.hpp"
+#include <functional>
+#include <atomic>
 namespace util{
 
 
@@ -23,9 +28,9 @@ public:
     }
 
     template <typename F> 
-    cppcoro::task<bool> Add(F&& f) {
+    cppcoro::task<bool, cppcoro::detail::task_promise<bool, false>> Add(F&& f) {
         if (TryAdd(std::forward<F>(f))) {
-            return false;
+            co_return false;
         }
 
         bool result = false;
@@ -41,7 +46,7 @@ public:
     }
 
     template <typename F> 
-    auto Await(F&& f) -> cppcoro::task<decltype(f())> {
+    auto Await(F&& f) -> cppcoro::task<decltype(f()), cppcoro::detail::task_promise<decltype(f()), false>> {
         util::Done done;
         using ResultType = decltype(f());
         util::detail::ResultMover<ResultType> mover;
@@ -56,11 +61,11 @@ public:
     }
 
     void Shutdown(){
-        is_closed_.store(true, memory_order_seq_cst);
+        is_closed_.store(true, std::memory_order_seq_cst);
         pull_ec_.notifyAll();
     }
 
-    cppcoro::task<void> Run(){
+    cppcoro::task<void, cppcoro::detail::task_promise<void, false>> Run(){
         bool is_closed = false;
         CbFunc func;
 
@@ -85,7 +90,6 @@ public:
             try {
                 func();
             } catch (std::exception& e) {
-                LOG(FATAL) << "Exception " << e.what();
             }
         }
     }
@@ -94,7 +98,7 @@ public:
  private:
   // task index since the last preemption.
   using CbFunc = std::function<void()>;
-  using FuncQ = base::mpmc_bounded_queue<CbFunc>;
+  using FuncQ = util::mpmc_bounded_queue<CbFunc>;
 
   FuncQ queue_;
 

@@ -5,9 +5,9 @@
 #include <cctype>
 
 
-namespace utils{
+namespace util{
 
-template<tyepname StrType1, typename StrType2 = StrType1>
+template<typename StrType1, typename StrType2 = StrType1>
 StrType2 StrToUpper(StrType1&& str)
 {
     StrType1 result(str);

@@ -8,21 +8,23 @@
 #include <optional>
 
 #include "cmd_support.hpp"
-
+#include "sharding/db_slice.hpp"
+#include "sharding/op_status.hpp"
+#include "network/redis_server.hpp"
 #include <atomic>
 
 namespace dfly {
-
+using namespace dfly::cmd;
 facade::OpResult<uint32_t> OpDel(const OpArgs& op_args, const ShardArgs& keys) {
 
     auto& db_slice = op_args.GetDbSlice();
     uint32_t res = 0;
     for (std::string_view key : keys) {
-        auto it = db_slice.FindMutable(op_args.db_cntx, key).it;  // post_updater will run immediately
-        if (!IsValid(it))
-        continue;
-
-        db_slice.Del(op_args.db_cntx, it, nullptr);
+        auto it = db_slice.FindMutable(op_args.db_cntx_, key).it_;  // post_updater will run immediately
+        if (!IsValid(it.GetInnerIt())) {
+            continue;
+        }
+        db_slice.Del(op_args.db_cntx_, it, nullptr);
         ++res;
     }
 
@@ -34,18 +36,18 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
     auto cb = [&](Transaction* tx, EngineShard* es) {
         auto args = tx->GetShardArgs(es->shard_id());
         auto op_args = tx->GetOpArgs(es);
-        auto res = OpDel(op_args, args, async_unlink);
-        result.fetch_add(res.value_or(0), memory_order_relaxed);
+        auto res = OpDel(op_args, args);
+        result.fetch_add(res.value_or(0), std::memory_order_relaxed);
         return OpStatus::OK;
     };
 
     co_await cmd::SingleHopT(cb);
-    uint32_t del_cnt = result.load(memory_order_relaxed);
+    uint32_t del_cnt = result.load(std::memory_order_relaxed);
 
-    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner_;
     conn->Send(del_cnt);
     
-    co_return std::nullopt;
+    co_return;
 }
 
 void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
@@ -59,7 +61,7 @@ void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
         return cmd_cntx->SendError();
     }
     std::string_view msg = args[0];
-    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner_;
     conn->send(msg);
 }
 
@@ -71,25 +73,25 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
         auto& db_slice = op_args.GetDbSlice();
         uint32_t res = 0;
 
-        for (string_view key : keys) {
-          auto find_res = db_slice.FindReadOnly(op_args.db_cntx, key);
+        for (std::string_view key : keys) {
+          auto find_res = db_slice.FindReadOnly(op_args.db_cntx_, key);
           res += IsValid(find_res);
         }
-        return res;    
+        return {res};    
     };
 
     std::atomic<uint32_t> result{0};
 
-    auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResukt<void> {
+    auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
       ShardArgs args = t->GetShardArgs(shard->shard_id());
       auto res = Op(t->GetOpArgs(shard), args);
-      result.fetch_add(res.value_or(0), memory_order_relaxed);
+      result.fetch_add(res.value_or(0), std::memory_order_relaxed);
       return {OpStatus::OK};
     };
 
     auto res = co_await cmd::SingleHopT(cb);
 
-    auto* conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner_;
     if(res.status() == OpStatus::OK)
     {
         
@@ -100,7 +102,7 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
         conn->SendERROR();
     }
 
-    co_return std::nullopt;
+    co_return;
 
 }
 
@@ -110,17 +112,17 @@ void GenericFamily::Exists(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-CoroTask CmdExpire(const OpArgs& op_args, string_view key, const ExpireParams& params) {
+CoroTask CmdExpire(const OpArgs& op_args, string_view key, int64_t sec) {
 
 
     auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
         auto& db_slice = op_args.GetDbSlice();
-        auto find_res = db_slice.FindMutable(op_args.db_cntx, key);
+        auto find_res = db_slice.FindMutable(op_args.db_cntx_, key);
         if (!IsValid(find_res.it_)) {
           return {OpStatus::KEY_NOTFOUND};
         }
 
-        return db_slice.UpdateExpire(op_args.db_cntx, find_res.it, params);     
+        return db_slice.UpdateExpire(op_args.db_cntx_, find_res.it_, sec);     
     };
     auto res = co_await cmd::SingleHopT(cb);
 
@@ -135,13 +137,14 @@ CoroTask CmdExpire(const OpArgs& op_args, string_view key, const ExpireParams& p
         conn->SendERROR();
     }
 
-    co_return std::nullopt;
+    co_return;
 }
 
 void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
     std::string_view key = args[0];
     std::string_view sec = args[1];
     int64_t int_arg = std::atoi(sec);
+    auto* t = cmd_cntx->tx();
     OpExpire(t->GetOpArgs(shard), key, int_arg);
 }
 
@@ -180,7 +183,7 @@ CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
     {
         conn->SendError();
     }
-    co_return std::nullopt;    
+    co_return;    
 }
 
 
@@ -219,7 +222,7 @@ CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
     {
         conn->SendError();
     }
-    co_return std::nullopt;      
+    co_return;      
 }
 
 void GenericFamily::Ttl(CmdArgList args, CommandContext* cmd_cntx) {

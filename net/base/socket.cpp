@@ -1,7 +1,8 @@
 
 
 #include "socket.hpp"
-
+#include "uring_proactor.hpp"
+#include <coroutine>
 
 
 
@@ -57,48 +58,24 @@
 namespace base{
 
 
-Result<int> UringSocket::Create(unsigned short protocol_family = AF_INET){
+Result<int> UringSocket::Create(unsigned short protocol_family){
     constexpr auto kMask = SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC;
 
     std::error_code ec;
-    int fd = ::socket(pfamily, kMask, 0);
+    int fd = ::socket(protocol_family, kMask, 0);
     if(posix_err_wrap(fd, &ec))
     {
-        return ec;
+        return {util::unexpected(ec)};
     }
 
     fd_ = fd;
-    return fd;
+    return {fd};
 }
 
 
 
-auto UringSocket::AsyncAccept(){
-    struct AcceptAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        }            
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto* proactor = socket_->Proactor();
-            proactor_->submit_accept_sqe(socket_->fd(), [awaitingCoroutine, socket_,&fd](struct io_uring_cqe* cqe) mutable {
-                fd = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
+auto UringSocket::AsyncAccept() -> AcceptAwaitable{
 
-        }
-        Result<int> await_resume(){
-            std::error_code ec;
-            if(posix_err_wrap(fd, &ec)){
-                return {ec};
-            }
-            return {fd};
-        }
-        UringSocket* socket_;
-        int fd;
-    };
 
     return AcceptAwaitable{this};
 }
@@ -107,67 +84,20 @@ auto UringSocket::AsyncAccept(){
 
 Result<void> UringSocket::Close(){
     std::error_code ec;
-    if(posix_err_wrap(fd, &ec)){
-        return {ec};
+    if(posix_err_wrap(fd_, &ec)){
+        return {util::unexpected(ec)};
     }
     return {};
 }
 
 
 
-auto UringSocket::AsyncRead(char* buf, ssize_t size, off_t offset){
-    struct ReadAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        } 
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto* proactor = socket_->Proactor();
-            proactor_->submit_read_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, socket_, this](struct io_uring_cqe* cqe) mutable {
-                n = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
-
-        }
-        int await_resume(){
-            return {n};
-        }
-        UringSocket* socket_;
-        char* buf;
-        ssize_t size;
-        off_t offset;
-        ssize_t n;
-    };
+auto UringSocket::AsyncRead(char* buf, ssize_t size, off_t offset) -> ReadAwaitable{
     return ReadAwaitable{this, buf, size, offset};
 }
 
-auto UringSocket::AsyncWrite(char* buf, ssize_t size, off_t offset){
-    struct WriteAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        } 
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto* proactor = socket_->Proactor();
-            proactor_->submit_write_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, socket_, this](struct io_uring_cqe* cqe) mutable {
-                n = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
+auto UringSocket::AsyncWrite(char* buf, ssize_t size, off_t offset) -> WriteAwaitable{
 
-        }
-        int await_resume(){
-            return {n};
-        }
-        UringSocket* socket_;
-        char* buf;
-        ssize_t size;
-        off_t offset;
-        ssize_t n;
-    };
     return WriteAwaitable{this, buf, size, offset};    
 }
 

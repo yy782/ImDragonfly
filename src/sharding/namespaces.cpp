@@ -5,7 +5,7 @@
 #include "namespaces.hpp"
 #include "engine_shard_set.hpp"
 #include "db_slice.hpp"
-#include "synchronization.hpp"
+
 
 
 namespace dfly {
@@ -58,11 +58,10 @@ Namespace& Namespaces::GetDefaultNamespace() const {
 }
 
 Namespace& Namespaces::GetOrInsert(std::string_view ns) {
-    std::string nns=std::string(ns);                // not same
     {
         // Try to look up under a shared lock
         std::shared_lock<std::shared_mutex> lock(rw_mutex);
-        auto it = namespaces_.find(nns);            
+        auto it = namespaces_.find({ns});            
         if (it != namespaces_.end()) {
             return it->second;
         }
@@ -71,7 +70,7 @@ Namespace& Namespaces::GetOrInsert(std::string_view ns) {
     {
         // Key was not found, so we create create it under unique lock
         std::unique_lock<std::shared_mutex> lock(rw_mutex);
-        return namespaces_[nns];
+        return namespaces_[{ns}];
     }
 }
 

@@ -5,14 +5,10 @@
 #include <string>
 #include "util/task_queue.hpp"
 #include "util/thread.hpp"
-
+#include "cppcoro/task.hpp"
+#include "cppcoro/detail/task_promise.hpp"
 
 namespace dfly {
-
-
-
- 
-
 
 class TaskQueue {
 public:
@@ -26,15 +22,15 @@ public:
 
 
     template <typename F> 
-    cppcoro::task<bool> Add(F&& f) {
+    cppcoro::task<bool, cppcoro::detail::task_promise<bool, false>> Add(F&& f) {
         if (queue_.TryAdd(std::forward<F>(f)))
-            return false;
+            co_return false;
         auto res = co_await queue_.Add(std::forward<F>(f));
-        return res;
+        co_return res;
     }
 
     template <typename F> 
-    auto Await(F&& f) -> cppcoro::task<decltype(f())> {
+    auto Await(F&& f) -> cppcoro::task<decltype(f()), cppcoro::detail::task_promise<decltype(f()), false>> {
         util::Done done;
         using ResultType = decltype(f());
         util::detail::ResultMover<ResultType> mover;
@@ -43,15 +39,16 @@ public:
             done.Notify();
         });
         done.Wait();
-        return std::move(mover).get();
+        co_return std::move(mover).get();
     }
 
     void Start(std::string_view base_name){
-        worker_ = [this]()mutable{
+        worker_ = util::Thread([this]()mutable{
                     while (queue_.isRuning()) {
                         queue_.Run();
                     }
-                };
+                });
+        (void)base_name;        
     }
 
     auto Shutdown(){

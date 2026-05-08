@@ -13,7 +13,7 @@ class Transaction;
 
 
 struct ConnextionContext{    
-RedisSessionPtr owner;
+RedisSessionPtr owner_;
 };
 
 class CommandId;

@@ -8,10 +8,13 @@
 #include <cassert>
 #include <condition_variable>  // for cv_status
 #include <optional>
-
+#include <functional>
+#include <boost/intrusive_ptr.hpp>
 #include "cppcoro/async_mutex.hpp"
-
-
+#include "cppcoro/task.hpp"
+#include "cppcoro/detail/task_promise.hpp"
+#include "util/wait_queue.hpp"
+#include "util/spinlock.hpp"
 namespace util {
 
 class EventCount {
@@ -53,11 +56,11 @@ public:
         return NotifyInternal(&detail::WaitQueue::NotifyAll);
     }
 
-    template <typename Condition> 
-    cppcoro::task<bool> await(Condition condition){
+    template <typename Condition>
+    cppcoro::task<bool, cppcoro::detail::task_promise<bool, false>> await(Condition condition){
         if (condition()) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            return false;  // fast path
+            co_return false;  // fast path
         }
         bool preempt = false;
         while (true) {
@@ -100,7 +103,7 @@ public:
             bool await_suspend(
                 std::coroutine_handle<> awaitingCoroutine) noexcept
               {
-                  std::unique_lock lk(this_->lock_); 
+                  std::unique_lock lk(event_->lock_); 
                   if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
                       detail::Waiter waiter{awaitingCoroutine};
                       event_->wait_queue_.Link(&waiter);
@@ -147,7 +150,7 @@ private:
     }
   std::atomic_uint64_t val_;
 
-  ::util::SpinLock lock_;  // protects wait_queue
+  SpinLock lock_;  // protects wait_queue
   detail::WaitQueue wait_queue_;
 
   static constexpr uint64_t kAddWaiter = 1ULL;
@@ -197,8 +200,7 @@ public:
     Done() : impl_(new Impl) {
     }
     ~Done() {
-        delete Impl_;
-        Impl_ = nullptr;
+
     }
 
     void Notify() {
@@ -213,50 +215,50 @@ public:
     }
 
 private:
-  class Impl {
-   public:
-    Impl() : ready_(false) {
-    }
-    Impl(const Impl&) = delete;
-    void operator=(const Impl&) = delete;
-
-    friend void intrusive_ptr_add_ref(Impl* done) noexcept {
-        done->use_count_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    friend void intrusive_ptr_release(Impl* impl) noexcept {
-        if (1 == impl->use_count_.fetch_sub(1, std::memory_order_release)) {
-            std::atomic_thread_fence(std::memory_order_acquire);
-            delete impl;
+    class Impl {
+    public:
+        Impl() : ready_(false) {
         }
-    }
+        Impl(const Impl&) = delete;
+        void operator=(const Impl&) = delete;
 
-    cppcoro::task<bool> Wait(DoneWaitDirective reset) {
-        bool res = co_await ec_.await([this] { return ready_.load(std::memory_order_acquire); });
-        if (reset == AND_RESET)
-            ready_.store(false, std::memory_order_release);
-        co_return res;
-    }
+        friend void intrusive_ptr_add_ref(Impl* done) noexcept {
+            done->use_count_.fetch_add(1, std::memory_order_relaxed);
+        }
 
-    // We use EventCount to wake threads without blocking.
-    void Notify() {
-        ready_.store(true, std::memory_order_release);
-        ec_.notify();
-    }
+        friend void intrusive_ptr_release(Impl* impl) noexcept {
+            if (1 == impl->use_count_.fetch_sub(1, std::memory_order_release)) {
+                std::atomic_thread_fence(std::memory_order_acquire);
+                delete impl;
+            }
+        }
 
-    void Reset() {
-        ready_ = false;
-    }
+        cppcoro::task<bool, cppcoro::detail::task_promise<bool, false>> Wait(DoneWaitDirective reset) {
+            auto res = co_await ec_.await([this] { return ready_.load(std::memory_order_acquire); });
+            if (reset == AND_RESET)
+                ready_.store(false, std::memory_order_release);
+            co_return res;
+        }
 
-    bool IsReady() const {
-        return ready_.load(std::memory_order_acquire);
-    }
-  };
+        // We use EventCount to wake threads without blocking.
+        void Notify() {
+            ready_.store(true, std::memory_order_release);
+            ec_.notify();
+        }
 
-    Impl impl_;
-    EventCount ec_;
-    std::atomic<std::uint32_t> use_count_{0};
-    std::atomic<bool> ready_;
+        void Reset() {
+            ready_ = false;
+        }
+
+        bool IsReady() const {
+            return ready_.load(std::memory_order_acquire);
+        }
+        EventCount ec_;
+        std::atomic<std::uint32_t> use_count_{0};
+        std::atomic<bool> ready_;
+    };
+    using ptr_t = ::boost::intrusive_ptr<Impl>;
+    ptr_t impl_;
 };
 
 
@@ -286,7 +288,6 @@ public:
     // Decrement from blocking counter. Release semantics.
     void Dec(){
         uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
-        DCHECK_GT(prev, 0u);
         if (prev == 1)
             ec_.notifyAll();
     }
@@ -311,7 +312,7 @@ private:
     const uint64_t kCancelFlag = (1ULL << 63);
 
     // Re-usable functor for wait condition, stores result in provided pointer
-    auto WaitCondition(uint64_t* cnt) const {
+    std::function<bool()> WaitCondition(uint64_t* cnt) const {
         return [this, cnt]() -> bool {
             *cnt = count_.load(std::memory_order_relaxed);  // EventCount provides acquire
             return *cnt == 0 || (*cnt & kCancelFlag);
