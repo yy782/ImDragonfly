@@ -39,7 +39,7 @@ class UringProactor;
 class UringSocket : public SocketBase{
 public:
     UringSocket(UringProactorPtr proactor,int fd) :SocketBase(fd), proactor_(proactor) {}
-    ~UringSocket();
+    ~UringSocket() { ::close(fd_); }
     struct AcceptAwaitable{
         bool await_ready() const noexcept
         {

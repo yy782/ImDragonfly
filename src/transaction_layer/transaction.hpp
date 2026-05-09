@@ -66,7 +66,7 @@ private:
     DbContext db_cntx_;
 
     CmdArgList full_args_;
-    std::vector<IndexSlice> args_slices_; // IndexSlice from tx_base.hpp, 处理full_args_的分片事务
+    ShardId unique_shard_id_;
 
     Namespace* ns_ = nullptr; // 事务所属的命名空间
     

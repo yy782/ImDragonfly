@@ -4,24 +4,25 @@
 #include "sharding/engine_shard_set.hpp"
 #include "command_layer/parsed_command.hpp"
 #include "sharding/engine_shard_set.hpp"
+#include "sharding/db_slice.hpp"
+#include "command_layer/cmn_types.hpp"
 namespace dfly{
 
 
 Transaction::Transaction(const CommandId* cid) :
 cid_(cid)
 {
-    args_slices_.reserve(Shard->size());
+    
 }
 
 
 
-void Transaction::InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args){
+void Transaction::InitByArgs(Namespace* ns, DbIndex index, ::cmn::CmdArgList args){
     ns_ = ns;
     db_cntx_ = DbContext(ns, index, util::GetCurrentTimeMs()); 
     full_args_ = args;
-
-
-    args_slices_[Shard(key)].push_back({0, 1}); 
+    auto key = args[0];
+    unique_shard_id_ = Shard(key); 
 }
 
 
@@ -35,16 +36,17 @@ OpArgs Transaction::GetOpArgs(EngineShard* shard) const {
 ShardArgs Transaction::GetShardArgs(ShardId sid) const {
 
     (void)sid;
-    return ShardArgs{full_args_, std::span(args_slices_)}; 
+
+    std::vector<IndexSlice> slice;
+    slice.emplace_back(0, 1);
+    return ShardArgs{full_args_, std::span(slice)}; // 不确定
 }
     
 
 void Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType cb) // not same 
-{
-    auto [shard_id, arg_indices] = args_slices_[0];
-    
-    shard_set->Add(shard_id, [this, cb = std::move(cb), handle, shard_id]()mutable{
-        cb(this, GetDbSlice(shard_id).shard_owner());
+{   
+    shard_set->Add(unique_shard_id_, [this, cb = std::move(cb), handle]()mutable{
+        cb(this, GetDbSlice(unique_shard_id_).shard_owner());
         handle.resume();
     });
 }

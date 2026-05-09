@@ -13,9 +13,10 @@
 #include "base/socket.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
+#include "transaction_layer/transaction.hpp"
 namespace dfly{
 using base::UringProactorPtr;
-CommandRegistry* CIs = nullptr;
+inline CommandRegistry* CIs = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
@@ -34,7 +35,7 @@ public:
                 auto res = RecvBuf_.ParseRESP();
                 if (res.empty()) continue;
                 CommandId* ci = CIs->Find(res[0]);
-                CmdArgList args = ::cmn::ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
+                ::cmn::CmdArgList args = ::cmn::ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
                 Transaction t(ci);
                 t.InitByArgs(ns_, index_, args);
                 CommandContext cm_txt(&ctxt_, &t, ci);

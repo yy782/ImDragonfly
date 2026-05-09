@@ -3,43 +3,53 @@
 
 #include <iostream>
 #include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <string.h>
 #include "src/network/redis_server.hpp"
 
 #include <memory>
 
 using namespace dfly;
-std::unique_ptr<RedisServer> g_server;
-std::unique_ptr<asio::io_context> g_io_context;
+
 using namespace boost;
-void SignalHandler(int signum) {
-    std::cout << "Shutting down..." << std::endl;
-    if (g_server) g_server->Stop();
-    if (shard_set) shard_set->Shutdown();
-    if (g_io_context) g_io_context->stop();
-}
 
 int main(int argc, char* argv[]) {
-    //  初始化信号处理
-    signal(SIGINT, SignalHandler);
-    signal(SIGTERM, SignalHandler);
-    auto pp = std::unique_ptr<util::fb2::Pool>(util::fb2::Pool::IOUring(256, 4));
-    pp->Run();
-    //  创建 EngineShardSet
-    shard_set = new EngineShardSet(pp.get());
     
-    //  初始化分片
-    shard_set->Init(4, []() {
-        std::cout << "Shard initialized" << std::endl;
-    });
-    
-    //  创建 ASIO 网络层
-    g_io_context = std::make_unique<asio::io_context>();
-    g_server = std::make_unique<RedisServer>(*g_io_context, 6379);
-    g_server->Start();
-    std::cout << "Redis server started on port 6379" << std::endl;
-    //  运行事件循环
-    g_io_context->run();
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd == -1) {
+        perror("socket");
+        return -1;
+    }
 
-    delete shard_set;
+    int opt = 1;
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1) {
+        perror("setsockopt");
+        close(listen_fd);
+        return -1;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY; 
+    addr.sin_port = htons(6379);       
+
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
+        perror("bind");
+        close(listen_fd);
+        return -1;
+    }
+    int backlog = 128;  
+    if (listen(listen_fd, backlog) == -1) {
+        perror("listen");
+        close(listen_fd);
+        return -1;
+    }
+    RedisServer server(listen_fd, 4); // 监听6379端口，使用4个分片
+    server.Start();
+
     return 0;
 }
