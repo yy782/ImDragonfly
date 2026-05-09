@@ -8,6 +8,10 @@
 #include <string>
 #include <string_view>
 
+
+// CO::GLOBAL_TRANS
+
+
 namespace facade {
 
 class CommandId {

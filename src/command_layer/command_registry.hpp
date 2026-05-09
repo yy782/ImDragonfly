@@ -94,6 +94,8 @@ public:
     bool support_async_{false};// 是否支持异步执行
 
     Handler handler_;
+
+    int8_t interleave_step_{0};
 };
 
 class CommandRegistry {

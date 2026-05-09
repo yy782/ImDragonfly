@@ -14,7 +14,11 @@ using namespace facade;
 
 CommandId::CommandId(const char* name, int8_t arity, int8_t first_key,
                      int8_t last_key)
-    : facade::CommandId(name, arity, first_key, last_key) {
+    : ::facade::CommandId(name, arity, first_key, last_key) {
+
+    if (name_ == "MSET") {
+        interleave_step_ = 2; 
+    }    
 }
 
 CommandId::~CommandId() {
