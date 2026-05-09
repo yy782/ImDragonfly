@@ -2,10 +2,12 @@
 #include "detail/common_types.hpp"
 #include "command_layer/cmn_types.hpp"
 #include "sharding/namespaces.hpp"
+#include "base/iterator.hpp"
 #include <span>
 namespace dfly {
 
-
+using ::base::it::Range;
+using ::base::it::Transform; // 警告，可能会和 std = 20 冲突
 
 
 struct DbContext {
@@ -117,7 +119,43 @@ private:
 };
 
 
+struct KeyIndex {
 
+
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = unsigned;
+    using difference_type = std::ptrdiff_t;
+    using pointer = value_type;
+    using reference = value_type;
+
+    unsigned operator*() const{
+        return start;
+    }
+    
+    KeyIndex& operator++() {
+        start = std::min(end, start + step);
+        return *this;
+    }
+
+    bool operator!=(const KeyIndex& ki) const {
+        return std::tie(start, end, step) != std::tie(ki.start, ki.end, ki.step);
+    }
+
+    unsigned NumArgs() const {
+        return (end - start);
+    }
+
+    auto Range() const {
+        return ::base::it::Range(*this, KeyIndex{end, end, step});
+    }
+
+    auto Range(const cmn::ArgSlice& args) const {
+        return ::base::it::Transform([args](unsigned idx) { return args[idx]; }, Range());
+    }
+
+    unsigned start, end, step;      // [start, end) with step
+
+};
 
 
 
