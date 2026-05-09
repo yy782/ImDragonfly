@@ -88,7 +88,10 @@ public:
     bool SupportsAsync() const {
         return support_async_;
     }
-
+    
+    int8_t interleaved_step() const { // 获取命令的交错执行步骤
+        return interleave_step_;
+    }
  private:
 
     bool support_async_{false};// 是否支持异步执行

@@ -13,7 +13,7 @@ using ShardId = uint16_t;
 using SlotId = std::uint16_t;
 
 using ArgSlice = std::span<const std::string_view>; // from arg_range.h
-using IndexSlice = std::pair<uint32_t, uint32_t>;
+using IndexSlice = std::vector<unsigned>; // 每个键在full_args_中的位置索引列表 not same
 
 
 

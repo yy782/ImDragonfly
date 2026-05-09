@@ -131,7 +131,7 @@ struct KeyIndex {
     unsigned operator*() const{
         return start;
     }
-    
+
     KeyIndex& operator++() {
         start = std::min(end, start + step);
         return *this;
@@ -153,7 +153,7 @@ struct KeyIndex {
         return ::base::it::Transform([args](unsigned idx) { return args[idx]; }, Range());
     }
 
-    unsigned start, end, step;      // [start, end) with step
+    unsigned start_, end_, step_;      // [start, end) with step
 
 };
 

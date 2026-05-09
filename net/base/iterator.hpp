@@ -13,7 +13,8 @@
 namespace base::it {
 
 // Compound iterator for iterating over a multitude of different containers
-template <typename F, typename... Its> struct CompoundIterator {
+template <typename F, typename... Its> 
+struct CompoundIterator {
  private:
   using FirstIt = std::tuple_element_t<0, std::tuple<Its...>>;
   using FirstItReturn = typename std::iterator_traits<FirstIt>::value_type;
@@ -73,7 +74,8 @@ template <typename T> struct Range : public std::pair<T, T> {
 };
 
 // Apply function to iterator range
-template <typename F, typename T> static auto Transform(F func, Range<T> range) {
+template <typename F, typename T> 
+static auto Transform(F func, Range<T> range) {
   using CT = CompoundIterator<F, T>;
   return Range(CT(std::move(func), range.begin()), CT(std::nullopt, range.end()));
 }
