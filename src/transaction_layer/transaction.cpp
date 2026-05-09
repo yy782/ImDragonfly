@@ -20,8 +20,7 @@ void Transaction::InitByArgs(Namespace* ns, DbIndex index, cmn::CmdArgList args)
     db_cntx_ = DbContext(ns, index, util::GetCurrentTimeMs()); 
     full_args_ = args;
 
-    auto key = args[0]; 
-    auto val = args[1];
+
     args_slices_[Shard(key)].push_back({0, 1}); 
 }
 
