@@ -13,7 +13,7 @@ namespace dfly {
 
 Namespace::Namespace() {
     shard_db_slices_.resize(shard_set->size());
-    shard_set->RunBriefInParallel([&](EngineShard* es) { // 并行执行
+    shard_set->RunBlockingInParallel([&](EngineShard* es) { // 并行执行
         ShardId sid = es->shard_id();
         shard_db_slices_[sid] = std::make_unique<DbSlice>(sid, false, es);
     });
@@ -44,7 +44,7 @@ void Namespaces::Clear() {
         return;
     }
 
-    shard_set->RunBriefInParallel([&](EngineShard* es) {
+    shard_set->RunBlockingInParallel([&](EngineShard* es) {
         for (auto& ns : namespaces_) {
             ns.second.shard_db_slices_[es->shard_id()].reset();
         }

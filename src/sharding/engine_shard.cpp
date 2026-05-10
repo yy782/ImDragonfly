@@ -15,11 +15,9 @@ void EngineShard::InitThreadLocal(base::UringProactorPtr pb) {
 }
 EngineShard::EngineShard(base::UringProactorPtr pb, mi_heap_t* heap) : 
 queue_(kQueueLen),
-queue2_(kQueueLen / 2),
 shard_id_(pb->GetPoolIndex()),
 mi_resource_(heap) {
     queue_.Start("shard_queue_"+std::to_string(shard_id()));
-    queue2_.Start("l2_queue_"+std::to_string(shard_id()));
 }
 void EngineShard::DestroyThreadLocal() {
     if (!shard_)
@@ -35,6 +33,6 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {
     queue_.Shutdown();
-    queue2_.Shutdown();
+
 }
 }  // namespace dfly
