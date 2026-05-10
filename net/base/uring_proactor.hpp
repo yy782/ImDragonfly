@@ -104,7 +104,7 @@ private:
 
 
     using Fun = std::function<void()>;
-    using CorFun = std::function<cppcoro::task<void, cppcoro::detail::task_promise<void, true>>()>;
+    using CorFun = std::function<::cppcoro::task<void>()>;
     util::mpmc_bounded_queue<Fun> task_queue_;
     util::EventCount task_queue_avail_;
 

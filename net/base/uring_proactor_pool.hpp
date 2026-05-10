@@ -28,8 +28,9 @@ public:
 
     void AsyncLoop() {
 
+        std::string base_name = "proactor_thread_";
         for(std::size_t i = 0;i < proactors_.size(); ++i){
-            threads_[i] = std::make_unique<util::Thread>([this, i]{
+            threads_[i] = std::make_unique<util::Thread>((base_name + std::to_string(i)).c_str(), [this, i]{
                 proactors_[i]->loop();
             });            
         }

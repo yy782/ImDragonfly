@@ -24,9 +24,6 @@ class task_promise_base
 public:
 
   task_promise_base() noexcept
-#if !CPPCORO_COMPILER_SUPPORTS_SYMMETRIC_TRANSFER
-    : m_state(false)
-#endif
   {}
 
   auto initial_suspend() noexcept
@@ -39,64 +36,28 @@ public:
     return final_awaitable{};
   }
 
-#if CPPCORO_COMPILER_SUPPORTS_SYMMETRIC_TRANSFER
+
   void set_continuation(std::coroutine_handle<> continuation) noexcept
-			{
-				m_continuation = continuation;
-			}
-#else
-  bool try_set_continuation(std::coroutine_handle<> continuation)
   {
     m_continuation = continuation;
-    return !m_state.exchange(true, std::memory_order_acq_rel);
   }
-#endif
+
 
 private:
 
   std::coroutine_handle<> m_continuation;
 
-#if !CPPCORO_COMPILER_SUPPORTS_SYMMETRIC_TRANSFER
-  // Initially false. Set to true when either a continuation is registered
-  // or when the coroutine has run to completion. Whichever operation
-  // successfully transitions from false->true got there first.
-  std::atomic<bool> m_state;
-#endif
   struct final_awaitable
   {
     bool await_ready() const noexcept { return false; }
 
-#if CPPCORO_COMPILER_SUPPORTS_SYMMETRIC_TRANSFER
+
     template<typename PROMISE>
 				std::coroutine_handle<> await_suspend(
 					std::coroutine_handle<PROMISE> coro) noexcept
 				{
 					return coro.promise().m_continuation;
 				}
-#else
-    // HACK: Need to add CPPCORO_NOINLINE to await_suspend() method
-    // to avoid MSVC 2017.8 from spilling some local variables in
-    // await_suspend() onto the coroutine frame in some cases.
-    // Without this, some tests in async_auto_reset_event_tests.cpp
-    // were crashing under x86 optimised builds.
-    template<typename PROMISE>
-    CPPCORO_NOINLINE
-    void await_suspend(std::coroutine_handle<PROMISE> coroutine)
-    {
-      task_promise_base& promise = coroutine.promise();
-
-      // Use 'release' memory semantics in case we finish before the
-      // awaiter can suspend so that the awaiting thread sees our
-      // writes to the resulting value.
-      // Use 'acquire' memory semantics in case the caller registered
-      // the continuation before we finished. Ensure we see their write
-      // to m_continuation.
-      if (promise.m_state.exchange(true, std::memory_order_acq_rel))
-      {
-        promise.m_continuation.resume();
-      }
-    }
-#endif
 
     void await_resume() noexcept {}
   };
@@ -292,36 +253,14 @@ private:
       return !m_coroutine || m_coroutine.done();
     }
 
-#if CPPCORO_COMPILER_SUPPORTS_SYMMETRIC_TRANSFER
+
     std::coroutine_handle<> await_suspend(
 				std::coroutine_handle<> awaitingCoroutine) noexcept
 			{
 				m_coroutine.promise().set_continuation(awaitingCoroutine);
 				return m_coroutine;
 			}
-#else
-    bool await_suspend(std::coroutine_handle<> awaitingCoroutine) noexcept
-    {
-      // NOTE: We are using the bool-returning version of await_suspend() here
-      // to work around a potential stack-overflow issue if a coroutine
-      // awaits many synchronously-completing tasks in a loop.
-      //
-      // We first start the task by calling resume() and then conditionally
-      // attach the continuation if it has not already completed. This allows us
-      // to immediately resume the awaiting coroutine without increasing
-      // the stack depth, avoiding the stack-overflow problem. However, it has
-      // the down-side of requiring a std::atomic to arbitrate the race between
-      // the coroutine potentially completing on another thread concurrently
-      // with registering the continuation on this thread.
-      //
-      // We can eliminate the use of the std::atomic once we have access to
-      // coroutine_handle-returning await_suspend() on both MSVC and Clang
-      // as this will provide ability to suspend the awaiting coroutine and
-      // resume another coroutine with a guaranteed tail-call to resume().
-      m_coroutine.resume();
-      return m_coroutine.promise().try_set_continuation(awaitingCoroutine);
-    }
-#endif
+
   };
 
 public:
@@ -388,7 +327,7 @@ public:
       {
         if (!this->m_coroutine)
         {
-          throw broken_promise{};
+          throw detail::broken_promise{};
         }
 
         return this->m_coroutine.promise().result();
@@ -408,7 +347,7 @@ public:
       {
         if (!this->m_coroutine)
         {
-          throw broken_promise{};
+          throw detail::broken_promise{};
         }
 
         return std::move(this->m_coroutine.promise()).result();

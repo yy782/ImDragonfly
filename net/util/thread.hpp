@@ -10,7 +10,9 @@ namespace util{
 
 class Thread {
 public:
-    Thread(const char* name) : name_(name), tid_(0), joined_(false) {}
+    Thread(const char* name = nullptr) :  tid_(0), joined_(false) {
+        name_ = name ? name : "unnamed_thread";
+    }
     
     template<typename Func, typename... Args>
     explicit Thread(const char* name, Func&& func, Args&&... args) : Thread(name) {
@@ -96,6 +98,8 @@ public:
     }
 
 private:
+
+    std::string name_;
     pthread_t tid_;
     bool joined_;
     
@@ -107,7 +111,7 @@ private:
         return nullptr;
     }
 
-    std::string name_;
+    
 };
 
 }

@@ -246,7 +246,7 @@ void GenericFamily::Register(CommandRegistry* registry) {
 
   registry->StartFamily();
   *registry
-      << CI{"DEL",-2, 1, -1}.SetAsyncHandler(CmdDel)
+      << CI{"DEL",-2, 1, -1}.SetHandler(&GenericFamily::Delex)
       << CI{"PING", -1, 0, 0}.SetHandler(&GenericFamily::Ping)
       << CI{"EXISTS", -2, 1, -1}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", -3, 1, 1}.SetHandler(&GenericFamily::Expire)

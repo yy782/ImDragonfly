@@ -48,7 +48,7 @@ public:
         return std::suspend_never{};
     }
 
-}
+};
 
 
 class AsyncPromise : public AsyncPromiseBase {
@@ -59,7 +59,7 @@ public:
           return AsyncTask<AsyncPromise>{ std::coroutine_handle<AsyncPromise>::from_promise(*this) };
       }
 
-}
+};
 
 
 

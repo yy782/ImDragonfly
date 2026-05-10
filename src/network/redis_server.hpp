@@ -8,8 +8,6 @@
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
 #include "command_layer/conn_context.hpp"
-#include "cppcoro/task.hpp"
-#include "cppcoro/detail/task_promise.hpp"
 #include "base/socket.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
@@ -25,7 +23,7 @@ public:
             
     }
     
-    cppcoro::task<void, cppcoro::detail::task_promise<void, false>> DoRead(){
+    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
 
         ctxt_.owner_ = shared_from_this();
         while (true) {
@@ -54,26 +52,22 @@ public:
     }    
 
     void SendERROR() {
-        SendBuf_.append(BuildError({"NULL"}));
-        DoWrite();
+        SendImp(BuildError({"NULL"}));
     }
 
     void Send(int64_t n) {
-        SendBuf_.append(BuildInteger(n));
-        DoWrite();
+        SendImp(BuildInteger(n));
     }
 
     void Send(const std::string& s){
-        SendBuf_.append(BuildBulkString(s));
-        DoWrite();
+        SendImp(BuildBulkString(s));
     }
     void Send(const std::string_view& s){
         Send(std::string(s));
     }
 
     void SendStatus(const std::string& s){
-        SendBuf_.append(BuildSimpleString(s));
-        DoWrite();
+        SendImp(BuildSimpleString(s));
     }
     void SendStatus(const std::string_view& s){
         SendStatus(std::string(s)); 
@@ -83,7 +77,16 @@ public:
     }
 private:
 
-    cppcoro::task<void, cppcoro::detail::task_promise<void, false>> DoWrite() {
+
+    void SendImp(std::string&& s) {
+        auto p = socket_.Proactor();
+        p->DispatchBrief([this, s = std::move(s)](){
+            SendBuf_.append(s);
+            DoWrite();            
+        });
+    }
+
+    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoWrite() {
         while (SendBuf_.readable_size()) {
             auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
             if (wr>0) {
@@ -95,6 +98,8 @@ private:
         co_return;
     }
 
+
+    
 
     base::UringSocket socket_; 
     RESP_Buf RecvBuf_;
@@ -113,8 +118,7 @@ public:
             pool_(size),
             ListenSocket_(main_proactor_, listenFd)
     {
-        shard_set = new EngineShardSet(&pool_);
-        shard_set->Init(size);
+
 
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
@@ -124,14 +128,23 @@ public:
     ~RedisServer() {
         delete CIs;
         CIs = nullptr;
+
+        if (shard_set) {
+            delete shard_set;
+            shard_set = nullptr;
+        }
     }
     
     void Start() {
         isRuning = true;
         pool_.AsyncLoop();
 
+        shard_set = new EngineShardSet(&pool_);
+        shard_set->Init(pool_.size());
+
+
         main_proactor_->DispatchBrief([this]{
-            auto cb = [this]() -> cppcoro::task<void, cppcoro::detail::task_promise<void, false>> {
+            auto cb = [this]() -> cppcoro::AsyncTask<cppcoro::AsyncPromise> {
                 while(isRuning){
                     auto r = co_await ListenSocket_.AsyncAccept();
 
