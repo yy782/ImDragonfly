@@ -53,36 +53,34 @@ public:
         co_return;
     }    
 
-    void SendOK() {
-        SendBuf_.append(BuildSimpleString({"OK"}));
-
-        DoWrite();
-    }
-
     void SendERROR() {
         SendBuf_.append(BuildError({"NULL"}));
-
         DoWrite();
     }
 
     void Send(int64_t n) {
         SendBuf_.append(BuildInteger(n));
-
         DoWrite();
     }
 
     void Send(const std::string& s){
         SendBuf_.append(BuildBulkString(s));
-
         DoWrite();
     }
     void Send(const std::string_view& s){
-        SendBuf_.append(BuildBulkString(std::string(s)));
-
-        DoWrite();
-
+        Send(std::string(s));
     }
 
+    void SendStatus(const std::string& s){
+        SendBuf_.append(BuildSimpleString(s));
+        DoWrite();
+    }
+    void SendStatus(const std::string_view& s){
+        SendStatus(std::string(s)); 
+    }
+    void SendStatus(const char* s){
+        SendStatus(std::string(s)); 
+    }
 private:
 
     cppcoro::task<void, cppcoro::detail::task_promise<void, false>> DoWrite() {
@@ -120,6 +118,7 @@ public:
 
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
+        RegisterGeneric(CIs);
     }
 
     ~RedisServer() {
@@ -176,7 +175,6 @@ private:
     bool isRuning = false;
 
 };
-
 
 
 }

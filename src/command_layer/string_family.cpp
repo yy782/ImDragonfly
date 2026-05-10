@@ -173,7 +173,7 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     auto conn = cmd_cntx->conn_cntx()->owner_;
 
     if (result.status() == OpStatus::OK) {
-        conn->SendOK(); 
+        conn->SendStatus("OK"); 
     } else {
         conn->SendERROR();
     }

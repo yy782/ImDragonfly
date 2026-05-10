@@ -15,7 +15,7 @@ option(BUILD_TESTS "Build tests" OFF)
 # cmake -DBUILD_TESTING=OFF -DHELIO_BUILD_TESTS=OFF ..
 # 开启 Debug/Release 模式
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release")
+    set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
 include(cmake/third_party.cmake)

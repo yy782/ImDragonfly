@@ -68,7 +68,7 @@ void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
     }
     std::string_view msg = args[0];
     
-    conn->Send(msg);
+    conn->SendStatus(msg);
 }
 
 
@@ -139,7 +139,7 @@ CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) 
     if(res == OpStatus::OK)
     {
         
-        conn->SendOK();
+        conn->SendStatus("OK");
     }
     else 
     {
@@ -250,9 +250,12 @@ void GenericFamily::Register(CommandRegistry* registry) {
       << CI{"PING", -1, 0, 0}.SetHandler(&GenericFamily::Ping)
       << CI{"EXISTS", -2, 1, -1}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", -3, 1, 1}.SetHandler(&GenericFamily::Expire)
-      << CI{"KEYS", 2, 0, 0}.SetHandler(&GenericFamily::Keys)
       << CI{"TTL", 2, 1, 1}.SetHandler(&GenericFamily::Ttl)
       ;
+}
+
+void RegisterGeneric(CommandRegistry* registry) {
+  GenericFamily::Register(registry);
 }
 
 }  // namespace dfly
