@@ -1,5 +1,5 @@
 #pragma once
-
+#include <string>
 namespace util{
 
 
@@ -10,10 +10,10 @@ namespace util{
 
 class Thread {
 public:
-    Thread() : tid_(0), joined_(false) {}
+    Thread(const char* name) : name_(name), tid_(0), joined_(false) {}
     
     template<typename Func, typename... Args>
-    explicit Thread(Func&& func, Args&&... args) : Thread() {
+    explicit Thread(const char* name, Func&& func, Args&&... args) : Thread(name) {
         auto* wrapper = new std::function<void()>(
             std::bind(std::forward<Func>(func), std::forward<Args>(args)...)
         );
@@ -106,6 +106,8 @@ private:
         (*func)();
         return nullptr;
     }
+
+    std::string name_;
 };
 
 }
