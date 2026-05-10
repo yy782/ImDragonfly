@@ -8,6 +8,7 @@
 #include <functional>
 #include <variant>
 #include <coroutine>
+#include <assert.h>
 namespace util {
 namespace detail {
 
@@ -22,6 +23,9 @@ struct Waiter{
         return wait_hook.is_linked();
     }
 
+    ~Waiter() {
+        assert(!IsLinked());
+    }
 };
 
 class WaitQueue {
@@ -49,7 +53,7 @@ public:
 
       wait_list_.pop_front();
 
-      waiter->handler.resume();
+      waiter->handler.resume(); // 后面不能对waiter进行访问了，因为它被销毁了
       return true;
     }
 

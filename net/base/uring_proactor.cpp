@@ -46,12 +46,12 @@ void UringProactor::Init(unsigned pool_index, size_t ring_size) {
 
     io_uring_params params;
     memset(&params, 0, sizeof(params));
-    // params.flags |= IORING_SETUP_SUBMIT_ALL; // 提交失败也绝不掉队
-    // params.flags |=
-    //     (IORING_SETUP_DEFER_TASKRUN  // 推迟任务执行，不要立即触发异步任务的处理
-    //         | IORING_SETUP_TASKRUN_FLAG  // 提供一个用户态可检查的标志位，告诉应用程序"有推迟的任务等待处理"
-    //         | IORING_SETUP_SINGLE_ISSUER // 只有一个线程会向这个 io_uring 实例提交请求
-    //     );
+    params.flags |= IORING_SETUP_SUBMIT_ALL; // 提交失败也绝不掉队
+    params.flags |=
+        (IORING_SETUP_DEFER_TASKRUN  // 推迟任务执行，不要立即触发异步任务的处理
+            | IORING_SETUP_TASKRUN_FLAG  // 提供一个用户态可检查的标志位，告诉应用程序"有推迟的任务等待处理"
+            | IORING_SETUP_SINGLE_ISSUER // 只有一个线程会向这个 io_uring 实例提交请求
+        );
     int init_res = io_uring_queue_init_params(ring_size, &ring_, &params);
 
     if(init_res < 0)

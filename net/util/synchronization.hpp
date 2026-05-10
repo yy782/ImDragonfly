@@ -3,7 +3,7 @@
 // synchronization
 
 #pragma once
-
+#include <mutex>
 #include <atomic>
 #include <cassert>
 #include <condition_variable>  // for cv_status
@@ -95,7 +95,11 @@ public:
             EventCount* event_;
             uint32_t epoch_;
 
-            bool SuspendWithResume = false;
+
+
+            bool SuspendWithResume = true;
+            detail::Waiter waiter {};
+
             bool await_ready() const noexcept
             {
                 return false;
@@ -103,28 +107,28 @@ public:
             bool await_suspend(
                 std::coroutine_handle<> awaitingCoroutine) noexcept
               {
-                  std::unique_lock lk(event_->lock_); 
-                  if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
-                      detail::Waiter waiter{awaitingCoroutine};
-                      event_->wait_queue_.Link(&waiter);
-                      lk.unlock();
-                      SuspendWithResume = true;
-                      return false;
-                  }
-                  else {
-                      lk.unlock();
-                      return true;
-                  }
+                    std::unique_lock lk(event_->lock_); 
+                    if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
+                            waiter.handler = awaitingCoroutine;
+                            event_->wait_queue_.Link(&waiter);
+                            lk.unlock();
+                            SuspendWithResume = true;
+                    }
+                    else {
+                            SuspendWithResume = false;
+                            lk.unlock();
+                    }
+                    return SuspendWithResume;
               }
 
 
               bool await_resume() 
               {
-                  if(SuspendWithResume) {
-                      event_->finishWait();
-                      return true;
-                  }
-                  return false;
+                    if(SuspendWithResume) {
+                        event_->finishWait();
+                    }
+
+                    return SuspendWithResume;
               }
         };
         return WaitAwaitable{this, epoch};
@@ -340,7 +344,39 @@ class BlockingCounter {
 
 
 
+class ThreadEvent {
+public:
+    void wait() {
+        std::unique_lock<std::mutex> lock(m_);
+        cv_.wait(lock, [this] { 
+            return flag_.load(std::memory_order_acquire) > 0; 
+        });
 
+        flag_.fetch_sub(1, std::memory_order_release);
+    }
+
+    void notify() {
+   
+        flag_.fetch_add(1, std::memory_order_release);
+        cv_.notify_one();
+    }
+
+    void notifyAll() {
+
+        flag_.store(INT32_MAX, std::memory_order_release);
+        cv_.notify_all();
+    }
+
+
+    void reset() {
+        flag_.store(0, std::memory_order_release);
+    }
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::atomic<int32_t> flag_{0};  
+};
 
 
 

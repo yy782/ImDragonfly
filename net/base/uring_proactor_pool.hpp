@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <latch>
 
 namespace base{
 
@@ -58,13 +59,13 @@ public:
     }    
     template <typename Func>
     void AwaitOnAll(Func&& func) {
-        util::BlockingCounter bc(size());
-        auto cb = [func = std::forward<Func>(func), bc](UringProactorPtr p) mutable {
+        std::latch latch(size());
+        auto cb = [func = std::forward<Func>(func), &latch](UringProactorPtr p) mutable {
             func(p);
-            bc->Dec();
+            latch.count_down();
         };
         DispatchBrief(std::move(cb));
-        bc->Wait();
+        latch.wait();
     }
 
 
