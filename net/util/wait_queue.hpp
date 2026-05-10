@@ -16,7 +16,7 @@ struct Waiter{
     std::coroutine_handle<> handler;
     using ListHookType =
     boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::safe_link>>;
-    ListHookType wait_hook;
+    ListHookType wait_hook{};
 
     bool IsLinked() const {
         return wait_hook.is_linked();

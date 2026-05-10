@@ -37,9 +37,9 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
 
     std::atomic<uint32_t> result = 0;
     auto cb = [&](Transaction* tx, EngineShard* es) -> facade::OpResult<void> {
-        auto args = tx->GetShardArgs(es->shard_id());
+        auto shard_args = tx->GetShardArgs(es->shard_id());
         auto op_args = tx->GetOpArgs(es);
-        auto res = OpDel(op_args, args);
+        auto res = OpDel(op_args, shard_args);
         result.fetch_add(res.value_or(0), std::memory_order_relaxed);
         return {OpStatus::OK};
     };
@@ -91,8 +91,8 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
     std::atomic<uint32_t> result{0};
 
     auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
-      ShardArgs args = t->GetShardArgs(shard->shard_id());
-      auto res = Op(t->GetOpArgs(shard), args);
+      ShardArgs shard_args = t->GetShardArgs(shard->shard_id());
+      auto res = Op(t->GetOpArgs(shard), shard_args);
       result.fetch_add(res.value_or(0), std::memory_order_relaxed);
       return {OpStatus::OK};
     };

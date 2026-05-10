@@ -15,7 +15,7 @@
 using namespace dfly;
 
 
-int main(int argc, char* argv[]) {
+int main() {
     
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd == -1) {

@@ -39,7 +39,7 @@ UringProactor::~UringProactor() {
 
 void UringProactor::Init(unsigned pool_index, size_t ring_size) {
 
-    assert(ring_size & (ring_size-1));
+    assert((ring_size & (ring_size-1)) == 0);
 
     pool_index_ = pool_index;
     thread_id_ = pthread_self();
@@ -83,6 +83,10 @@ void UringProactor::loop(){
     while(!is_stopped_){
         int num_submitted = io_uring_submit_and_get_events(&ring_);       
         bool ring_busy = num_submitted == -EBUSY ? true : false;
+
+
+        (void)ring_busy;
+
         if(num_submitted == -ETIME) continue;
 
         uint32_t cqe_count = io_uring_peek_batch_cqe(&ring_, cqes, kCqeBatchLen); 

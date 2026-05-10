@@ -63,7 +63,7 @@ public:
             return {fd};
         }
         UringSocket* socket_;
-        int fd;
+        int fd = 0;
     };
     struct ReadAwaitable{
         bool await_ready() const noexcept
@@ -87,7 +87,7 @@ public:
         char* buf;
         ssize_t size;
         off_t offset;
-        ssize_t n;
+        ssize_t n = 0;
     };
     struct WriteAwaitable{
         bool await_ready() const noexcept
@@ -111,7 +111,7 @@ public:
         char* buf;
         ssize_t size;
         off_t offset;
-        ssize_t n;
+        ssize_t n = 0;
     };
     Result<int> Create(unsigned short protocol_family = AF_INET);
 

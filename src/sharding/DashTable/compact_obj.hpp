@@ -82,13 +82,13 @@ protected:
     void SetMeta(uint8_t taglen);
 
     struct TtlString {
-        std::string str_;    // 可能内存泄漏，FIXME
+        std::string str_;   
         uint64_t exp_ms_;  
 
         std::string_view view() const {
             return std::string_view(str_);
         }
-    } __attribute__((packed));
+    };
 
     union U {
         std::string str_;

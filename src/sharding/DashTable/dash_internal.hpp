@@ -410,7 +410,7 @@ class Segment {
         template <typename U, typename V>
         void Insert(uint8_t slot, U&& u, V&& v, uint8_t meta_hash, bool probe);
         template <typename U, typename V>
-        int TryInsertToBucket(U&& key, V&& value, uint8_t meta_hash, bool probe);  
+        int TryInsertToBucket(U&& new_key, V&& new_value, uint8_t meta_hash, bool probe);  
         template <typename Pred> 
         SlotId FindByFp(uint8_t fp_hash, bool probe, Pred&& pred) const;
 
@@ -678,7 +678,7 @@ private:
 
 template <typename Key, typename Value, typename Policy>
 template <typename U, typename V>
-int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& key, V&& value, 
+int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key, V&& new_value, 
                                                             uint8_t meta_hash, bool probe)
 {
     if (this->IsFull()) { // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
@@ -687,7 +687,7 @@ int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& key, V&& value,
 
     int slot = this->slotb_.FindEmptySlot();
     assert(slot >= 0);
-    Insert(slot, std::forward<U>(key), std::forward<V>(value), meta_hash, probe);
+    Insert(slot, std::forward<U>(new_key), std::forward<V>(new_value), meta_hash, probe);
     return slot;    
 }
 
@@ -801,7 +801,7 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
     }
 
     if (!spread) {
-        int slot =
+        slot =
             neighbor.TryInsertToBucket(std::forward<U>(key), std::forward<V>(value), meta_hash, true);
         if (slot >= 0) {
             return Iterator{nid, uint8_t(slot)};
@@ -877,9 +877,9 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
 
     if (target.HasStashOverflow()) { // Stash 溢出
         for (unsigned i = 0; i < kStashBucketNum; ++i) {
-        auto sid = stash_cb(0, i);
-            if (sid != BucketType::kNanSlot) {
-                return Iterator{PhysicalBid(kBucketNum + i), sid};
+        auto st_sid = stash_cb(0, i);
+            if (st_sid != BucketType::kNanSlot) {
+                return Iterator{PhysicalBid(kBucketNum + i), st_sid};
             }
         }
         return Iterator{};

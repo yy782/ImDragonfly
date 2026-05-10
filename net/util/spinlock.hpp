@@ -50,16 +50,15 @@ private:
                 }
             }
             
-            // 退避策略：自旋等待
             if (i < 50) {
-                // 前50次：简单自旋
-                for (volatile int j = 0; j < 10; ++j) {}
+                for (int j = 0; j < 10; ++j) {
+                    asm volatile("" ::: "memory");  
+                }
             } else {
                 std::this_thread::yield();
             }
         }
         
-        // 长时间等待，标记有等待者
         expected = lockword_.load(std::memory_order_relaxed);
         while (true) {
             if ((expected & kLocked) == 0) {
@@ -68,15 +67,15 @@ private:
                     return;
                 }
             } else {
-                // 锁被持有，设置 sleeper 标志
                 if (lockword_.compare_exchange_weak(expected, expected | kSleeper,
                                                     std::memory_order_relaxed)) {
                     expected |= kSleeper;
                 }
             }
             
-            // 继续自旋
-            for (volatile int j = 0; j < 100; ++j) {}
+            for (int j = 0; j < 100; ++j) {
+                asm volatile("" ::: "memory");
+            }
             expected = lockword_.load(std::memory_order_relaxed);
         }
     }

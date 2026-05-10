@@ -1,4 +1,4 @@
-#pragma once
+
 
 #include "compact_obj.hpp"
 #include "redis/redis_aux.hpp"
