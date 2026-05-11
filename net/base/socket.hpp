@@ -1,131 +1,78 @@
-#pragma once
+#pragma once // socket.hpp  
 
 #include <functional>
 #include <variant>
 #include <system_error>
 #include "util/expected.hpp"
 #include <sys/socket.h>
-#include "base/uring_proactor_pool.hpp"
+#include <glog/logging.h>
+#include <coroutine>
+#include <memory>
+
 namespace base{
-inline bool posix_err_wrap(ssize_t res, std::error_code* ec) {
-  if (res == -1) {
-    *ec = std::error_code(errno, std::system_category());
-    return true;
-  } else if (res < 0) {
-  }
-  return false;
-}
-    template <typename T, typename E = ::std::error_code> 
-    using Result = util::expected<T, E>;
 
-class SocketBase{
-    SocketBase(const SocketBase&) = delete;
-    void operator=(const SocketBase&) = delete;
-    SocketBase(SocketBase&& other) = delete;
-    SocketBase& operator=(SocketBase&& other) = delete;
+class UringProactor;
+using UringProactorPtr = std::shared_ptr<UringProactor>;
+
+class UringSocket {
 public:
-
-    int fd() const { return fd_;}
-  
-
-protected:
-    SocketBase(int fd) : fd_(fd) {}
+    UringSocket(UringProactorPtr proactor, int fd = -1);
+    ~UringSocket();
+    
+    int fd() const { return fd_; }
+    UringProactorPtr Proactor() const { return proactor_; }
+    void Close() {
+        ::close(fd_);
+        fd_ = -1;
+    }
+    struct AcceptAwaitable;
+    struct ReadAwaitable;
+    struct WriteAwaitable;
+    
+    AcceptAwaitable AsyncAccept();
+    ReadAwaitable AsyncRead(char* buf, size_t len, off_t offset = 0);
+    WriteAwaitable AsyncWrite(const char* buf, size_t len, off_t offset = 0);
+    
+private:
+    UringProactorPtr proactor_;
     int fd_;
 };
 
+// ============== Awaitable 定义 ==============
 
-class UringProactor;
+struct UringSocket::AcceptAwaitable {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept;
+    int await_resume() noexcept { return fd_; }
+    
+    UringSocket* socket_;
+    int fd_;
+    struct sockaddr_storage addr_;
+    socklen_t addrlen_;
+};
 
-class UringSocket : public SocketBase{
-public:
-    UringSocket(UringProactorPtr proactor,int fd) :SocketBase(fd), proactor_(proactor) {}
-    ~UringSocket() { ::close(fd_); }
-    struct AcceptAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        }            
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto proactor = socket_->Proactor();
-            proactor->submit_accept_sqe(socket_->fd(), [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
-                fd = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
+struct UringSocket::ReadAwaitable {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept;
+    ssize_t await_resume() noexcept { return result_; }
+    
+    UringSocket* socket_;
+    char* buf_;
+    size_t len_;
+    off_t offset_;
+    ssize_t result_;
+};
 
-        }
-        Result<int> await_resume(){
-            std::error_code ec;
-            if(posix_err_wrap(fd, &ec)){
-                return {util::unexpected(ec)};
-            }
-            return {fd};
-        }
-        UringSocket* socket_;
-        int fd = 0;
-    };
-    struct ReadAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        } 
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto proactor = socket_->Proactor();
-            proactor->submit_read_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
-                n = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
-
-        }
-        int await_resume(){
-            return n;
-        }
-        UringSocket* socket_;
-        char* buf;
-        ssize_t size;
-        off_t offset;
-        ssize_t n = 0;
-    };
-    struct WriteAwaitable{
-        bool await_ready() const noexcept
-        {
-            return false;
-        } 
-        void await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-        {
-            auto proactor = socket_->Proactor();
-            proactor->submit_write_sqe(socket_->fd(), buf, size, offset , [awaitingCoroutine, this](struct io_uring_cqe* cqe) mutable {
-                n = cqe->res;
-                awaitingCoroutine.resume();
-            } /*data*/);
-
-        }
-        int await_resume(){
-            return n;
-        }
-        UringSocket* socket_;
-        char* buf;
-        ssize_t size;
-        off_t offset;
-        ssize_t n = 0;
-    };
-    Result<int> Create(unsigned short protocol_family = AF_INET);
-
-    [[nodiscard]] auto AsyncAccept() -> AcceptAwaitable;
-
-    [[nodiscard]] Result<void> Close();
-
-    [[nodiscard]] auto AsyncRead(char* buf, ssize_t size, off_t offset) -> ReadAwaitable;
-
-    [[nodiscard]] auto AsyncWrite(char* buf, ssize_t size, off_t offset) -> WriteAwaitable;
-
-    [[nodiscard]] UringProactorPtr Proactor() { return proactor_; }
-private:
-    UringProactorPtr proactor_;
+struct UringSocket::WriteAwaitable {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept;
+    ssize_t await_resume() noexcept { return result_; }
+    
+    UringSocket* socket_;
+    const char* buf_;
+    size_t len_;
+    off_t offset_;
+    ssize_t result_;
 };
 
 

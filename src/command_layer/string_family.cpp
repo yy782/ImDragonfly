@@ -155,6 +155,8 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
 
 
 CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
+    args = args.subspan(1); // Skip command name
+
     CmdArgParser parser{args};
 
     auto [key, value] = parser.Next<std::string_view, std::string_view>();

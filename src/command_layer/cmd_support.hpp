@@ -72,8 +72,9 @@ private:
   struct SingleHopWaiterT  {
     SingleHopWaiterT(CommandContext* cmd_cntx,
                     SingleHopSentinelT<RT> callback)
-        :  callback_{callback} {
-          (void)cmd_cntx;
+        :  cmd_cntx_{cmd_cntx},
+        callback_{callback} {
+         
     }
 
     bool await_ready() const noexcept { 

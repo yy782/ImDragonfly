@@ -58,49 +58,41 @@
 namespace base{
 
 
-Result<int> UringSocket::Create(unsigned short protocol_family){
-    constexpr auto kMask = SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC;
+UringSocket::UringSocket(UringProactorPtr proactor, int fd)
+    : proactor_(proactor), fd_(fd) {}
 
-    std::error_code ec;
-    int fd = ::socket(protocol_family, kMask, 0);
-    if(posix_err_wrap(fd, &ec))
-    {
-        return {util::unexpected(ec)};
+UringSocket::~UringSocket() {
+    if (fd_ != -1) {
+        close(fd_);
     }
-
-    fd_ = fd;
-    return {fd};
 }
 
-
-
-auto UringSocket::AsyncAccept() -> AcceptAwaitable{
-
-
-    return AcceptAwaitable{this};
+auto UringSocket::AsyncAccept() -> AcceptAwaitable {
+    return AcceptAwaitable{this, -1, {}, 0};
 }
 
-
-
-Result<void> UringSocket::Close(){
-    std::error_code ec;
-    if(posix_err_wrap(fd_, &ec)){
-        return {util::unexpected(ec)};
-    }
-    return {};
+auto UringSocket::AsyncRead(char* buf, size_t len, off_t offset) -> ReadAwaitable {
+    return ReadAwaitable{this, buf, len, offset, 0};
 }
 
-
-
-auto UringSocket::AsyncRead(char* buf, ssize_t size, off_t offset) -> ReadAwaitable{
-    return ReadAwaitable{this, buf, size, offset};
+auto UringSocket::AsyncWrite(const char* buf, size_t len, off_t offset) -> WriteAwaitable {
+    return WriteAwaitable{this, buf, len, offset, 0};
 }
 
-auto UringSocket::AsyncWrite(char* buf, ssize_t size, off_t offset) -> WriteAwaitable{
+// ============== Awaitable 方法实现 ==============
 
-    return WriteAwaitable{this, buf, size, offset};    
+void UringSocket::AcceptAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
+    addrlen_ = sizeof(addr_);
+    socket_->Proactor()->SubmitAccept(socket_->fd(), h, this);
 }
 
+void UringSocket::ReadAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
+    socket_->Proactor()->SubmitRead(socket_->fd(), buf_, len_, offset_, h, this);
+}
+
+void UringSocket::WriteAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
+    socket_->Proactor()->SubmitWrite(socket_->fd(), buf_, len_, offset_, h, this);
+}
 
 
 

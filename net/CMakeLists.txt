@@ -15,5 +15,5 @@ target_include_directories(net PUBLIC
 target_link_libraries(net PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
     third_party_deps 
-    uring
+    uring 
 )

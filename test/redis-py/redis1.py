@@ -10,7 +10,9 @@ def main():
             host='localhost',  # Redis 服务器地址
             port=6379,         # Redis 端口
             db=0,              # 数据库编号
-            decode_responses=True  # 自动解码为字符串
+            decode_responses=True,  # 自动解码为字符串
+            protocol=2,
+            socket_connect_timeout=5,
         )
         
         # 测试连接

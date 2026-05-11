@@ -167,18 +167,16 @@ public:
 
     using BackedArguments::BackedArguments;
 
-    CmdArgList ToCmdArgList() &&
+    CmdArgList ToCmdArgList() 
     {
-        assert(vec_.size()==0);
-
+        vec_.clear();
         for(const std::string_view sv : view(0))
         {
             vec_.push_back(sv);
         }
         CmdArgList full_span(vec_);
 
-        auto slic = full_span.subspan(1);
-        return slic;
+        return full_span;
     }
 
 private:

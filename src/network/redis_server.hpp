@@ -1,6 +1,6 @@
 // network/redis_server.h
-#pragma once
-
+#pragma once // redis_server.hpp  
+#include <glog/logging.h>
 #include "sharding/engine_shard_set.hpp"
 #include "redis/facade/resp_buf.hpp"
 #include "redis/facade/reply_builder.hpp"
@@ -8,10 +8,11 @@
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
 #include "command_layer/conn_context.hpp"
-#include "base/socket.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
 #include "transaction_layer/transaction.hpp"
+#include "base/fd_wrapper.hpp"
+
 namespace dfly{
 using base::UringProactorPtr;
 inline CommandRegistry* CIs = nullptr;
@@ -25,23 +26,37 @@ public:
     
     cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
 
+
+        int fd = socket_.fd();
+        LOG(INFO) << "Session Read for fd: " << fd;
+        std::cout << "Session Read for fd: " << fd << std::endl;
+
         ctxt_.owner_ = shared_from_this();
         while (true) {
             auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+
+            std::cout << "Read " << r << " bytes from fd: " << fd << std::endl;
+
             if (r>0) {
                 RecvBuf_.hasWritten(r);
                 auto res = RecvBuf_.ParseRESP();
                 if (res.empty()) continue;
                 CommandId* ci = CIs->Find(res[0]);
-                ::cmn::CmdArgList args = ::cmn::ParsedCommand(res.begin(), res.end(), res.size()).ToCmdArgList();
+
+                if (!ci) { // 这里不正确
+                    SendStatus(std::string("OK"));
+                    continue;
+                }
+
+                auto parse = ::cmn::ParsedCommand(res.begin(), res.end(), res.size());
+                ::cmn::CmdArgList args = parse.ToCmdArgList();
                 Transaction t(ci);
                 t.InitByArgs(ns_, index_, args);
                 CommandContext cm_txt(&ctxt_, &t, ci);
                 ci->Invoke(args, &cm_txt);
             }
             else if (r == 0 ) { 
-                (void)socket_.Close();
-
+                socket_.Close();
                 break;
             }
             else {
@@ -114,7 +129,7 @@ private:
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        :   main_proactor_(std::make_shared<base::UringProactor>(0, 4096)),
+        :   main_proactor_(new base::UringProactor(0, 4096)),
             pool_(size),
             ListenSocket_(main_proactor_, listenFd)
     {
@@ -136,6 +151,9 @@ public:
     }
     
     void Start() {
+
+        LOG(INFO) << "Starting RedisServer...";
+
         isRuning = true;
         pool_.AsyncLoop();
 
@@ -144,15 +162,19 @@ public:
 
 
         main_proactor_->DispatchBrief([this]{
-            auto cb = [this]() -> cppcoro::AsyncTask<cppcoro::AsyncPromise> {
-                while(isRuning){
-                    auto r = co_await ListenSocket_.AsyncAccept();
+            auto cb = [](RedisServer* server) -> cppcoro::AsyncTask<cppcoro::AsyncPromise> {
+                while(server->isRuning){
+                    auto fd = co_await server->ListenSocket_.AsyncAccept();
 
-                    if (r.has_value()){
+                    if (fd > 0){
 
-                        auto p = NextProactor();
 
-                        auto session = std::make_shared<RedisSession>(r.value(), p);
+                        // LOG(INFO) << "Accepted new connection, addr: " << base::AddressToString(base::Address(fd));
+                        std::cout<< "Accepted new connection, addr: " << base::AddressToString(base::Address(fd)) << std::endl;
+
+                        auto p = server->NextProactor();
+
+                        auto session = std::make_shared<RedisSession>(fd, p);
                         
                         p->DispatchBrief([session](){
                             session->DoRead();
@@ -161,7 +183,7 @@ public:
                 }
                 co_return;
             };
-            cb();
+            cb(this);
         });
         main_proactor_->loop();
     }
@@ -175,8 +197,9 @@ public:
     
 private:
 
-    auto NextProactor() const -> UringProactorPtr {
-        return pool_[NextProIndex_%pool_.size()];
+    auto NextProactor() -> UringProactorPtr {
+        NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
+        return pool_[NextProIndex_];
     }
 
     ssize_t NextProIndex_ = 0;

@@ -1,196 +1,94 @@
-#pragma once
+#pragma once // uring_proactor.hpp  
 
-#include <cstddef>
-#include <cstdint>
-#include <cassert>
-#include <cstring>
-#include <liburing.h>
-#include <vector>
-#include <thread>
-#include <atomic>
-#include <cppcoro/task.hpp>
 #include "util/lock_free_queue.hpp"
-#include "util/function.hpp"
-#include "util/synchronization.hpp"
+#include "socket.hpp"
+#include <liburing.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/eventfd.h>
+#include <functional>
+#include <memory>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <system_error>
+#include <coroutine>
+#include <unordered_map>
+#include <chrono>
+#include <poll.h>
+namespace base {
 
-namespace base{
-
-class ProactorBase{
-
-    
-
-    ProactorBase(const ProactorBase&) = delete;
-    void operator=(const ProactorBase&) = delete;
+class UringProactor {
 public:
-
-    bool InMyThread() const { return pthread_self() == thread_id_; }
-
-    size_t GetPoolIndex() const { return pool_index_; }
-
-
-protected:
-    ProactorBase();
-    pthread_t thread_id_ = 0U;
-    int32_t pool_index_ = 0;
+    explicit UringProactor(uint32_t index, size_t queue_size = 1024, size_t ring_size = 256);
+    ~UringProactor();
     
-};
-
-
-class UringProactor : public ProactorBase{
-
-    struct CompletionEntry;
-public:    
-    UringProactor();
-    UringProactor(unsigned pool_index, size_t ring_size);
-    ~UringProactor();    
-    void Init(unsigned pool_index, size_t ring_size);
-
-    void loop();
-    void stop();
-
-    template<typename Cb>
-    void submit_accept_sqe(int fd, Cb&& cb);
-
-    template<typename Cb>
-    void submit_read_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb);
-
-    template<typename Cb>
-    void submit_write_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb);
-
-
-    void Sqe(struct io_uring_sqe** sqe, uint32_t* index = nullptr, struct CompletionEntry** e = nullptr);
-
-    static UringProactor*& me() {
-        return owner_;
-    }
-
-    template <typename Func> 
-    bool DispatchBrief(Func&& f);
+    UringProactor(const UringProactor&) = delete;
+    UringProactor& operator=(const UringProactor&) = delete;
     
-
-    
-private:
-    template <typename Func> 
-    bool EmplaceTaskQueue(Func&& f);
-    void DoingTaskQueue();
-    void WakeupIfNeeded();
-    void WakeRing();
-    void ProcessCqeBatch(unsigned count, io_uring_cqe** cqes);
-    void ReapCompletions(unsigned init_count, io_uring_cqe** cqes);
-
-    void RegrowCentries();
-    CompletionEntry& NextEntry();
-
-    using CbType =
-        util::function_base<true /*owns*/, false /*non-copyable*/, fu2::capacity_fixed<16, 8>,
-                            false /* non-throwing*/, false /* strong exceptions guarantees*/,
-                            void(struct io_uring_cqe*)>;
-
-
-
-    
-    struct CompletionEntry {
-        CbType cb;
-        int64_t index = -1;
-    };
-    std::vector<CompletionEntry> centries_;
-    int32_t next_free_ce_ = -1;
-
-    bool is_stopped_ = true;
-
-    struct io_uring ring_;
-
-    static thread_local UringProactor* owner_;
-
-
-    using Fun = std::function<void()>;
-    using CorFun = std::function<::cppcoro::task<void>()>;
-    util::mpmc_bounded_queue<Fun> task_queue_;
-    util::EventCount task_queue_avail_;
-
-    std::atomic<uint32_t> tq_seq_;
-
-};
-
-
-
-
-
-template<typename Cb>
-void UringProactor::submit_accept_sqe(int fd, Cb&& cb){
-    io_uring_sqe* sqe = nullptr;
-    uint32_t index = -1;
-    CompletionEntry* e;
-
-    Sqe(&sqe, &index, &e);
-
-    e->cb = std::move(cb);
-
-
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
-    io_uring_prep_accept(sqe, fd, NULL, NULL, 0);
-    io_uring_submit(&ring_);
-}
-
-template<typename Cb>
-void UringProactor::submit_read_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb){
-    io_uring_sqe* sqe = nullptr;
-    uint32_t index = -1;
-    CompletionEntry* e;
-    
-    Sqe(&sqe, &index, &e);
-    e->cb = std::move(cb);
-
-
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
-    io_uring_prep_read(sqe, fd, buf, size, offset);
-    io_uring_submit(&ring_);
-}
-
-
-template<typename Cb>
-void UringProactor::submit_write_sqe(int fd, char* buf, ssize_t size, off_t offset, Cb&& cb){
-    io_uring_sqe* sqe = nullptr;
-    uint32_t index = -1;
-    CompletionEntry* e;
-    
-    Sqe(&sqe, &index, &e);
-
-    e->cb = std::move(cb);
-
-
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(index));
-    io_uring_prep_write(sqe, fd, buf, size, offset);
-    io_uring_submit(&ring_);
-
-}
-
-
-template <typename Func> 
-bool UringProactor::EmplaceTaskQueue(Func&& f) {
-    if (task_queue_.try_enqueue(std::forward<Func>(f))) {
-        WakeupIfNeeded();
-
+    // 核心：入队任务（可从任意线程调用）
+    template<typename Func>
+    bool DispatchBrief(Func&& f) {
+        // 将任务包装成 std::function 并入队
+        auto task = std::make_unique<Task>(std::forward<Func>(f));
+        if (!task_queue_->try_enqueue(std::move(task))) {
+            return false;
+        }
+        // 唤醒事件循环
+        Wakeup();
         return true;
     }
-    return false;
-}
+    
+    // 协程相关接口
+    void SubmitAccept(int fd, std::coroutine_handle<> handle, void* awaitable);
+    void SubmitRead(int fd, void* buf, size_t len, off_t offset, 
+                    std::coroutine_handle<> handle, void* awaitable);
+    void SubmitWrite(int fd, const void* buf, size_t len, off_t offset,
+                     std::coroutine_handle<> handle, void* awaitable);
+    void SubmitClose(int fd, std::coroutine_handle<> handle, void* awaitable);
+    
+    // 启动事件循环
+    void loop();
+    void stop();
+    
+    uint32_t GetPoolIndex() const { return thread_index_; }
+private:
+    using Task = std::function<void()>;
+    using TaskPtr = std::unique_ptr<Task>;
+    
+    struct PendingOp {
+        int fd;
+        int op_type;  // 0:accept, 1:read, 2:write, 3:close
+        void* buf;
+        size_t len;
+        off_t offset;
+        std::coroutine_handle<> handle;
+        void* awaitable;  // 指向 Awaitable 对象，用于设置结果
+    };
+    
+    void Wakeup();
+    void DrainTasks();
+    void SubmitPendingOps();
+    void HandleCqe(struct io_uring_cqe* cqe);
+    
+    uint32_t thread_index_; 
 
-template <typename Func> 
-bool UringProactor::DispatchBrief(Func&& f) {
-    if (EmplaceTaskQueue(std::forward<Func>(f)))
-        return false;
-    while (true) {
-        util::EventCount::Key key = task_queue_avail_.prepareWait();
+    struct io_uring_ring;
+    std::unique_ptr<io_uring_ring> ring_;
+    int ring_fd_;
+    int event_fd_;
+    
+    std::unique_ptr<base::mpmc_bounded_queue<TaskPtr>> task_queue_;
+    std::unique_ptr<base::mpmc_bounded_queue<PendingOp>> pending_ops_;
+    
+    std::atomic<bool> running_;
+    std::atomic<bool> stop_;
+    std::thread::id loop_thread_id_;
+    std::mutex submit_mutex_;
+    
+    static constexpr uint64_t WAKEUP_COOKIE = 0xFFFFFFFFFFFFFFFFULL;
+};
 
-        if (EmplaceTaskQueue(std::forward<Func>(f))) {
-            break;
-        }
-        task_queue_avail_.wait(key.epoch());
-    }
-
-    return true;
-}
-
-
-}
+} // namespace base

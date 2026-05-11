@@ -1,12 +1,11 @@
 #pragma once
 #include <string>
-namespace util{
-
-
 #include <pthread.h>
 #include <functional>
 #include <utility>
 #include <stdexcept>
+
+namespace util{
 
 class Thread {
 public:
@@ -96,7 +95,9 @@ public:
         t.joined_ = false;
         return t;
     }
-
+    static pthread_t current_tid() {
+        return pthread_self();
+    }
 private:
 
     std::string name_;
