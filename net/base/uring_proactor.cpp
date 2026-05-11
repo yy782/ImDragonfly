@@ -1,222 +1,273 @@
-
 #include "uring_proactor.hpp"
+#include <liburing.h>
+#include <errno.h>
+#include <cstring>
 
+namespace base {
 
-namespace base{
-thread_local UringProactor* UringProactor::owner_ = nullptr;
-namespace {
-    constexpr uint16_t kCqeBatchLen = 128;
+struct UringProactor::io_uring_ring {
+    struct io_uring ring;
+    io_uring_ring() { memset(&ring, 0, sizeof(ring)); }
+    ~io_uring_ring() { io_uring_queue_exit(&ring); }
+};
 
-    void wait_for_cqe(io_uring* ring, unsigned wait_nr, __kernel_timespec* ts, sigset_t* sig = NULL) {
-        struct io_uring_cqe* cqe_ptr = nullptr;
-        io_uring_wait_cqes(ring, &cqe_ptr, wait_nr, ts, sig);
-    }
+// ============== UringProactor 实现 ==============
 
-    constexpr uint32_t kTaskQueueLen = 256;
-
-    constexpr uint32_t WAIT_SECTION_STATE = 1UL << 31;  // 0x80000000
-    const static uint64_t wake_val = 1;
-}
- 
-ProactorBase::ProactorBase()  {
-}
-
-
-
-
-
-
-UringProactor::UringProactor() : task_queue_(kTaskQueueLen){
-}
-
-
-UringProactor::UringProactor(unsigned pool_index, size_t ring_size) : task_queue_(kTaskQueueLen){
-    Init(pool_index, ring_size);
-}
-
-UringProactor::~UringProactor() {  
-}
-
-void UringProactor::Init(unsigned pool_index, size_t ring_size) {
-
-    assert((ring_size & (ring_size-1)) == 0);
-
-    pool_index_ = pool_index;
-    thread_id_ = pthread_self();
-
-    io_uring_params params;
-    memset(&params, 0, sizeof(params));
-    params.flags |= IORING_SETUP_SUBMIT_ALL; // 提交失败也绝不掉队
-    params.flags |=
-        (IORING_SETUP_DEFER_TASKRUN  // 推迟任务执行，不要立即触发异步任务的处理
-            | IORING_SETUP_TASKRUN_FLAG  // 提供一个用户态可检查的标志位，告诉应用程序"有推迟的任务等待处理"
-            | IORING_SETUP_SINGLE_ISSUER // 只有一个线程会向这个 io_uring 实例提交请求
-        );
-    int init_res = io_uring_queue_init_params(ring_size, &ring_, &params);
-
-    if(init_res < 0)
-    {
-        assert(false); // TODO
-    }
-
-    centries_.resize(params.sq_entries);  // .val = -1
-    next_free_ce_ = 0;
-    for (size_t i = 0; i < centries_.size() - 2; ++i) {
-        centries_[i].index = i + 1;
-    }
-    centries_.back().index = -1;
-
-    UringProactor::me() = this;
-}
-
-void UringProactor::loop(){
-
-    struct io_uring_cqe* cqes[kCqeBatchLen];
-    is_stopped_ = false;
-
-    struct __kernel_timespec ts;
-    ts.tv_sec = 5;
-    ts.tv_nsec = 0;    
-
-    uint32_t tq_seq = 0;
-
-    while(!is_stopped_){
-        int num_submitted = io_uring_submit_and_get_events(&ring_);       
-        bool ring_busy = num_submitted == -EBUSY ? true : false;
-
-
-        (void)ring_busy;
-
-        if(num_submitted == -ETIME) continue;
-
-        uint32_t cqe_count = io_uring_peek_batch_cqe(&ring_, cqes, kCqeBatchLen); 
-        if (cqe_count) {
-            ReapCompletions(cqe_count, cqes);
-        }
-
-        tq_seq = tq_seq_.load(std::memory_order_acquire);
-        DoingTaskQueue();
-
-        if (task_queue_.empty() &&     
-        tq_seq_.compare_exchange_weak(tq_seq, WAIT_SECTION_STATE, std::memory_order_acq_rel,
-                                  std::memory_order_relaxed)){
-            wait_for_cqe(&ring_, 1, &ts);
-            tq_seq_.store(0, std::memory_order_release);
-        }
-        
-    }
-}
-
-
-
-void UringProactor::stop(){
-    DispatchBrief([this] {
-        is_stopped_ = true;
-    });
-}
-
-
-void UringProactor::ProcessCqeBatch(unsigned count, io_uring_cqe** cqes
-                                    ){
-    for (unsigned i = 0; i < count; ++i){
-        io_uring_cqe cqe = *cqes[i];
-        uint32_t idx = cqe.user_data & 0xFFFFFFFF;
-
-        if (idx < centries_.size()){
-            CbType cb = std::move(centries_[idx].cb);
-
-            centries_[idx].index = static_cast<uint64_t>(next_free_ce_);
-            next_free_ce_ = idx;
-            cb(&cqe);
-        }
-    }
-
-}
-
-void UringProactor::ReapCompletions(unsigned init_count, io_uring_cqe** cqes
-                                    ){
-    unsigned batch_count = init_count;
-    while (batch_count > 0) {
-        ProcessCqeBatch(batch_count, cqes);
-        io_uring_cq_advance(&ring_, batch_count);
-        if (batch_count < kCqeBatchLen)
-            break;
-        batch_count = io_uring_peek_batch_cqe(&ring_, cqes, kCqeBatchLen);
-    }                                 
-                                        
-}
-
-void UringProactor::RegrowCentries() {
-    size_t prev = centries_.size();
-
-    centries_.resize(prev * 2);  // grow by 2.
-    next_free_ce_ = prev;
-    for (; prev < centries_.size() - 1; ++prev)
-        centries_[prev].index = prev + 1;
-}
-
-UringProactor::CompletionEntry& UringProactor::NextEntry(){
-    if (next_free_ce_ < 0){
-        RegrowCentries();
-    }
-    return centries_[next_free_ce_];
-}
-
-void UringProactor::WakeRing(){
-    UringProactor* caller = UringProactor::me();
-
-    struct io_uring_sqe* sqe = nullptr;
-    caller->Sqe(&sqe); // sqe 的回调是空，可能有问题
-
-    io_uring_prep_msg_ring(sqe, ring_.ring_fd, 0, 0, 0);
-}
-
-void UringProactor::Sqe(struct io_uring_sqe** sqe, uint32_t* index, struct CompletionEntry** e){
-    *sqe = io_uring_get_sqe(&ring_);
-    if (*sqe == nullptr) {
-        do{
-            io_uring_submit(&ring_);
-            *sqe = io_uring_get_sqe(&ring_);
-        }while(*sqe == nullptr);        
-    }
-    memset(*sqe, 0, sizeof(io_uring_sqe));
-
+UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size)
+    : thread_index_(index)
+    , task_queue_(std::make_unique<base::mpmc_bounded_queue<TaskPtr>>(queue_size))
+    , pending_ops_(std::make_unique<base::mpmc_bounded_queue<PendingOp>>(queue_size))
+    , running_(false)
+    , stop_(false)
+{ 
     
-    auto& ce = NextEntry();
-    uint32_t dx = next_free_ce_;
-    next_free_ce_ = ce.index;
-
-    if (index != nullptr) *index = dx;
-    if (e != nullptr) *e = &ce;
-
-}
-
-void UringProactor::WakeupIfNeeded() {
-    auto current = tq_seq_.fetch_add(1, std::memory_order_acq_rel);
-    if (current == WAIT_SECTION_STATE) {
-        WakeRing();
-    } 
-}
-
-
-void UringProactor::DoingTaskQueue(){
-    Fun task;
-    while(task_queue_.try_dequeue(task)){
-        task();
-        
+    // 初始化 io_uring
+    ring_ = std::make_unique<io_uring_ring>();
+    struct io_uring_params params;
+    memset(&params, 0, sizeof(params));
+    
+    int ret = io_uring_queue_init_params(ring_size, &ring_->ring, &params);
+    if (ret < 0) {
+        throw std::system_error(-ret, std::generic_category(), "io_uring_init failed");
     }
-    task_queue_avail_.notifyAll();
+    ring_fd_ = ring_->ring.ring_fd;
+    
+    // 创建 eventfd
+    event_fd_ = eventfd(0, EFD_NONBLOCK);
+    if (event_fd_ < 0) {
+        throw std::system_error(errno, std::generic_category(), "eventfd failed");
+    }
+    
+    // 注册 eventfd 到 io_uring
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
+    io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
+    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(WAKEUP_COOKIE));
+    io_uring_submit(&ring_->ring);
+}
+
+UringProactor::~UringProactor() {
+    stop();
+    if (event_fd_ >= 0) {
+        close(event_fd_);
+    }
+}
+
+void UringProactor::Wakeup() {
+    uint64_t val = 1;
+    write(event_fd_, &val, sizeof(val));
+}
+
+void UringProactor::DrainTasks() {
+    TaskPtr task;
+    while (task_queue_->try_dequeue(task)) {
+        if (task) {
+            (*task)();
+        }
+    }
+}
+
+void UringProactor::SubmitPendingOps() {
+    PendingOp op;
+    while (pending_ops_->try_dequeue(op)) {
+        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
+        if (!sqe) {
+            // 队列满了，先提交一批
+            io_uring_submit(&ring_->ring);
+            sqe = io_uring_get_sqe(&ring_->ring);
+            if (!sqe) {
+                // 还是没拿到，重新入队
+                pending_ops_->try_enqueue(std::move(op));
+                continue;
+            }
+        }
+        
+        switch (op.op_type) {
+        case 0: // accept
+            io_uring_prep_accept(sqe, op.fd, nullptr, nullptr, 0);
+            break;
+        case 1: // read
+            io_uring_prep_read(sqe, op.fd, op.buf, op.len, op.offset);
+            break;
+        case 2: // write
+            io_uring_prep_write(sqe, op.fd, op.buf, op.len, op.offset);
+            break;
+        case 3: // close
+            io_uring_prep_close(sqe, op.fd);
+            break;
+        }
+        
+        // 存储协程句柄和 awaitable 指针
+        auto* data = new PendingOp{op};
+        io_uring_sqe_set_data(sqe, data);
+
+        std::cout << "Submitted op: fd=" << op.fd << ", type=" << op.op_type << std::endl;
+    }
+    
+    int ret = io_uring_submit(&ring_->ring); 
+
+    if ( ret != 0 )
+        std::cout << "Submitted " << ret << " operations to io_uring"  << std::endl;
+}
+
+void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
+    void* data = io_uring_cqe_get_data(cqe);
+    int res = cqe->res;
+    
+    
+
+    if (data == reinterpret_cast<void*>(WAKEUP_COOKIE)) {
+        // eventfd 唤醒事件，消耗掉它
+        uint64_t val;
+        read(event_fd_, &val, sizeof(val));
+        // 重新注册 poll
+        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
+        io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
+        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(WAKEUP_COOKIE));
+        io_uring_submit(&ring_->ring);
+        return;
+    }
+    
+    std::cout<< "Received CQE" << std::endl;
+    auto* op = static_cast<PendingOp*>(data);
+    if (!op) return;
+    
+    // 将结果设置到 Awaitable 对象中
+    if (op->awaitable) {
+        switch (op->op_type) {
+        case 0: { // accept
+            auto* awaitable = static_cast<UringSocket::AcceptAwaitable*>(op->awaitable);
+            awaitable->fd_ = res;
+            break;
+        }
+        case 1: { // read
+
+            std::cout << "Read completed, res=" << res << std::endl;
+            auto* awaitable = static_cast<UringSocket::ReadAwaitable*>(op->awaitable);
+            awaitable->result_ = res;
+            break;
+        }
+        case 2: { // write
+            auto* awaitable = static_cast<UringSocket::WriteAwaitable*>(op->awaitable);
+            awaitable->result_ = res;
+            break;
+        }
+        }
+    }
+    
+    if (op->handle) {
+        op->handle.resume();
+    }
+    
+    delete op;
+}
+
+void UringProactor::loop() {
+    loop_thread_id_ = std::this_thread::get_id();
+    running_ = true;
+    stop_ = false;
+    
+    struct __kernel_timespec timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_nsec = 1000000; // 1ms
+    
+    while (!stop_) {
+        // 1. 处理任务队列（优先级最高）
+        DrainTasks();
+        
+        // 2. 提交待处理的 I/O 操作
+        SubmitPendingOps();
+        
+        // 3. 等待完成事件
+        struct io_uring_cqe* cqe = nullptr;
+        int ret = io_uring_wait_cqe_timeout(&ring_->ring, &cqe, &timeout);
+        
+        if (ret == 0 && cqe) {
+            HandleCqe(cqe);
+            io_uring_cqe_seen(&ring_->ring, cqe);
+        }
+        // 超时或错误则继续循环，再次处理任务队列
+    }
+    
+    running_ = false;
+}
+
+void UringProactor::stop() {
+    stop_ = true;
+    Wakeup();
+    
+    if (std::this_thread::get_id() != loop_thread_id_ && running_) {
+        while (running_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+}
+
+void UringProactor::SubmitAccept(int fd, std::coroutine_handle<> handle, void* awaitable) {
+    PendingOp op;
+    op.fd = fd;
+    op.op_type = 0;
+    op.handle = handle;
+    op.awaitable = awaitable;
+    
+    if (!pending_ops_->try_enqueue(std::move(op))) {
+        // 队列满，直接恢复协程并返回错误
+        if (awaitable) {
+            auto* a = static_cast<UringSocket::AcceptAwaitable*>(awaitable);
+            a->fd_ = -EBUSY;
+        }
+        handle.resume();
+        return;
+    }
+    
+    Wakeup();
+}
+
+void UringProactor::SubmitRead(int fd, void* buf, size_t len, off_t offset,
+                                std::coroutine_handle<> handle, void* awaitable) {
+    PendingOp op;
+    op.fd = fd;
+    op.op_type = 1;
+    op.buf = buf;
+    op.len = len;
+    op.offset = offset;
+    op.handle = handle;
+    op.awaitable = awaitable;
+    
+    if (!pending_ops_->try_enqueue(std::move(op))) {
+        if (awaitable) {
+            auto* a = static_cast<UringSocket::ReadAwaitable*>(awaitable);
+            a->result_ = -EBUSY;
+        }
+        handle.resume();
+        return;
+    }
+    
+    Wakeup();
+}
+
+void UringProactor::SubmitWrite(int fd, const void* buf, size_t len, off_t offset,
+                                 std::coroutine_handle<> handle, void* awaitable) {
+    PendingOp op;
+    op.fd = fd;
+    op.op_type = 2;
+    op.buf = const_cast<void*>(buf);
+    op.len = len;
+    op.offset = offset;
+    op.handle = handle;
+    op.awaitable = awaitable;
+    
+    if (!pending_ops_->try_enqueue(std::move(op))) {
+        if (awaitable) {
+            auto* a = static_cast<UringSocket::WriteAwaitable*>(awaitable);
+            a->result_ = -EBUSY;
+        }
+        handle.resume();
+        return;
+    }
+    
+    Wakeup();
 }
 
 
 
-
-}
-
-
-
-
-
-
-
-
+} // namespace base

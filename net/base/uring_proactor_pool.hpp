@@ -1,6 +1,5 @@
 
-
-#pragma once
+#pragma once // uring_proactor_pool.hpp  
 #include "uring_proactor.hpp"
 #include "util/thread.hpp"
 
@@ -10,7 +9,7 @@
 
 namespace base{
 
-using UringProactorPtr = std::shared_ptr<UringProactor>;
+
 
 
 class UringProactorPool{

@@ -66,7 +66,7 @@ void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
     if (args.size() > 1) {
         return conn->SendERROR();
     }
-    std::string_view msg = args[0];
+    std::string msg = "PONG";
     
     conn->SendStatus(msg);
 }
