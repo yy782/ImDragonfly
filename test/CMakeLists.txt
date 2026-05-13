@@ -17,13 +17,23 @@ target_include_directories(db_table_test PRIVATE
 )
 gtest_discover_tests(db_table_test)
 
+add_library(redis_dict STATIC
+    redis/zmalloc.cpp
+    redis/siphash.cpp
+    redis/dict.cpp
+)
+target_include_directories(redis_dict PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/redis)
+target_compile_options(redis_dict PRIVATE -Wno-implicit-fallthrough -Wno-overflow)
+
 add_executable(db_table_perf db_table_perf.cpp)
 target_link_libraries(db_table_perf PRIVATE
     incomplete-imdragonfly
     net
     third_party_deps
+    redis_dict
 )
 target_include_directories(db_table_perf PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/net
+    ${CMAKE_CURRENT_SOURCE_DIR}/redis
 )
