@@ -228,6 +228,12 @@ public:
         slotb_.Clear();
     }
 
+    void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe) {
+        assert(slot_id < finger_arr_.size());
+        finger_arr_[slot_id] = meta_hash;
+        slotb_.SetSlot(slot_id, probe);    
+    }
+
     void ClearStashPtrs() {
         stash_busy_ = 0;
         stash_pos_ = 0;
@@ -709,7 +715,7 @@ void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
     assert(slot < kSlotNum);
     key[slot] = std::forward<U>(u);
     value[slot] = std::forward<V>(v);
-    this->SetStash(slot, meta_hash, probe);  // not same   
+    this->SetHash(slot, meta_hash, probe);  // not same   
 }
 template <typename Key, typename Value, typename Policy>
 template <typename This, typename Cb>
@@ -830,8 +836,8 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
         int stash_slot = bucket_[kBucketNum + stash_pos].TryInsertToBucket(
             std::forward<U>(key), std::forward<V>(value), meta_hash, false);
         if (stash_slot >= 0) {
-        target.SetStashPtr(stash_pos, meta_hash, &neighbor);
-        return Iterator{PhysicalBid(kBucketNum + stash_pos), uint8_t(stash_slot)};
+            target.SetStashPtr(stash_pos, meta_hash, &neighbor);
+            return Iterator{PhysicalBid(kBucketNum + stash_pos), uint8_t(stash_slot)};
         }
     }
 

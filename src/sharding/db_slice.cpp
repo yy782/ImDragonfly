@@ -34,6 +34,9 @@ DbSlice::ItAndUpdater DbSlice::FindMutable(const Context& cntx, std::string_view
   return std::move(FindMutableInternal(cntx, key, std::nullopt).value());
 }
 DbSlice::ConstIterator DbSlice::FindReadOnly(const Context& cntx, std::string_view key) const {
+
+    
+
     auto res = FindInternal(cntx, key, std::nullopt, UpdateStatsMode::kReadStats);
     return {*res, StringOrView::FromView(key)};
 }
@@ -56,6 +59,9 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
 }
 auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optional<unsigned> req_obj_type,
                            UpdateStatsMode stats_mode) const -> OpResult<PrimeIterator> {
+
+    std::cout << this->shard_id_  << "Find" << std::endl;
+
     if (!IsDbValid(cntx.db_index_)) {  // Can it even happen?
         return OpStatus::KEY_NOTFOUND;
     }
@@ -83,6 +89,9 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
 
 facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFind(const Context& cntx, std::string_view key,
                                                    std::optional<unsigned> req_obj_type) {
+
+  
+
   return AddOrFindInternal(cntx, key, req_obj_type);
 }
 facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdate(const Context& cntx, std::string_view key,
@@ -108,7 +117,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
         if (res->IsOccupied()) {
             return ItAndUpdater{.it_ = it, .is_new_ = false};
         } else {
-        res = OpStatus::KEY_NOTFOUND;
+            res = OpStatus::KEY_NOTFOUND;
         }
     } else if (res == OpStatus::WRONG_TYPE) {
         return OpStatus::WRONG_TYPE;
@@ -116,6 +125,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
     auto status = res.status();
     PrimeIterator it;
     try {
+        std::cout << this->shard_id_ << "InsertNew" << std::endl;
         it = db.prime_.InsertNew(key, PrimeValue{});
     } catch (std::bad_alloc& e) {
         return OpStatus::WRONG_TYPE; // 这里的错误类型不太准确，但我们没有更合适的选项了

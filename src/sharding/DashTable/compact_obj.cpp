@@ -5,70 +5,62 @@
 namespace dfly{
 
 
-void CompactObj::SetString(std::string_view str) {
-    u_.str_=str;
-}
-
-CompactObj& CompactObj::operator=(CompactObj&& o) noexcept {
-    SetMeta(o.taglen_);
-
-    u_.str_=o.u_.str_;
-
-    return *this;
-}
-
-void CompactObj::SetMeta(uint8_t taglen) {
-    taglen_ = taglen;
-}
 
 uint64_t CompactObj::HashCode() const {
-    return std::hash<std::string>{}(u_.str_); // !!!!!!!!!!!!!!!!!!!
+        switch (tag_)
+        {
+        case INT_TAG:
+            return std::hash<int64_t>{}(u_.ival_);
+        case STR_TAG:
+            return std::hash<std::string>{}(u_.str_);
+        case TTL_STR_TAG:
+            return std::hash<std::string>{}(u_.ttl_str_.str_); // 这里简化处理了，注意一下
+        default:
+            
+            LOG(FATAL) << "Invalid tag: " << tag_;
+            return 0;
+        }      
+
 }
 
 uint64_t CompactObj::HashCode(std::string_view str) {
   return std::hash<std::string_view>{}(str);
 }
 
-void CompactObj::Reset() {
-    taglen_ = 0;
-}
+
 
 
 CompactObjType CompactObj::ObjType() const {
     return OBJ_STRING;
 }
 
-bool CompactObj::operator==(const CompactObj& o) noexcept{
-    return u_.str_==o.u_.str_;
-}
+
 
 
 void CompactKey::SetExpireTime(uint64_t abs_ms) {
-    if (taglen_ == SDS_TTL_TAG) {
-        u_.str_ttl_.exp_ms_ = abs_ms;
+    if (tag_ == TTL_STR_TAG) {
+        u_.ttl_str_.exp_ms_ = abs_ms;
         return;
     }
 
-    u_.str_ttl_.str_ = u_.str_;
-    u_.str_ttl_.exp_ms_ = abs_ms;
-    taglen_ = SDS_TTL_TAG;
+    u_.ttl_str_.str_ = std::move(u_.str_);
+    u_.ttl_str_.exp_ms_ = abs_ms;
+    tag_ = TTL_STR_TAG;
 }
 
 bool CompactKey::ClearExpireTime() {
-    if (taglen_ != SDS_TTL_TAG)
+    if (tag_ != TTL_STR_TAG)
         return false;
 
-    std::string str=u_.str_ttl_.str_;
-    SetMeta(18);
-
+    std::string str=std::move(u_.ttl_str_.str_); // 会有问题吗
     SetString(str);
     return true;
 }
 
 uint64_t CompactKey::GetExpireTime() const {
-    if (taglen_ != SDS_TTL_TAG)
+    if (tag_ != TTL_STR_TAG)
         return 0;
-    return u_.str_ttl_.exp_ms_;
+    return u_.ttl_str_.exp_ms_;
 }
 
 

@@ -80,6 +80,9 @@ private:
 
 
 facade::OpResult<void> SetCmd::Set(const SetParams& params, std::string_view key, std::string_view value) {
+
+
+
     auto& db_slice = op_args_.GetDbSlice();
     auto op_res = db_slice.AddOrFind(op_args_.db_cntx_, key, std::nullopt);
 
@@ -165,8 +168,10 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 
     auto& sparams = std::get<SetCmd::SetParams>(params_result); // 获取解析后的 SetParams 结构体
 
-    auto cb = [&](Transaction* t, EngineShard* shard)-> OpResult<void> {
-        return SetCmd(t->GetOpArgs(shard)).Set(sparams, key, value);
+    auto cb = [key = std::string(key), 
+           value = std::string(value), 
+           sparams](Transaction* t, EngineShard* shard)-> OpResult<void> {
+        return SetCmd(t->GetOpArgs(shard)).Set(sparams, std::string_view(key), std::string_view(value));
     };
 
     auto result = co_await cmd::SingleHopT(cb);
@@ -184,8 +189,15 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 }
 
 CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
-    auto cb = [key = args[0]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
+
+
+    auto cb = [key = std::string(args[1])](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
         auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
+
+        if (it_res.GetInnerIt().owner() == nullptr) { // 没找到
+            return OpStatus::KEY_NOTFOUND;
+        }
+
 
         return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
     };
