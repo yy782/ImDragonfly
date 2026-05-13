@@ -65,6 +65,8 @@ public:
     CompactObj& operator=(CompactObj&& o) noexcept {
         switch (o.tag_)
         {
+        case 0:
+            break;
         case INT_TAG:
             SetInt(o.u_.ival_);
             break;
@@ -75,8 +77,7 @@ public:
             SetTtlStr(o.u_.ttl_str_);
             break;
         default:
-            if (is_key_)
-                LOG(FATAL) << "Invalid tag: " << o.tag_; // 插入默认值会没有标签
+            LOG(FATAL) << "Invalid tag: " << o.tag_; // 插入默认值会没有标签
             break;
         }
 
@@ -86,6 +87,8 @@ public:
         if (tag_ != o.tag_) return false;
         switch (tag_)
         {
+        case 0:
+            return true; // 有这种情况吗，调试可以记录一下
         case INT_TAG:
             return o.u_.ival_ == u_.ival_;
         case STR_TAG:
@@ -93,8 +96,7 @@ public:
         case TTL_STR_TAG:
             return o.u_.ttl_str_ == u_.ttl_str_;
         default:
-            if (is_key_)
-                LOG(FATAL) << "Invalid tag: " << o.tag_;
+            LOG(FATAL) << "Invalid tag: " << o.tag_;
             return false;
         }        
     }
@@ -106,6 +108,8 @@ public:
         switch (tag_)
         {
             using std::string;
+            case 0:
+                break;
             case INT_TAG:
                 break;
             case STR_TAG:
@@ -115,8 +119,7 @@ public:
                 u_.ttl_str_.~TtlString();
                 break;
             default:
-                if (is_key_)
-                    LOG(FATAL) << "Invalid tag: " << tag_;
+                LOG(FATAL) << "Invalid tag: " << tag_;
                 break;
         }
         tag_ = 0;
@@ -146,8 +149,7 @@ public:
         case TTL_STR_TAG:
             return u_.ttl_str_.str_;
         default:
-            if (is_key_)
-                LOG(FATAL) << "Invalid tag: " << tag_;
+            LOG(FATAL) << "Invalid tag: " << tag_;
             return {};
         }         
     }
@@ -164,8 +166,7 @@ public:
         case TTL_STR_TAG:
             return u_.ttl_str_.str_;
         default:
-            if (is_key_)
-                LOG(FATAL) << "Invalid tag: " << tag_;
+            LOG(FATAL) << "Invalid tag: " << tag_;
             return {};
         } 
 
@@ -191,7 +192,10 @@ protected:
     }u_;
 
     const bool is_key_ : 1; 
-    uint8_t tag_ : 5;       
+    uint8_t tag_ : 5;   
+    
+    
+
 };
 
 struct CompactKey : public CompactObj {
