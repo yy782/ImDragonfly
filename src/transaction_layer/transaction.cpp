@@ -21,7 +21,7 @@ void Transaction::InitByArgs(Namespace* ns, DbIndex index, ::cmn::CmdArgList arg
     ns_ = ns;
     db_cntx_ = DbContext(ns, index, util::GetCurrentTimeMs()); 
     full_args_ = args;
-    auto key = args[0];
+    auto key = args.size() > 1 ? args[1] : "";
     unique_shard_id_ = Shard(key); 
 }
 

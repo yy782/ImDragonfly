@@ -1,10 +1,7 @@
 #pragma once
 
 
-/*
-incomplete type 类型不完整
 
-*/
 
 #include <atomic>
 #include <cstring>
@@ -83,6 +80,9 @@ public:
     
     template <typename U, typename V> 
     iterator InsertNew(U&& key, V&& value){
+
+        
+
         DefaultEvictionPolicy policy;
         return InsertNew(std::forward<U>(key), std::forward<V>(value), policy);        
     }    
@@ -249,8 +249,8 @@ public:
             ((owner_->segment_[seg_id_]->IsBusy(bucket_id_, slot_id_)));
     }
 
-    Owner& owner() const {
-        return *owner_;
+    Owner* owner() const {
+        return owner_;
     }
 
     friend bool operator==(const Iterator& lhs, const Iterator& rhs) {

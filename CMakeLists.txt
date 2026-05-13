@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_TESTS "Build tests" ON)
 
 # cmake -DBUILD_TESTING=OFF -DHELIO_BUILD_TESTS=OFF ..
 # 开启 Debug/Release 模式
@@ -60,9 +60,11 @@ endif()
 add_subdirectory(net)
 add_subdirectory(src)
 # 测试
-if(BUILD_TESTS)
-    add_subdirectory(test)
-endif()
+
+add_subdirectory(test)
+# if(BUILD_TESTS)
+    
+# endif()
 
 # 主程序
 add_executable(imdragonfly main.cpp)
