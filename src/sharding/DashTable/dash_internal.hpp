@@ -9,15 +9,6 @@ namespace dfly {
 namespace detail {
 
 // SlotBitmap
-// 模式1：单整数模式
-// ┌─────────────────────────────────────────────────────────────────┐
-// │                    单个 uint32_t (32 位)                        │
-// ├───────────────┬───────────────┬───────────────┬───────────────┤
-// │   高 14 位     │   中 14 位     │   低 4 位     │               │
-// │   (busy 位图)  │   (probe 位图) │(槽位计数size_)│               │
-// │   位 18-31     │   位 4-17      │   位 0-3      │               │
-// └───────────────┴───────────────┴───────────────┴───────────────┘
-// 模式2：双整数模式
 // ┌─────────────────────────────────────────────────────────────────┐
 // │                    第一个 uint32_t                              │
 // ├─────────────────────────────────────────────────────────────────┤
@@ -35,20 +26,15 @@ namespace detail {
 template <unsigned NUM_SLOTS> 
 class SlotBitmap {
     static_assert(NUM_SLOTS > 0 && NUM_SLOTS <= 28); // 超过 28 个槽位，单个 uint32_t（32 位）存不下所有状态
-    static constexpr bool SINGLE = NUM_SLOTS <= 14; // 是否可以使用单 32 位整数存储位图 , 每个槽位需要 2 位信息（busy + probe）
-    static constexpr unsigned kLen = SINGLE ? 1 : 2;
+    static constexpr unsigned kLen = 2;
     static constexpr unsigned kAllocMask = (1u << NUM_SLOTS) - 1; // 槽位掩码 ， 用于操作高 14 位的 busy 位图
-    static constexpr unsigned kBitmapLenMask = (1 << 4) - 1; // 长度掩码 , 对应已用槽位数量
 
 public:
     uint32_t GetProbe(bool probe) const {
-        if constexpr (SINGLE)
-            return ((val_[0].d >> 4) & kAllocMask) ^ ((!probe) * kAllocMask);
-        else
-            return (val_[1].d & kAllocMask) ^ ((!probe) * kAllocMask);
+        return (val_[1].d & kAllocMask) ^ ((!probe) * kAllocMask);
     }
     uint32_t GetBusy() const {
-        return SINGLE ? val_[0].d >> 18 : val_[0].d;
+        return val_[0].d;
     }
 
     bool IsFull() const {
@@ -56,7 +42,7 @@ public:
     }
 
     unsigned Size() const {
-        return SINGLE ? (val_[0].d & kBitmapLenMask) : __builtin_popcount(val_[0].d);
+        return __builtin_popcount(val_[0].d);
     }
     int FindEmptySlot() const {
         uint32_t mask = ~(GetBusy());
@@ -65,89 +51,45 @@ public:
         return slot;
     }
     void ClearSlots(uint32_t mask){
-        if (SINGLE) {
-            uint32_t count = __builtin_popcount(mask);
-            assert(count <= (val_[0].d & 0xFF));
-            mask = (mask << 4) | (mask << 18);
-            val_[0].d &= ~mask;
-            val_[0].d -= count;
-        } else {
-            val_[0].d &= ~mask;
-            val_[1].d &= ~mask;
-        }
+        val_[0].d &= ~mask;
+        val_[1].d &= ~mask;
     }
 
 
     void Clear() {
-        if (SINGLE) {
-            val_[0].d = 0;
-        } else {
-            val_[0].d = val_[1].d = 0;
-        }
+        val_[0].d = val_[1].d = 0;
     }
 
     void ClearSlot(unsigned index)
     {
         assert(Size() > 0);
-        if constexpr (SINGLE) {
-            uint32_t new_bitmap = val_[0].d & 
-                (~(1u << (index + 18))) & (~(1u << (index + 4)));
-            new_bitmap -= 1;
-            val_[0].d = new_bitmap;
-        } else {
-            uint32_t mask = 1u << index;
-            val_[0].d &= ~mask;
-            val_[1].d &= ~mask;
-        }        
+        uint32_t mask = 1u << index;
+        val_[0].d &= ~mask;
+        val_[1].d &= ~mask;
+             
     }
 
     void SetSlot(unsigned index, bool probe){
-        if constexpr (SINGLE) {
-            assert(((val_[0].d >> (index + 18)) & 1) == 0);
-            val_[0].d |= (1 << (index + 18));
-            val_[0].d |= (unsigned(probe) << (index + 4));
-
-            assert((val_[0].d & kBitmapLenMask) < NUM_SLOTS);
-            ++val_[0].d;
-            assert(__builtin_popcount(val_[0].d >> 18) == (val_[0].d & kBitmapLenMask));
-        } else {
-            assert(((val_[0].d >> index) & 1) == 0);
-            val_[0].d |= (1u << index);
-            val_[1].d |= (unsigned(probe) << index);
-        }
+        assert(((val_[0].d >> index) & 1) == 0);
+        val_[0].d |= (1u << index);
+        val_[1].d |= (unsigned(probe) << index);
     }
 
     bool ShiftLeft(){
         constexpr uint32_t kBusyLastSlot = (kAllocMask >> 1) + 1;
-        bool res;
-        if constexpr (SINGLE) {
-            constexpr uint32_t kShlMask = kAllocMask - 1;  // reset lsb
-            res = (val_[0].d & (kBusyLastSlot << 18)) != 0;
-            uint32_t l = (val_[0].d << 1) & (kShlMask << 4);
-            uint32_t p = (val_[0].d << 1) & (kShlMask << 18);
-            val_[0].d = __builtin_popcount(p) | l | p;
-        } else {
-            res = (val_[0].d & kBusyLastSlot) != 0;
-            val_[0].d <<= 1;
-            val_[0].d &= kAllocMask;
-            val_[1].d <<= 1;
-            val_[1].d &= kAllocMask;
-        }
+        bool res = (val_[0].d & kBusyLastSlot) != 0;
+        val_[0].d <<= 1;
+        val_[0].d &= kAllocMask;
+        val_[1].d <<= 1;
+        val_[1].d &= kAllocMask;
+        
         return res;        
     }
 
     void Swap(unsigned slot_a, unsigned slot_b)
     {
-        if (slot_a > slot_b)
+        if (slot_a > slot_b) {
             std::swap(slot_a, slot_b);
-
-        if constexpr (SINGLE) {
-            uint32_t a = (val_[0].d << (slot_b - slot_a)) ^ val_[0].d;
-            uint32_t bm = (1 << (slot_b + 4)) | (1 << (slot_b + 18));
-            a &= bm;
-            a |= (a >> (slot_b - slot_a));
-            val_[0].d ^= a;
-        } else {
             uint32_t a = (val_[0].d << (slot_b - slot_a)) ^ val_[0].d;
             a &= (1 << slot_b);
             a |= (a >> (slot_b - slot_a));
@@ -156,8 +98,9 @@ public:
             a = (val_[1].d << (slot_b - slot_a)) ^ val_[1].d;
             a &= (1 << slot_b);
             a |= (a >> (slot_b - slot_a));
-            val_[1].d ^= a;
+            val_[1].d ^= a;            
         }
+
     }
 
 private:
@@ -230,6 +173,7 @@ public:
 
     void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe) {
         assert(slot_id < finger_arr_.size());
+
         finger_arr_[slot_id] = meta_hash;
         slotb_.SetSlot(slot_id, probe);    
     }
@@ -244,14 +188,10 @@ public:
     bool HasStash() const {
         return stash_busy_ & kStashPresentBit;
     }
-
-    // void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe);
-
     bool HasStashOverflow() const {
         return overflow_count_ > 0;
     }
-    // template <typename F>
-    // std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const;
+
 
     void Swap(unsigned slot_a, unsigned slot_b) {
         slotb_.Swap(slot_a, slot_b);
@@ -1146,32 +1086,6 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
 
     return found;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

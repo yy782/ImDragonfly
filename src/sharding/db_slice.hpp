@@ -142,15 +142,14 @@ private:
 
 template <typename T> 
 void DbSlice::IteratorT<T>::LaunderIfNeeded() const {
-    //  //  如果底层迭代器本身已无效，直接返回
-    // if (!IsValid(it_)) {   // TODO
-    //     return;
-    // }
-
-    // if (!it_.IsOccupied() || it_->first != key_.view()) {
-    //     //  迭代器已失效，根据原 key 重新查找
-    //     it_ = it_.owner().Find(key_.view());
-    // }
+     //  如果底层迭代器本身已无效，直接返回
+    if (!IsValid(it_)) {  
+        return;
+    }
+    if (!it_.IsOccupied() || it_->first != key_.view()) {
+        //  迭代器已失效，根据原 key 重新查找
+        it_ = it_.owner()->Find(key_.view());
+    }
 
 }
 }  // namespace dfly

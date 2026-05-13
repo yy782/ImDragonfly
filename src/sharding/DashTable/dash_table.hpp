@@ -45,7 +45,6 @@ public:
     using Cursor = detail::DashCursor;
 
 
-    struct HotBuckets;
 
 
     struct DefaultEvictionPolicy{
@@ -56,13 +55,12 @@ public:
             return true;
         }
 
-        void OnMove(Cursor source, Cursor dest) {
-            (void)source;
-            (void)dest;
+        void OnMove(Cursor, Cursor) {
+
         }
 
-        void RecordSplit(SegmentType* segment) {
-            (void)segment;
+        void RecordSplit(SegmentType*) {
+
         }        
 
     };
@@ -80,9 +78,6 @@ public:
     
     template <typename U, typename V> 
     iterator InsertNew(U&& key, V&& value){
-
-        
-
         DefaultEvictionPolicy policy;
         return InsertNew(std::forward<U>(key), std::forward<V>(value), policy);        
     }    
@@ -284,7 +279,7 @@ private:
 };
 
 template <typename _Key, typename _Value, typename Policy>
-struct DashTable<_Key, _Value, Policy>::BucketSet { // ？？？？
+struct DashTable<_Key, _Value, Policy>::BucketSet { 
     auto buckets() const {
         bool is_all = limit_ > ids_.size(); // 判断是连续范围还是离散列表
         return std::views::iota(0u, limit_) | //   生成 0..limit_-1 的整数序列 
@@ -342,12 +337,7 @@ template <typename _Key, typename _Value, typename Policy>
 template <typename U>
 auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
     uint64_t key_hash = DoHash(key);
-    uint32_t seg_id = SegmentId(key_hash);  // seg_id takes up global_depth_ high bits.
-
-    // Hash structure is like this: [SSUUUUBF], where S is segment id, U - unused,
-    // B - bucket id and F is a fingerprint. Segment id is needed to identify the correct segment.
-    // Once identified, the segment instance uses the lower part of hash to locate the key.
-    // It uses 8 least significant bits for a fingerprint and few more bits for bucket id.
+    uint32_t seg_id = SegmentId(key_hash); 
     if (auto seg_it = segment_[seg_id]->FindIt(key_hash, EqPred(key)); seg_it.found()) {
         return {this, seg_id, seg_it.index, seg_it.slot};
     }
@@ -376,7 +366,7 @@ DashTable<_Key, _Value, Policy>::ConstructSegment(uint8_t depth, uint32_t id) {
     auto* mr = segment_.get_allocator().resource();
     PMR_NS::polymorphic_allocator<SegmentType> pa(mr);
     SegmentType* res = pa.allocate(1);
-    pa.construct(res, depth, id, mr);  //   new SegmentType(depth);
+    pa.construct(res, depth, id, mr);  
     bucket_count_ += res->num_buckets();
     return res;
 }
@@ -385,7 +375,7 @@ DashTable<_Key, _Value, Policy>::ConstructSegment(uint8_t depth, uint32_t id) {
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename Cb>
-void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) { // ????
+void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) {
     size_t i = 0;
     while (i < segment_.size()) {
         auto* seg = segment_[i];
@@ -409,20 +399,6 @@ void DashTable<_Key, _Value, Policy>::Clear() {
 
     IterateDistinct(cb);
     size_ = 0;
-
-    // Consider the following case: table with 8 segments overall, 4 distinct.
-    // S1, S1, S1, S1, S2, S3, S4, S4
-    /* This corresponds to the tree:
-                R
-            /  \
-            S1   /\
-                /\ S4
-            S2 S3
-        We want to collapse this tree into, say, 2 segment directory.
-        That means we need to keep S1, S2 but delete S3, S4.
-        That means, we need to move representative segments until we reached the desired size
-        and then erase all other distinct segments.
-    **********/
     if (global_depth_ > initial_depth_) {
         PMR_NS::polymorphic_allocator<SegmentType> pa(segment_.get_allocator());
         using alloc_traits = std::allocator_traits<decltype(pa)>;
@@ -472,11 +448,11 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
         };
 
         if (mode == InsertMode::kForceInsert) {
-            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb);  // 强制插入
-            res = it.found();  // 键已存在
+            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
+            res = it.found();  
         } else {
             std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
-                                            EqPred(key), move_cb); // 正常插入，会检查重复
+                                            EqPred(key), move_cb); 
         }
 
         if (res) {  // success
@@ -488,66 +464,7 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
         if (it.found()) {
             return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
         }
-
-        // if constexpr (EvictionPolicy::can_evict || EvictionPolicy::can_gc) {
-
-        //     uint8_t bid[HotBuckets::kRegularBuckets];
-        //     SegmentType::FillProbeArray(key_hash, bid);
-        //     HotBuckets hotspot;
-        //     hotspot.key_hash = key_hash;
-
-        //     for (unsigned j = 0; j < HotBuckets::kRegularBuckets; ++j) {
-        //         hotspot.probes.by_type.regular_buckets[j] = bucket_iterator{this, target_seg_id, bid[j]};
-        //     }
-
-        //     for (unsigned i = 0; i < SegmentType::kStashBucketNum; ++i) {
-        //         hotspot.probes.by_type.stash_buckets[i] =
-        //             bucket_iterator{this, target_seg_id, uint8_t(Policy::kBucketNum + i), 0};
-        //     }
-        //     hotspot.num_buckets = HotBuckets::kNumBuckets;
-        //     if constexpr (EvictionPolicy::can_gc) { //  GC 回收（垃圾回收）
-        //         unsigned res = ev.GarbageCollect(hotspot, this);
-        //         garbage_collected_ += res;
-        //         if (res) {
-        //             // We succeeded to gc. Lets continue with the momentum.
-        //             // In terms of API abuse it's an awful hack, just to see if it works.
-        //             /*unsigned start = (bid[HotBuckets::kNumBuckets - 1] + 1) % kLogicalBucketNum;
-        //             for (unsigned i = 0; i < HotBuckets::kNumBuckets; ++i) {
-        //                 uint8_t id = (start + i) % kLogicalBucketNum;
-        //                 buckets.probes.arr[i] = bucket_iterator{this, target_seg_id, id};
-        //             }
-        //             garbage_collected_ += ev.GarbageCollect(buckets, this);
-        //             */
-        //         continue;
-        //         }
-        //     }
-
-        //     auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
-        //     unsigned moved = target->UnloadStash(hash_fn, move_cb); // 卸载 Stash
-        //     if (moved > 0) {
-        //         stash_unloaded_ += moved;
-        //         continue;
-        //     }
-
-        //     // We evict only if our policy says we can not grow
-        //     if constexpr (EvictionPolicy::can_evict) { //  驱逐 (Eviction)
-        //         bool can_grow = ev.CanGrow(*this);
-        //         if (can_grow) {
-        //         consider_throw = false;
-        //         } else {
-        //         unsigned res = ev.Evict(hotspot, this);
-        //         if (res)
-        //             continue;
-        //         }
-        //     }
-        // }
-
-        // if (consider_throw && !ev.CanGrow(*this)) {
-        //     throw std::bad_alloc{};
-        // }
-
-        // Split the segment.
-        if (target->local_depth() == global_depth_) { // 段分裂 (Split)
+        if (target->local_depth() == global_depth_) { 
             IncreaseDepth(global_depth_ + 1);
 
             target_seg_id = SegmentId(key_hash);
@@ -575,20 +492,15 @@ void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev)
 
     auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
 
-    // remove current segment bucket count.
-    bucket_count_ -= (source->num_buckets() + target->num_buckets());
+    // bucket_count_ 缺少了两次操作
 
     source->Split(
         std::move(hash_fn), target,
         [&](uint32_t segment_from, detail::PhysicalBid from, uint32_t segment_to,
             detail::PhysicalBid to) {
-            // OnMove is used to notify eviction policy about the moves across
-            // buckets/segments during the split.
+
             ev.OnMove(Cursor{global_depth_, segment_from, from}, Cursor{global_depth_, segment_to, to});
         });
-
-    // add back the updated bucket count.
-    bucket_count_ += (target->num_buckets() + source->num_buckets());
     ++unique_segments_;
 
     for (size_t i = target_id; i < start_idx + chunk_size; ++i) {
