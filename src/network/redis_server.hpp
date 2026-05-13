@@ -16,6 +16,8 @@
 namespace dfly{
 using base::UringProactorPtr;
 inline CommandRegistry* CIs = nullptr;
+class RedisServer;
+inline RedisServer* ser = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
@@ -35,16 +37,14 @@ public:
         while (true) {
             auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
-            std::cout << "Read " << r << " bytes from fd: " << fd << std::endl;
-
             if (r>0) {
                 RecvBuf_.hasWritten(r);
                 auto res = RecvBuf_.ParseRESP();
                 if (res.empty()) continue;
                 CommandId* ci = CIs->Find(res[0]);
 
-                if (!ci) { // 这里不正确
-                    SendStatus(std::string("OK"));
+                if (!ci) { 
+                    SendERROR();
                     continue;
                 }
 
@@ -138,6 +138,7 @@ public:
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
+        ser = this;
     }
 
     ~RedisServer() {
@@ -189,10 +190,13 @@ public:
     }
     
     void Stop() {
-        isRuning = false;
-        pool_.stop();
-
-        shard_set->Shutdown();
+        main_proactor_->DispatchBrief([this](){
+            isRuning = false;
+            main_proactor_->stop();
+            shard_set->Shutdown();
+            pool_.stop();
+            
+        });
     }
     
 private:
@@ -211,6 +215,7 @@ private:
     bool isRuning = false;
 
 };
+
 
 
 }

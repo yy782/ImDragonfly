@@ -235,6 +235,22 @@ void GenericFamily::Ttl(CmdArgList args, CommandContext* cmd_cntx) {
     CmdTtl(args[0], cmd_cntx);
 }
 
+void GenericFamily::Client_Info(CmdArgList args, CommandContext* cmd_cntx) {
+
+    std::vector<std::string_view> cli = {"CLIENT", "SETINFO", "LIB-NAME", "redis-py"};
+    std::span<const std::string_view> cl(cli);
+    auto conn = cmd_cntx->conn_cntx()->owner_; 
+    if (cl.size() != args.size() || 
+        !std::equal(cl.begin(), cl.end(), args.begin())) {
+        conn->SendERROR();
+    }else {
+        conn->SendStatus("OK");
+    }
+}
+
+void GenericFamily::ShutDown(CmdArgList, CommandContext*) {
+    ser->Stop();
+}
 
 
 // void GenericFamily::Select(CmdArgList args, CommandContext* cmd_cntx) {
@@ -251,6 +267,8 @@ void GenericFamily::Register(CommandRegistry* registry) {
       << CI{"EXISTS", -2, 1, -1}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", -3, 1, 1}.SetHandler(&GenericFamily::Expire)
       << CI{"TTL", 2, 1, 1}.SetHandler(&GenericFamily::Ttl)
+      << CI{"CLIENT", -4, 0, 0}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"SHUTDOWN", 1, 0, 0}.SetHandler(&GenericFamily::ShutDown)
       ;
 }
 
