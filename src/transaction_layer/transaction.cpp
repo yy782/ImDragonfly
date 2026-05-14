@@ -2,7 +2,7 @@
 #include "transaction.hpp"
 
 #include "sharding/engine_shard_set.hpp"
-#include "command_layer/parsed_command.hpp"
+
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/db_slice.hpp"
 #include "command_layer/cmn_types.hpp"

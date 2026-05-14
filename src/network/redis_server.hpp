@@ -4,7 +4,7 @@
 #include "sharding/engine_shard_set.hpp"
 #include "redis/facade/resp_buf.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "command_layer/parsed_command.hpp"
+
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
 #include "command_layer/conn_context.hpp"
