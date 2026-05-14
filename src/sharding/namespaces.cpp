@@ -59,16 +59,13 @@ Namespace& Namespaces::GetDefaultNamespace() const {
 
 Namespace& Namespaces::GetOrInsert(std::string_view ns) {
     {
-        // Try to look up under a shared lock
         std::shared_lock<std::shared_mutex> lock(rw_mutex_);
         auto it = namespaces_.find(std::string(ns));            
         if (it != namespaces_.end()) {
             return it->second;
         }
     }
-
     {
-        // Key was not found, so we create create it under unique lock
         std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         return namespaces_[std::string(ns)];
     }

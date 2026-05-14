@@ -200,7 +200,7 @@ public:
 
 
     template <typename F>
-    std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const{
+    std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const{ // 遍历 Stash 指针并查找匹配指纹
         unsigned om = is_probe ? stash_probe_mask_ : ~stash_probe_mask_;
         unsigned ob = stash_busy_;
 
@@ -229,7 +229,6 @@ public:
     }
 
     unsigned UnsetStashPtr(uint8_t fp_hash, unsigned stash_pos, BucketBase* next){
-  /*also needs to ensure that this meta_hash must belongs to other bucket*/
         bool clear_success = ClearStash(fp_hash, stash_pos, false);
         unsigned res = 0;
 
@@ -256,20 +255,10 @@ public:
 protected:
     uint32_t CompareFP(uint8_t fp) const{
         static_assert(FpArray{}.size() <= 16);
-
-        // Replicate 16 times fp to key_data.
         const __m128i key_data = _mm_set1_epi8(fp);
-
-        // Loads 16 bytes of src into seg_data.
         __m128i seg_data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(finger_arr_.data()));
-
-        // compare 16-byte vectors seg_data and key_data, dst[i] := ( a[i] == b[i] ) ? 0xFF : 0.
         __m128i rv_mask = _mm_cmpeq_epi8(seg_data, key_data);
-
-        // collapses 16 msb bits from each byte in rv_mask into mask.
         int mask = _mm_movemask_epi8(rv_mask);
-
-        // Note: Last 2 operations can be combined in skylake with _mm_cmpeq_epi8_mask.
         return mask;        
     }
 
@@ -628,7 +617,7 @@ int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key, V&& new_
                                                             uint8_t meta_hash, bool probe)
 {
     if (this->IsFull()) { // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
-        return -1;  // no free space in the bucket.
+        return -1;  
     }
 
     int slot = this->slotb_.FindEmptySlot();
@@ -655,7 +644,7 @@ void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
     assert(slot < kSlotNum);
     key[slot] = std::forward<U>(u);
     value[slot] = std::forward<V>(v);
-    this->SetHash(slot, meta_hash, probe);  // not same   
+    this->SetHash(slot, meta_hash, probe);  
 }
 template <typename Key, typename Value, typename Policy>
 template <typename This, typename Cb>
@@ -684,18 +673,10 @@ auto Segment<Key, Value, Policy>::Bucket::FindByFp(uint8_t fp_hash, bool probe, 
     unsigned delta = __builtin_ctz(mask);
     mask >>= delta;
     for (unsigned i = delta; i < kSlotNum; ++i) {
-        // Filterable just by key
-        if constexpr (std::is_invocable_v<Pred, const Key_t&>) {
-            if ((mask & 1) && pred(key[i]))
-                return i;
-        }
+        static_assert(std::is_invocable_v<Pred, const Key_t&>);
 
-        // Filterable by key and value
-        if constexpr (std::is_invocable_v<Pred, const Key_t&, const Value_t&>) {
-            if ((mask & 1) && pred(key[i], value[i]))
-                return i;
-        }
-
+        if ((mask & 1) && pred(key[i]))
+            return i;
         mask >>= 1;
     };
 
@@ -768,8 +749,6 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
         on_move_cb(segment_id_, bid, prev_idx);
         return Iterator{bid, uint8_t(displace_index)};
     }
-
-    // we balance stash fill rate  by starting from y % STASH_BUCKET_NUM.
     for (unsigned i = 0; i < kStashBucketNum; ++i) {
         unsigned stash_pos = (bid + i) % kStashBucketNum;
 
@@ -787,12 +766,12 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
 
 template <typename Key, typename Value, typename Policy>
 template <typename Pred>
-auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> Iterator {
+auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> Iterator { // pred, 判断两个键是否相同
     LogicalBid bidx = HomeIndex(key_hash);
     const Bucket& target = bucket_[bidx];
     __builtin_prefetch(&target);
 
-    uint8_t fp_hash = key_hash & kFpMask;
+    uint8_t fp_hash = key_hash & kFpMask; // 用低位进行哈希指纹
     SlotId sid = target.FindByFp(fp_hash, false, pred); //  指纹查找
     if (sid != BucketType::kNanSlot) {
         return Iterator{bidx, sid};
@@ -811,11 +790,8 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
     }
 
     auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
-
-        (void)overflow_index;
-
+        (void)overflow_index; 
         assert(pos < kStashBucketNum);
-
         pos += kBucketNum;
         const Bucket& bucket = bucket_[pos];
         return bucket.FindByFp(fp_hash, false, pred);

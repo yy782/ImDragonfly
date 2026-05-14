@@ -429,47 +429,46 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
     uint64_t key_hash = DoHash(key);
     uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段, hash >> (64 - global_depth_);
 
-    while (true) {
-        assert(target_seg_id < segment_.size());
-        SegmentType* target = segment_[target_seg_id];
-        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
+    // 缺少了while(true)
+    assert(target_seg_id < segment_.size());
+    SegmentType* target = segment_[target_seg_id];
+    __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
 
-        typename SegmentType::Iterator it;
-        bool res = true;
-        unsigned num_buckets = target->num_buckets();
+    typename SegmentType::Iterator it;
+    bool res = true;
+    unsigned num_buckets = target->num_buckets();
 
-        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
-            ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
-        };
+    auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
+        ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
+    };
 
-        if (mode == InsertMode::kForceInsert) {
-            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
-            res = it.found();  
-        } else {
-            std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
-                                            EqPred(key), move_cb); 
-        }
-
-        if (res) {  // success
-            bucket_count_ += (target->num_buckets() - num_buckets);
-            ++size_;
-            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, true);
-        }
-
-        if (it.found()) {
-            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
-        }
-        if (target->local_depth() == global_depth_) { 
-            // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
-            IncreaseDepth(global_depth_ + 1);
-
-            target_seg_id = SegmentId(key_hash);
-            assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
-        }
-
-        ev.RecordSplit(target); // 统计数据告诉淘汰策略
-        Split(target_seg_id, ev);
+    if (mode == InsertMode::kForceInsert) {
+        it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
+        res = it.found();  
+    } else {
+        std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
+                                        EqPred(key), move_cb); 
     }
+
+    if (res) {  // success
+        bucket_count_ += (target->num_buckets() - num_buckets);
+        ++size_;
+        return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, true);
+    }
+
+    if (it.found()) {
+        return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
+    }
+    if (target->local_depth() == global_depth_) { 
+        // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
+        IncreaseDepth(global_depth_ + 1);
+
+        target_seg_id = SegmentId(key_hash);
+        assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
+    }
+
+    ev.RecordSplit(target); // 统计数据告诉淘汰策略
+    Split(target_seg_id, ev);
 
     return std::make_pair(iterator{}, false);
 }
@@ -477,12 +476,12 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename EvictionPolicy>
-void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) { // NO
+void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) { 
     SegmentType* source = segment_[seg_id];
 
     uint32_t chunk_size = 1u << (global_depth_ - source->local_depth()); // 该段覆盖的目录项数量
     uint32_t start_idx = seg_id & (~(chunk_size - 1)); // 覆盖范围的起始索引
-    assert(segment_[start_idx] == source && segment_[start_idx + chunk_size - 1] == source);
+
     uint32_t target_id = start_idx + chunk_size / 2; // 新段在目录中的起始位置
     SegmentType* target = ConstructSegment(source->local_depth() + 1, target_id);
 
@@ -505,7 +504,7 @@ void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev)
 }
 
 template <typename _Key, typename _Value, typename Policy>
-void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) { // NO
+void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) { 
     assert(!segment_.empty());
     assert(new_depth > global_depth_);
     size_t prev_sz = segment_.size();
