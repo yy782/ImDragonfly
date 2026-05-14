@@ -2,7 +2,7 @@
 #include "transaction.hpp"
 
 #include "sharding/engine_shard_set.hpp"
-#include "command_layer/parsed_command.hpp"
+
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/db_slice.hpp"
 #include "command_layer/cmn_types.hpp"
@@ -38,8 +38,8 @@ ShardArgs Transaction::GetShardArgs(ShardId sid) const {
     (void)sid;
 
     std::vector<IndexSlice> slice;
-    slice.emplace_back(0, 1);
-    return ShardArgs{full_args_, std::span(slice)}; // 不确定
+    slice.emplace_back(1);
+    return ShardArgs{full_args_, std::move(slice)}; // 不确定
 }
     
 

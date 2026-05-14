@@ -33,6 +33,9 @@ private:
 
     static void Select(CmdArgList args, CommandContext* cmd_cntx); // 处理 SELECT 命令，选择数据库
 
+    static void Client_Info(CmdArgList args, CommandContext* cmd_cntx);
+    static void ShutDown(CmdArgList args, CommandContext* cmd_cntx);
+
 };
 
 }  // namespace dfly

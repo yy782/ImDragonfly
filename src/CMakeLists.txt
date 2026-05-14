@@ -20,10 +20,11 @@ target_include_directories(incomplete-imdragonfly PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+target_compile_options(incomplete-imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
+
 # 链接库
 target_link_libraries(incomplete-imdragonfly PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
     net
     third_party_deps 
 )
-

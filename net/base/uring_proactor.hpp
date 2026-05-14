@@ -1,6 +1,7 @@
 #pragma once // uring_proactor.hpp  
 
 #include "util/lock_free_queue.hpp"
+#include "util/thread.hpp"
 #include "socket.hpp"
 #include <liburing.h>
 #include <sys/socket.h>
@@ -85,7 +86,7 @@ private:
     
     std::atomic<bool> running_;
     std::atomic<bool> stop_;
-    std::thread::id loop_thread_id_;
+    pthread_t loop_thread_id_;
     std::mutex submit_mutex_;
     
     static constexpr uint64_t WAKEUP_COOKIE = 0xFFFFFFFFFFFFFFFFULL;

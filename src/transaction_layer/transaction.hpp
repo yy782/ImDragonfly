@@ -20,7 +20,7 @@ using ::cmn::CmdArgList;
 
 class CommandId;
 class Namespace;
-
+class RedisSession;
 
 class Transaction{
 public:
@@ -60,6 +60,8 @@ public:
     void Scheduling(std::coroutine_handle<> handle, RunnableType cb); // not same
 
 
+    RedisSession*& debug_owner() {return owner_;}
+
 private:
     const CommandId* cid_ = nullptr;
 
@@ -70,6 +72,10 @@ private:
 
     Namespace* ns_ = nullptr; // 事务所属的命名空间
     
+
+    // For DEBUG
+
+    RedisSession* owner_;
 
 };
 

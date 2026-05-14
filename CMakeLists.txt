@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(BUILD_TESTS "Build tests" ON)
-
+# cmake CMAKE_BUTLD_TYPE = Release ..
 # cmake -DBUILD_TESTING=OFF -DHELIO_BUILD_TESTS=OFF ..
 # 开启 Debug/Release 模式
 if(NOT CMAKE_BUILD_TYPE)
@@ -22,9 +22,8 @@ include(cmake/third_party.cmake)
 
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(WARNING_OPTIONS
+    set(CXX_WARNING_OPTIONS
         -g -O0
-        -std=c++20
         -rdynamic
         -march=native
         -Wall
@@ -39,9 +38,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         -Wwrite-strings
     )
 else()
-    set(WARNING_OPTIONS
+    set(CXX_WARNING_OPTIONS
         -O3                     # 生产优化
-        -std=c++20
         -march=native
         -DNDEBUG
         -Wall
@@ -52,19 +50,15 @@ else()
     )
 endif()    
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(${WARNING_OPTIONS})
-endif()
-
 # 主代码
 add_subdirectory(net)
 add_subdirectory(src)
 # 测试
 
-add_subdirectory(test)
-# if(BUILD_TESTS)
-    
-# endif()
+
+if(BUILD_TESTS)
+    add_subdirectory(test)   
+endif()
 
 # 主程序
 add_executable(imdragonfly main.cpp)
@@ -72,7 +66,7 @@ target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/net
 )
-
+target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
     incomplete-imdragonfly

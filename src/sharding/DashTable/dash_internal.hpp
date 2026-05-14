@@ -1,4 +1,7 @@
-#pragma once 
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+#pragma once
 
 #include <assert.h>
 #include <immintrin.h>
@@ -9,15 +12,6 @@ namespace dfly {
 namespace detail {
 
 // SlotBitmap
-// 模式1：单整数模式
-// ┌─────────────────────────────────────────────────────────────────┐
-// │                    单个 uint32_t (32 位)                        │
-// ├───────────────┬───────────────┬───────────────┬───────────────┤
-// │   高 14 位     │   中 14 位     │   低 4 位     │               │
-// │   (busy 位图)  │   (probe 位图) │(槽位计数size_)│               │
-// │   位 18-31     │   位 4-17      │   位 0-3      │               │
-// └───────────────┴───────────────┴───────────────┴───────────────┘
-// 模式2：双整数模式
 // ┌─────────────────────────────────────────────────────────────────┐
 // │                    第一个 uint32_t                              │
 // ├─────────────────────────────────────────────────────────────────┤
@@ -35,20 +29,15 @@ namespace detail {
 template <unsigned NUM_SLOTS> 
 class SlotBitmap {
     static_assert(NUM_SLOTS > 0 && NUM_SLOTS <= 28); // 超过 28 个槽位，单个 uint32_t（32 位）存不下所有状态
-    static constexpr bool SINGLE = NUM_SLOTS <= 14; // 是否可以使用单 32 位整数存储位图 , 每个槽位需要 2 位信息（busy + probe）
-    static constexpr unsigned kLen = SINGLE ? 1 : 2;
+    static constexpr unsigned kLen = 2;
     static constexpr unsigned kAllocMask = (1u << NUM_SLOTS) - 1; // 槽位掩码 ， 用于操作高 14 位的 busy 位图
-    static constexpr unsigned kBitmapLenMask = (1 << 4) - 1; // 长度掩码 , 对应已用槽位数量
 
 public:
     uint32_t GetProbe(bool probe) const {
-        if constexpr (SINGLE)
-            return ((val_[0].d >> 4) & kAllocMask) ^ ((!probe) * kAllocMask);
-        else
-            return (val_[1].d & kAllocMask) ^ ((!probe) * kAllocMask);
+        return (val_[1].d & kAllocMask) ^ ((!probe) * kAllocMask);
     }
     uint32_t GetBusy() const {
-        return SINGLE ? val_[0].d >> 18 : val_[0].d;
+        return val_[0].d;
     }
 
     bool IsFull() const {
@@ -56,7 +45,7 @@ public:
     }
 
     unsigned Size() const {
-        return SINGLE ? (val_[0].d & kBitmapLenMask) : __builtin_popcount(val_[0].d);
+        return __builtin_popcount(val_[0].d);
     }
     int FindEmptySlot() const {
         uint32_t mask = ~(GetBusy());
@@ -65,89 +54,45 @@ public:
         return slot;
     }
     void ClearSlots(uint32_t mask){
-        if (SINGLE) {
-            uint32_t count = __builtin_popcount(mask);
-            assert(count <= (val_[0].d & 0xFF));
-            mask = (mask << 4) | (mask << 18);
-            val_[0].d &= ~mask;
-            val_[0].d -= count;
-        } else {
-            val_[0].d &= ~mask;
-            val_[1].d &= ~mask;
-        }
+        val_[0].d &= ~mask;
+        val_[1].d &= ~mask;
     }
 
 
     void Clear() {
-        if (SINGLE) {
-            val_[0].d = 0;
-        } else {
-            val_[0].d = val_[1].d = 0;
-        }
+        val_[0].d = val_[1].d = 0;
     }
 
     void ClearSlot(unsigned index)
     {
         assert(Size() > 0);
-        if constexpr (SINGLE) {
-            uint32_t new_bitmap = val_[0].d & 
-                (~(1u << (index + 18))) & (~(1u << (index + 4)));
-            new_bitmap -= 1;
-            val_[0].d = new_bitmap;
-        } else {
-            uint32_t mask = 1u << index;
-            val_[0].d &= ~mask;
-            val_[1].d &= ~mask;
-        }        
+        uint32_t mask = 1u << index;
+        val_[0].d &= ~mask;
+        val_[1].d &= ~mask;
+             
     }
 
     void SetSlot(unsigned index, bool probe){
-        if constexpr (SINGLE) {
-            assert(((val_[0].d >> (index + 18)) & 1) == 0);
-            val_[0].d |= (1 << (index + 18));
-            val_[0].d |= (unsigned(probe) << (index + 4));
-
-            assert((val_[0].d & kBitmapLenMask) < NUM_SLOTS);
-            ++val_[0].d;
-            assert(__builtin_popcount(val_[0].d >> 18) == (val_[0].d & kBitmapLenMask));
-        } else {
-            assert(((val_[0].d >> index) & 1) == 0);
-            val_[0].d |= (1u << index);
-            val_[1].d |= (unsigned(probe) << index);
-        }
+        assert(((val_[0].d >> index) & 1) == 0);
+        val_[0].d |= (1u << index);
+        val_[1].d |= (unsigned(probe) << index);
     }
 
     bool ShiftLeft(){
         constexpr uint32_t kBusyLastSlot = (kAllocMask >> 1) + 1;
-        bool res;
-        if constexpr (SINGLE) {
-            constexpr uint32_t kShlMask = kAllocMask - 1;  // reset lsb
-            res = (val_[0].d & (kBusyLastSlot << 18)) != 0;
-            uint32_t l = (val_[0].d << 1) & (kShlMask << 4);
-            uint32_t p = (val_[0].d << 1) & (kShlMask << 18);
-            val_[0].d = __builtin_popcount(p) | l | p;
-        } else {
-            res = (val_[0].d & kBusyLastSlot) != 0;
-            val_[0].d <<= 1;
-            val_[0].d &= kAllocMask;
-            val_[1].d <<= 1;
-            val_[1].d &= kAllocMask;
-        }
+        bool res = (val_[0].d & kBusyLastSlot) != 0;
+        val_[0].d <<= 1;
+        val_[0].d &= kAllocMask;
+        val_[1].d <<= 1;
+        val_[1].d &= kAllocMask;
+        
         return res;        
     }
 
     void Swap(unsigned slot_a, unsigned slot_b)
     {
-        if (slot_a > slot_b)
+        if (slot_a > slot_b) {
             std::swap(slot_a, slot_b);
-
-        if constexpr (SINGLE) {
-            uint32_t a = (val_[0].d << (slot_b - slot_a)) ^ val_[0].d;
-            uint32_t bm = (1 << (slot_b + 4)) | (1 << (slot_b + 18));
-            a &= bm;
-            a |= (a >> (slot_b - slot_a));
-            val_[0].d ^= a;
-        } else {
             uint32_t a = (val_[0].d << (slot_b - slot_a)) ^ val_[0].d;
             a &= (1 << slot_b);
             a |= (a >> (slot_b - slot_a));
@@ -156,8 +101,9 @@ public:
             a = (val_[1].d << (slot_b - slot_a)) ^ val_[1].d;
             a &= (1 << slot_b);
             a |= (a >> (slot_b - slot_a));
-            val_[1].d ^= a;
+            val_[1].d ^= a;            
         }
+
     }
 
 private:
@@ -230,6 +176,7 @@ public:
 
     void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe) {
         assert(slot_id < finger_arr_.size());
+
         finger_arr_[slot_id] = meta_hash;
         slotb_.SetSlot(slot_id, probe);    
     }
@@ -244,14 +191,10 @@ public:
     bool HasStash() const {
         return stash_busy_ & kStashPresentBit;
     }
-
-    // void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe);
-
     bool HasStashOverflow() const {
         return overflow_count_ > 0;
     }
-    // template <typename F>
-    // std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const;
+
 
     void Swap(unsigned slot_a, unsigned slot_b) {
         slotb_.Swap(slot_a, slot_b);
@@ -260,13 +203,13 @@ public:
 
 
     template <typename F>
-    std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const{
+    std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const{ // 遍历 Stash 指针并查找匹配指纹
         unsigned om = is_probe ? stash_probe_mask_ : ~stash_probe_mask_;
         unsigned ob = stash_busy_;
 
         for (unsigned i = 0; i < kStashFpLen; ++i) {
             if ((ob & 1) && (stash_arr_[i] == fp) && (om & 1)) {
-                unsigned pos = (stash_pos_ >> (i * 2)) & 3;
+                unsigned pos = (stash_pos_ >> (i * 2)) & 3; // 从 stash_pos_ 中提取当前 Stash 指针的 2 位
                 auto sid = func(i, pos);
                 if (sid != BucketBase::kNanSlot) {
                     return std::pair<unsigned, SlotId>(pos, sid);
@@ -289,7 +232,6 @@ public:
     }
 
     unsigned UnsetStashPtr(uint8_t fp_hash, unsigned stash_pos, BucketBase* next){
-  /*also needs to ensure that this meta_hash must belongs to other bucket*/
         bool clear_success = ClearStash(fp_hash, stash_pos, false);
         unsigned res = 0;
 
@@ -316,20 +258,10 @@ public:
 protected:
     uint32_t CompareFP(uint8_t fp) const{
         static_assert(FpArray{}.size() <= 16);
-
-        // Replicate 16 times fp to key_data.
         const __m128i key_data = _mm_set1_epi8(fp);
-
-        // Loads 16 bytes of src into seg_data.
         __m128i seg_data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(finger_arr_.data()));
-
-        // compare 16-byte vectors seg_data and key_data, dst[i] := ( a[i] == b[i] ) ? 0xFF : 0.
         __m128i rv_mask = _mm_cmpeq_epi8(seg_data, key_data);
-
-        // collapses 16 msb bits from each byte in rv_mask into mask.
         int mask = _mm_movemask_epi8(rv_mask);
-
-        // Note: Last 2 operations can be combined in skylake with _mm_cmpeq_epi8_mask.
         return mask;        
     }
 
@@ -350,9 +282,9 @@ protected:
         stash_arr_[free_slot] = fp;
         stash_busy_ |= (1u << free_slot); 
         stash_probe_mask_ |= (unsigned(probe) << free_slot);
-        free_slot *= 2;
-        stash_pos_ &= (~(3 << free_slot));       
-        stash_pos_ |= (stash_pos << free_slot);  
+        free_slot *= 2; // 计算空闲槽位的索引在stash_pos_的起始比特位
+        stash_pos_ &= (~(3 << free_slot)); // 将 stash_pos_ 中目标 2 位区域清零，同时保留其他位不变。
+        stash_pos_ |= (stash_pos << free_slot);  // 填入目标2位
         return true;        
     }
 
@@ -360,12 +292,12 @@ protected:
     bool ClearStash(uint8_t fp, unsigned stash_pos, bool probe){
         auto cb = [stash_pos, this](unsigned i, unsigned pos) -> SlotId {
             if (pos == stash_pos) {
-            stash_busy_ &= (~(1u << i));
-            stash_probe_mask_ &= (~(1u << i));
-            stash_pos_ &= (~(3u << (i * 2)));
+                stash_busy_ &= (~(1u << i));
+                stash_probe_mask_ &= (~(1u << i));
+                stash_pos_ &= (~(3u << (i * 2)));
 
-            assert(0u == ((stash_pos_ >> (i * 2)) & 3));
-            return 0;
+                assert(0u == ((stash_pos_ >> (i * 2)) & 3));
+                return 0;
             }
             return kNanSlot;
         };
@@ -379,7 +311,7 @@ protected:
     StashFpArray stash_arr_; // 存储 Stash 槽位的指纹
 
     uint8_t stash_busy_ = 0;  
-    uint8_t stash_pos_ = 0;   
+    uint8_t stash_pos_ = 0;   // stash_busy_能判断哪些溢出桶有 Stash 引用， 只不过是用位判断的，stash_pos_就是根据位来获得溢出桶ID
     uint8_t stash_probe_mask_ = 0;
 
 
@@ -674,11 +606,11 @@ public:
     uint64_t token() const {
         return val_;
     }
-    explicit operator bool() const { // 为什么要 explicit
+    explicit operator bool() const { // explicit：避免int x = DashCursor + 1;
         return val_ != 0;
     }
 private:
-    uint64_t val_;
+    uint64_t val_;// 64位压缩存储：segment_id (高 56 位)+ bucket_id(低 8 位)
 };
 
 
@@ -688,7 +620,7 @@ int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key, V&& new_
                                                             uint8_t meta_hash, bool probe)
 {
     if (this->IsFull()) { // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
-        return -1;  // no free space in the bucket.
+        return -1;  
     }
 
     int slot = this->slotb_.FindEmptySlot();
@@ -715,7 +647,7 @@ void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
     assert(slot < kSlotNum);
     key[slot] = std::forward<U>(u);
     value[slot] = std::forward<V>(v);
-    this->SetHash(slot, meta_hash, probe);  // not same   
+    this->SetHash(slot, meta_hash, probe);  
 }
 template <typename Key, typename Value, typename Policy>
 template <typename This, typename Cb>
@@ -742,20 +674,12 @@ auto Segment<Key, Value, Policy>::Bucket::FindByFp(uint8_t fp_hash, bool probe, 
         return kNanSlot;
 
     unsigned delta = __builtin_ctz(mask);
-    mask >>= delta;
+    mask >>= delta; // 将 mask 右移 delta 位，将第一个 1 位移动到最低位
     for (unsigned i = delta; i < kSlotNum; ++i) {
-        // Filterable just by key
-        if constexpr (std::is_invocable_v<Pred, const Key_t&>) {
-            if ((mask & 1) && pred(key[i]))
-                return i;
-        }
+        static_assert(std::is_invocable_v<Pred, const Key_t&>);
 
-        // Filterable by key and value
-        if constexpr (std::is_invocable_v<Pred, const Key_t&, const Value_t&>) {
-            if ((mask & 1) && pred(key[i], value[i]))
-                return i;
-        }
-
+        if ((mask & 1) && pred(key[i]))
+            return i;
         mask >>= 1;
     };
 
@@ -782,7 +706,7 @@ auto Segment<Key, Value, Policy>::Insert(U&& key, V&& value, Hash_t key_hash, Pr
 template <typename Key, typename Value, typename Policy>
 template <typename U, typename V, typename OnMoveCb>
 auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash, bool spread,
-                                             OnMoveCb&& on_move_cb) -> Iterator {
+                                             OnMoveCb&& on_move_cb) -> Iterator { // on_move_cb 是一个回调函数，用于处理元素移动通知淘汰策略
     const uint8_t bid = HomeIndex(key_hash);
     const uint8_t nid = NextBid(bid); 
 
@@ -828,8 +752,6 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
         on_move_cb(segment_id_, bid, prev_idx);
         return Iterator{bid, uint8_t(displace_index)};
     }
-
-    // we balance stash fill rate  by starting from y % STASH_BUCKET_NUM.
     for (unsigned i = 0; i < kStashBucketNum; ++i) {
         unsigned stash_pos = (bid + i) % kStashBucketNum;
 
@@ -847,12 +769,12 @@ auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash
 
 template <typename Key, typename Value, typename Policy>
 template <typename Pred>
-auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> Iterator {
+auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> Iterator { // pred, 判断两个键是否相同
     LogicalBid bidx = HomeIndex(key_hash);
     const Bucket& target = bucket_[bidx];
     __builtin_prefetch(&target);
 
-    uint8_t fp_hash = key_hash & kFpMask;
+    uint8_t fp_hash = key_hash & kFpMask; // 用低位进行哈希指纹
     SlotId sid = target.FindByFp(fp_hash, false, pred); //  指纹查找
     if (sid != BucketType::kNanSlot) {
         return Iterator{bidx, sid};
@@ -871,11 +793,8 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const -> 
     }
 
     auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
-
-        (void)overflow_index;
-
+        (void)overflow_index; 
         assert(pos < kStashBucketNum);
-
         pos += kBucketNum;
         const Bucket& bucket = bucket_[pos];
         return bucket.FindByFp(fp_hash, false, pred);
@@ -1146,32 +1065,6 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid, HashFn&&
 
     return found;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

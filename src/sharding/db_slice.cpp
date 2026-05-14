@@ -16,16 +16,11 @@ DbSlice::DbSlice(uint32_t index, bool cache_mode, EngineShard* owner)
 }
 
 DbSlice::~DbSlice() {
-    // we do not need this code but it's easier to debug in case we encounter
-    // memory allocation bugs during delete operations.
-
     for (auto& db : db_arr_) {
         if (!db)
             continue;
         db.reset();
     }
-
-    // AsyncDeleter::Shutdown();
 }
 
 
@@ -48,10 +43,8 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
     }
 
     auto it = Iterator(*res, StringOrView::FromView(key));
-    
-    // PreUpdate() might have caused a deletion of `it`
+
     if (res->IsOccupied()) {
-        // 有效，继续
         return {{it}};
     } else {
         return OpStatus::KEY_NOTFOUND;
@@ -59,10 +52,7 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
 }
 auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optional<unsigned> req_obj_type,
                            UpdateStatsMode stats_mode) const -> OpResult<PrimeIterator> {
-
-    std::cout << this->shard_id_  << "Find" << std::endl;
-
-    if (!IsDbValid(cntx.db_index_)) {  // Can it even happen?
+    if (!IsDbValid(cntx.db_index_)) {
         return OpStatus::KEY_NOTFOUND;
     }
 
@@ -125,7 +115,6 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
     auto status = res.status();
     PrimeIterator it;
     try {
-        std::cout << this->shard_id_ << "InsertNew" << std::endl;
         it = db.prime_.InsertNew(key, PrimeValue{});
     } catch (std::bad_alloc& e) {
         return OpStatus::WRONG_TYPE; // 这里的错误类型不太准确，但我们没有更合适的选项了

@@ -4,7 +4,7 @@
 #include "sharding/engine_shard_set.hpp"
 #include "redis/facade/resp_buf.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "command_layer/parsed_command.hpp"
+
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
 #include "command_layer/conn_context.hpp"
@@ -12,10 +12,13 @@
 #include "base/uring_proactor_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
+#include <cstring>
 
 namespace dfly{
 using base::UringProactorPtr;
 inline CommandRegistry* CIs = nullptr;
+class RedisServer;
+inline RedisServer* ser = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
@@ -25,45 +28,55 @@ public:
     }
     
     cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
-
-
         int fd = socket_.fd();
-        LOG(INFO) << "Session Read for fd: " << fd;
-        std::cout << "Session Read for fd: " << fd << std::endl;
+        LOG(INFO) << "New session created for fd: " << fd;
 
-        ctxt_.owner_ = shared_from_this();
-        while (true) {
-            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+        try{
+            ctxt_.owner_ = shared_from_this();
 
-            std::cout << "Read " << r << " bytes from fd: " << fd << std::endl;
+            while (true) {
+                auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
-            if (r>0) {
-                RecvBuf_.hasWritten(r);
-                auto res = RecvBuf_.ParseRESP();
-                if (res.empty()) continue;
-                CommandId* ci = CIs->Find(res[0]);
+                if (r > 0) {
+                    RecvBuf_.hasWritten(r);
+                    assert(debug_com_deal_one_Com);
+                    debug_com_deal_one_Com = false;
+                    Com = RecvBuf_.ParseRESP();
+                    if (Com.empty()) continue;
+                    args = ::cmn::CmdArgList(Com);
+                    
+                    VLOG(1) << "Received command: " << args[0] << " with " << args.size() << " arguments";
+                    
+                    ci = CIs->Find(args[0]);
+                    if (!ci) { 
+                        LOG(WARNING) << "Unknown command: " << args[0] << " from fd: " << fd;
+                        SendERROR();
+                        continue;
+                    }
 
-                if (!ci) { // 这里不正确
-                    SendStatus(std::string("OK"));
-                    continue;
+                    t.reset(new Transaction(ci));
+                    t->InitByArgs(ns_, index_, args);
+                    t->debug_owner() = this;
+                    cm_txt = CommandContext(&ctxt_, t.get(), ci);
+                    
+                    VLOG(2) << "Executing command: " << ci->name();
+                    ci->Invoke(args, &cm_txt);
+                    VLOG(2) << "Command " << ci->name() << " executed successfully";
                 }
-
-                auto parse = ::cmn::ParsedCommand(res.begin(), res.end(), res.size());
-                ::cmn::CmdArgList args = parse.ToCmdArgList();
-                Transaction t(ci);
-                t.InitByArgs(ns_, index_, args);
-                CommandContext cm_txt(&ctxt_, &t, ci);
-                ci->Invoke(args, &cm_txt);
+                else if (r == 0) { 
+                    LOG(INFO) << "Connection closed by client, fd: " << fd;
+                    socket_.Close();
+                    break;
+                }
+                else {
+                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
+                }            
             }
-            else if (r == 0 ) { 
-                socket_.Close();
-                break;
-            }
-            else {
-                // TODO
-            }            
+                      
+        } catch(const std::exception& e) {
+            LOG(ERROR) << "Exception in session fd:" << fd << ": " << e.what();
         }
-        co_return;
+        co_return;  
     }    
 
     void SendERROR() {
@@ -97,7 +110,9 @@ private:
         auto p = socket_.Proactor();
         p->DispatchBrief([this, s = std::move(s)](){
             SendBuf_.append(s);
-            DoWrite();            
+            DoWrite();     
+            
+            debug_com_deal_one_Com = true;
         });
     }
 
@@ -124,6 +139,15 @@ private:
     DbIndex index_ = 0;
 
     ConnectionContext ctxt_;
+
+    std::vector<std::string> Com;
+
+    ::cmn::CmdArgList args;
+    CommandId* ci = nullptr;
+    std::unique_ptr<Transaction> t;
+    CommandContext cm_txt;
+
+    std::atomic<bool> debug_com_deal_one_Com = true;
 };
 
 class RedisServer {
@@ -138,6 +162,7 @@ public:
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
+        ser = this;
     }
 
     ~RedisServer() {
@@ -167,19 +192,20 @@ public:
                     auto fd = co_await server->ListenSocket_.AsyncAccept();
 
                     if (fd > 0){
-
-
-                        // LOG(INFO) << "Accepted new connection, addr: " << base::AddressToString(base::Address(fd));
-                        std::cout<< "Accepted new connection, addr: " << base::AddressToString(base::Address(fd)) << std::endl;
+                        std::string addr = base::AddressToString(base::Address(fd));
+                        LOG(INFO) << "Accepted new connection, addr: " << addr;
 
                         auto p = server->NextProactor();
+                        VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
 
                         auto session = std::make_shared<RedisSession>(fd, p);
                         
                         p->DispatchBrief([session](){
                             session->DoRead();
                         });                    
-                    }                 
+                    } else if (fd < 0) {
+                        LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                    }
                 }
                 co_return;
             };
@@ -189,10 +215,13 @@ public:
     }
     
     void Stop() {
-        isRuning = false;
-        pool_.stop();
-
-        shard_set->Shutdown();
+        main_proactor_->DispatchBrief([this](){
+            isRuning = false;
+            main_proactor_->stop();
+            shard_set->Shutdown();
+            pool_.stop();
+            
+        });
     }
     
 private:
@@ -211,6 +240,7 @@ private:
     bool isRuning = false;
 
 };
+
 
 
 }

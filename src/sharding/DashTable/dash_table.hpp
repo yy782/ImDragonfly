@@ -1,5 +1,12 @@
-#pragma once
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+#pragma once // dash_table.hpp
 
+
+/*
+ * 
+ */
 
 
 
@@ -45,7 +52,6 @@ public:
     using Cursor = detail::DashCursor;
 
 
-    struct HotBuckets;
 
 
     struct DefaultEvictionPolicy{
@@ -56,13 +62,12 @@ public:
             return true;
         }
 
-        void OnMove(Cursor source, Cursor dest) {
-            (void)source;
-            (void)dest;
+        void OnMove(Cursor, Cursor) {
+
         }
 
-        void RecordSplit(SegmentType* segment) {
-            (void)segment;
+        void RecordSplit(SegmentType*) {
+
         }        
 
     };
@@ -80,9 +85,6 @@ public:
     
     template <typename U, typename V> 
     iterator InsertNew(U&& key, V&& value){
-
-        
-
         DefaultEvictionPolicy policy;
         return InsertNew(std::forward<U>(key), std::forward<V>(value), policy);        
     }    
@@ -284,7 +286,7 @@ private:
 };
 
 template <typename _Key, typename _Value, typename Policy>
-struct DashTable<_Key, _Value, Policy>::BucketSet { // ？？？？
+struct DashTable<_Key, _Value, Policy>::BucketSet { 
     auto buckets() const {
         bool is_all = limit_ > ids_.size(); // 判断是连续范围还是离散列表
         return std::views::iota(0u, limit_) | //   生成 0..limit_-1 的整数序列 
@@ -312,16 +314,40 @@ private:
     std::array<uint8_t, 2> ids_;
 };
 
+/*
+DashTable表的创建
 
+    术语: 
+        逻辑段: segment_每一个元素为一个逻辑段，逻辑段为一个指针,指向物理段，不同的逻辑段可能指向相同的物理段
+        物理段: 逻辑段为一个指针,指向真正存储数据的物理段，也就是dash_internal.hpp的Segment 
+
+    参数：unique_segments_,initial_depth_,global_depth_;
+    构造: initial_depth_ = global_depth_ = capacity_log ,
+            unique_segments_ = 2的capacity_log幂次方，表示逻辑段数量
+    inital_depth_记录初始的global_depth_，用于后面clear用
+    global_depth_要求global_depth_位哈希来在目录segment_找对应的逻辑段, 换种说法, key需要global_depth_位找对应的逻辑段
+    例子如下:
+        capacity_log = 2;
+        global_depth_ = 2;
+        unique_segments_ = 4;
+        目录(二进制表示):
+        key前(global_depth_ = 2)位的数据为XX(X为0或者1) 
+            00 ->  逻辑段1  
+            01 ->  逻辑段2 
+            10 ->  逻辑段3
+            11 ->  逻辑段4
+        这里因为目录是2的global_depth幂次方，所以无论XX为什么，都可以在目录里找到对应的逻辑段
+*/
 template <typename _Key, typename _Value, typename Policy>
 DashTable<_Key, _Value, Policy>::DashTable(size_t capacity_log, const Policy& policy,
                                            PMR_NS::memory_resource* mr)
-    : Base(capacity_log), policy_(policy), segment_(mr) {
+    : Base(capacity_log), policy_(policy), segment_(mr) { 
     segment_.resize(unique_segments_);
     for (uint32_t i = 0; i < segment_.size(); ++i) {
         segment_[i] = ConstructSegment(global_depth_, i);  
     }
 }
+
 template <typename _Key, typename _Value, typename Policy>
 DashTable<_Key, _Value, Policy>::~DashTable() {
     Clear();
@@ -329,9 +355,9 @@ DashTable<_Key, _Value, Policy>::~DashTable() {
     PMR_NS::polymorphic_allocator<SegmentType> pa(resource);
     using alloc_traits = std::allocator_traits<decltype(pa)>;
 
-    IterateDistinct([&](SegmentType* seg) {
-        alloc_traits::destroy(pa, seg);
-        alloc_traits::deallocate(pa, seg, 1);
+    IterateDistinct([&](SegmentType* seg) { // 遍历物理段
+        alloc_traits::destroy(pa, seg); // 调用析构
+        alloc_traits::deallocate(pa, seg, 1); // 释放内存
         return false;
     });
 }
@@ -341,13 +367,8 @@ DashTable<_Key, _Value, Policy>::~DashTable() {
 template <typename _Key, typename _Value, typename Policy>
 template <typename U>
 auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
-    uint64_t key_hash = DoHash(key);
-    uint32_t seg_id = SegmentId(key_hash);  // seg_id takes up global_depth_ high bits.
-
-    // Hash structure is like this: [SSUUUUBF], where S is segment id, U - unused,
-    // B - bucket id and F is a fingerprint. Segment id is needed to identify the correct segment.
-    // Once identified, the segment instance uses the lower part of hash to locate the key.
-    // It uses 8 least significant bits for a fingerprint and few more bits for bucket id.
+    uint64_t key_hash = DoHash(key); // 使用std::hash进行哈希
+    uint32_t seg_id = SegmentId(key_hash); // 使用 hash >> (64 - global_depth_)  高位作为 segment ID
     if (auto seg_it = segment_[seg_id]->FindIt(key_hash, EqPred(key)); seg_it.found()) {
         return {this, seg_id, seg_it.index, seg_it.slot};
     }
@@ -356,7 +377,7 @@ auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename Pred>
-auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator {
+auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator { // pred 精确比较键是否相等
     uint32_t seg_id = SegmentId(key_hash);
     if (auto seg_it = segment_[seg_id]->FindIt(key_hash, pred); seg_it.found()) {
         return {this, seg_id, seg_it.index, seg_it.slot};
@@ -365,18 +386,24 @@ auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) 
 }
 
 
-
-
-
-
-
 template <typename _Key, typename _Value, typename Policy>
 typename DashTable<_Key, _Value, Policy>::SegmentType* 
 DashTable<_Key, _Value, Policy>::ConstructSegment(uint8_t depth, uint32_t id) {
     auto* mr = segment_.get_allocator().resource();
     PMR_NS::polymorphic_allocator<SegmentType> pa(mr);
     SegmentType* res = pa.allocate(1);
-    pa.construct(res, depth, id, mr);  //   new SegmentType(depth);
+    pa.construct(res, depth, id, mr);
+    /*
+        初始化的结果例子:
+        SegmentType::local_depth_ = depth = global_depth_ = 2;
+        导致段需要global_depth_位进行哈希， 与逻辑段相同
+        导致逻辑段与物理段一一对应
+        00 -> 逻辑段1 -> 物理段1
+        01 -> 逻辑段2 -> 物理段2
+        10 -> 逻辑段3 -> 物理段3
+        11 -> 逻辑段4 -> 物理段4 
+        也就是local_depth_ = global_depth_的结果，如果物理段满了，就会扩大global_depth_和目录，因为没有多余的逻辑段进行操作
+    */  
     bucket_count_ += res->num_buckets();
     return res;
 }
@@ -385,11 +412,11 @@ DashTable<_Key, _Value, Policy>::ConstructSegment(uint8_t depth, uint32_t id) {
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename Cb>
-void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) { // ????
+void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) {
     size_t i = 0;
     while (i < segment_.size()) {
         auto* seg = segment_[i];
-        size_t next_id = NextSeg(i);
+        size_t next_id = NextSeg(i); // 获取实际的物理段
         if (cb(seg))
             break;
         i = next_id;
@@ -409,40 +436,26 @@ void DashTable<_Key, _Value, Policy>::Clear() {
 
     IterateDistinct(cb);
     size_ = 0;
-
-    // Consider the following case: table with 8 segments overall, 4 distinct.
-    // S1, S1, S1, S1, S2, S3, S4, S4
-    /* This corresponds to the tree:
-                R
-            /  \
-            S1   /\
-                /\ S4
-            S2 S3
-        We want to collapse this tree into, say, 2 segment directory.
-        That means we need to keep S1, S2 but delete S3, S4.
-        That means, we need to move representative segments until we reached the desired size
-        and then erase all other distinct segments.
-    **********/
     if (global_depth_ > initial_depth_) {
         PMR_NS::polymorphic_allocator<SegmentType> pa(segment_.get_allocator());
         using alloc_traits = std::allocator_traits<decltype(pa)>;
 
         size_t dest = 0, src = 0;
-        size_t new_size = (1 << initial_depth_);
+        size_t new_size = (1 << initial_depth_); // 全局目录，是initial_depth_, 或者global_depth_的2次幂
         bucket_count_ = 0;
-        while (src < segment_.size()) {
-        auto* seg = segment_[src];
-        size_t next_src = NextSeg(src);  
-        if (dest < new_size) {
-            seg->set_local_depth(initial_depth_);
-            bucket_count_ += seg->num_buckets();
-            segment_[dest++] = seg;
-        } else {
-            alloc_traits::destroy(pa, seg);
-            alloc_traits::deallocate(pa, seg, 1);
-        }
+        while (src < segment_.size()) { // 遍历每个段，从左往右遍历物理段，段数小于new_size，放入，否则摧毁
+            auto* seg = segment_[src];
+            size_t next_src = NextSeg(src);  
+            if (dest < new_size) {
+                seg->set_local_depth(initial_depth_);
+                bucket_count_ += seg->num_buckets();
+                segment_[dest++] = seg;
+            } else {
+                alloc_traits::destroy(pa, seg);
+                alloc_traits::deallocate(pa, seg, 1);
+            }
 
-        src = next_src;
+            src = next_src;
         }
 
         global_depth_ = initial_depth_;
@@ -451,32 +464,80 @@ void DashTable<_Key, _Value, Policy>::Clear() {
     }
 }
 
+
+/*
+    逻辑段与物理段的映射关系
+
+    KEY寻找对应的逻辑段需要global_depth_位的哈希值，也就是key_hash = hash >> (64 - global_depth_);
+    对应的物理段就是key_hash的高local_depth_位，这里如果选择低位，处理段分裂不好处理，因为相同物理段的逻辑段的高位是相同的，具体看DashTable<_Key, _Value, Policy>::Split
+
+    例子:
+    global_depth_ = 3, 物理段的local_depth_都是 1, 那么物理段只要看hash >> (64 - global_depth_)的最高1位, 也就是0，1，只有两个物理段
+    如果local_depth_都是 2，那么物理段只要看hash >> (64 - global_depth_)的最高2位, 也就是有4个物理段
+    ; 
+    目录:
+    000 -> 逻辑段1 -> 物理段1
+    001 -> 逻辑段2 -> 物理段1
+    010 -> 逻辑段3 -> 物理段1
+    011 -> 逻辑段4 -> 物理段1
+    100 -> 逻辑段5 -> 物理段2
+    101 -> 逻辑段6 -> 物理段2
+    110 -> 逻辑段7 -> 物理段2
+    111 -> 逻辑段8 -> 物理段2
+
+    当段分裂(物理段1满了)：
+    物理段1分裂成新段物理段1，物理段3，local_depth_都是1
+    为了区别他们，比如KEY的hash >> (64 - global_depth_)的最后1位是0,怎么区别是物理段1还是新分裂的物理段3呢
+    答案是根据后面一位，比如逻辑段1 的 第二位是0，而逻辑段3 第二位是3，就可以区分了，这里第二位是0是物理段1，是1是物理段3
+    物理段1的local_depth_ += 1; => local_depth_ = 2;
+    分裂后的目录:
+        目录:
+    000 -> 逻辑段1 -> 物理段1
+    001 -> 逻辑段2 -> 物理段1
+    010 -> 逻辑段3 -> 物理段3
+    011 -> 逻辑段4 -> 物理段3
+    100 -> 逻辑段5 -> 物理段2
+    101 -> 逻辑段6 -> 物理段2
+    110 -> 逻辑段7 -> 物理段2
+    111 -> 逻辑段8 -> 物理段2
+
+
+*/
+
+
 template <typename _Key, typename _Value, typename Policy>
 template <typename U, typename V, typename EvictionPolicy>
 auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, EvictionPolicy& ev,
                                                      InsertMode mode) -> std::pair<iterator, bool> {
     uint64_t key_hash = DoHash(key);
-    uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段
+    uint32_t target_seg_id = SegmentId(key_hash); 
+    // 使用哈希值的高 global_depth_ 位确定目标段, hash >> (64 - global_depth_);
+    /*
+        例子: global_depth_ = 2;   
+        hash >> 62 就是向右平移62位，高位补0
+        刚好最低两位是需要定位逻辑段的哈希值 
+    */
+
 
     while (true) {
         assert(target_seg_id < segment_.size());
         SegmentType* target = segment_[target_seg_id];
-        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热， !!!!!!!!!!!!!!!!!!!
+        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
 
         typename SegmentType::Iterator it;
         bool res = true;
         unsigned num_buckets = target->num_buckets();
 
-        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) {
+        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
             ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
         };
 
         if (mode == InsertMode::kForceInsert) {
-            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb);  // 强制插入
-            res = it.found();  // 键已存在
+            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
+            res = it.found();  
         } else {
             std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
-                                            EqPred(key), move_cb); // 正常插入，会检查重复
+                                            EqPred(key), move_cb); 
         }
 
         if (res) {  // success
@@ -488,75 +549,18 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
         if (it.found()) {
             return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
         }
-
-        // if constexpr (EvictionPolicy::can_evict || EvictionPolicy::can_gc) {
-
-        //     uint8_t bid[HotBuckets::kRegularBuckets];
-        //     SegmentType::FillProbeArray(key_hash, bid);
-        //     HotBuckets hotspot;
-        //     hotspot.key_hash = key_hash;
-
-        //     for (unsigned j = 0; j < HotBuckets::kRegularBuckets; ++j) {
-        //         hotspot.probes.by_type.regular_buckets[j] = bucket_iterator{this, target_seg_id, bid[j]};
-        //     }
-
-        //     for (unsigned i = 0; i < SegmentType::kStashBucketNum; ++i) {
-        //         hotspot.probes.by_type.stash_buckets[i] =
-        //             bucket_iterator{this, target_seg_id, uint8_t(Policy::kBucketNum + i), 0};
-        //     }
-        //     hotspot.num_buckets = HotBuckets::kNumBuckets;
-        //     if constexpr (EvictionPolicy::can_gc) { //  GC 回收（垃圾回收）
-        //         unsigned res = ev.GarbageCollect(hotspot, this);
-        //         garbage_collected_ += res;
-        //         if (res) {
-        //             // We succeeded to gc. Lets continue with the momentum.
-        //             // In terms of API abuse it's an awful hack, just to see if it works.
-        //             /*unsigned start = (bid[HotBuckets::kNumBuckets - 1] + 1) % kLogicalBucketNum;
-        //             for (unsigned i = 0; i < HotBuckets::kNumBuckets; ++i) {
-        //                 uint8_t id = (start + i) % kLogicalBucketNum;
-        //                 buckets.probes.arr[i] = bucket_iterator{this, target_seg_id, id};
-        //             }
-        //             garbage_collected_ += ev.GarbageCollect(buckets, this);
-        //             */
-        //         continue;
-        //         }
-        //     }
-
-        //     auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
-        //     unsigned moved = target->UnloadStash(hash_fn, move_cb); // 卸载 Stash
-        //     if (moved > 0) {
-        //         stash_unloaded_ += moved;
-        //         continue;
-        //     }
-
-        //     // We evict only if our policy says we can not grow
-        //     if constexpr (EvictionPolicy::can_evict) { //  驱逐 (Eviction)
-        //         bool can_grow = ev.CanGrow(*this);
-        //         if (can_grow) {
-        //         consider_throw = false;
-        //         } else {
-        //         unsigned res = ev.Evict(hotspot, this);
-        //         if (res)
-        //             continue;
-        //         }
-        //     }
-        // }
-
-        // if (consider_throw && !ev.CanGrow(*this)) {
-        //     throw std::bad_alloc{};
-        // }
-
-        // Split the segment.
-        if (target->local_depth() == global_depth_) { // 段分裂 (Split)
+        if (target->local_depth() == global_depth_) { 
+            // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
             IncreaseDepth(global_depth_ + 1);
 
             target_seg_id = SegmentId(key_hash);
             assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
         }
 
-        ev.RecordSplit(target);
-        Split(target_seg_id, ev);
+        ev.RecordSplit(target); // 统计数据告诉淘汰策略
+        Split(target_seg_id, ev);        
     }
+
 
     return std::make_pair(iterator{}, false);
 }
@@ -564,31 +568,32 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename EvictionPolicy>
-void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) {
+void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) { 
+
+
+
     SegmentType* source = segment_[seg_id];
 
     uint32_t chunk_size = 1u << (global_depth_ - source->local_depth()); // 该段覆盖的目录项数量
     uint32_t start_idx = seg_id & (~(chunk_size - 1)); // 覆盖范围的起始索引
-    assert(segment_[start_idx] == source && segment_[start_idx + chunk_size - 1] == source);
+
     uint32_t target_id = start_idx + chunk_size / 2; // 新段在目录中的起始位置
+    /*
+        如果seg_id 是 010， 100还能找到对应位置吗
+        seg_id = 010， start_idx = 010 & 1111111111111111100 = 0;
+        seg_id = 001， start_idx = 001 & 1111111111111111100 = 0;
+    */
     SegmentType* target = ConstructSegment(source->local_depth() + 1, target_id);
 
     auto hash_fn = [this](const auto& k) { return policy_.HashFn(k); };
-
-    // remove current segment bucket count.
-    bucket_count_ -= (source->num_buckets() + target->num_buckets());
 
     source->Split(
         std::move(hash_fn), target,
         [&](uint32_t segment_from, detail::PhysicalBid from, uint32_t segment_to,
             detail::PhysicalBid to) {
-            // OnMove is used to notify eviction policy about the moves across
-            // buckets/segments during the split.
+
             ev.OnMove(Cursor{global_depth_, segment_from, from}, Cursor{global_depth_, segment_to, to});
         });
-
-    // add back the updated bucket count.
-    bucket_count_ += (target->num_buckets() + source->num_buckets());
     ++unique_segments_;
 
     for (size_t i = target_id; i < start_idx + chunk_size; ++i) {
@@ -597,17 +602,42 @@ void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev)
 }
 
 template <typename _Key, typename _Value, typename Policy>
-void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) {
+void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) { 
+
+    /*
+        原始目录:
+        00 -> 逻辑段1 -> 物理段1
+        01 -> 逻辑段2 -> 物理段2
+        10 -> 逻辑段3 -> 物理段3
+        11 -> 逻辑段4 -> 物理段4
+        global_depth_ = 2
+        IncreaseDepth逻辑:
+             global_depth_ += 1;
+             目录扩大到2的3次方
+        repl_cnt = 2;表示会有2个逻辑段指向同一个物理段
+
+        扩大后目录:
+        000 -> 逻辑段1 -> 物理段1
+        001 -> 逻辑段2 -> 物理段1
+        010 -> 逻辑段3 -> 物理段2
+        011 -> 逻辑段4 -> 物理段2
+        100 -> 逻辑段5 -> 物理段3
+        101 -> 逻辑段6 -> 物理段3
+        110 -> 逻辑段7 -> 物理段4
+        111 -> 逻辑段8 -> 物理段4
+        也就是global_depth_对于KEY的哈希值往后多移了一位
+
+    */ 
     assert(!segment_.empty());
     assert(new_depth > global_depth_);
     size_t prev_sz = segment_.size();
     size_t repl_cnt = 1ul << (new_depth - global_depth_);
     segment_.resize(1ul << new_depth);
 
-    for (int i = prev_sz - 1; i >= 0; --i) {
+    for (int i = prev_sz - 1; i >= 0; --i) { // 正序会错误覆盖
         size_t offs = i * repl_cnt;
         std::fill(segment_.begin() + offs, segment_.begin() + offs + repl_cnt, segment_[i]);
-        segment_[i]->set_segment_id(offs);  // update segment id.
+        segment_[i]->set_segment_id(offs);  
     }
     global_depth_ = new_depth;
 }
