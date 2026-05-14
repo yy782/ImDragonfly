@@ -28,42 +28,52 @@ public:
     
     cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
 
+        try{
+            int fd = socket_.fd();
+            LOG(INFO) << "Session Read for fd: " << fd;
+            std::cout << "Session Read for fd: " << fd << std::endl;
 
-        int fd = socket_.fd();
-        LOG(INFO) << "Session Read for fd: " << fd;
-        std::cout << "Session Read for fd: " << fd << std::endl;
+            ctxt_.owner_ = shared_from_this();
+            
 
-        ctxt_.owner_ = shared_from_this();
-        while (true) {
-            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+            while (true) {
+                auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
-            if (r>0) {
-                RecvBuf_.hasWritten(r);
-                auto res = RecvBuf_.ParseRESP();
-                if (res.empty()) continue;
-                CommandId* ci = CIs->Find(res[0]);
+                if (r>0) {
+                    RecvBuf_.hasWritten(r);
+                    Com = RecvBuf_.ParseRESP();
+                    if (Com.empty()) continue;
+                    args = ::cmn::CmdArgList(Com);
+                    ci = CIs->Find(args[0]);
+                    if (!ci) { 
+                        SendERROR();
+                        continue;
+                    }
 
-                if (!ci) { 
-                    SendERROR();
-                    continue;
+                    // auto parse = ::cmn::ParsedCommand(res.begin(), res.end(), res.size());
+                    // ::cmn::CmdArgList args = parse.ToCmdArgList();
+
+                    
+
+                    t.reset(new Transaction(ci));
+                    t->InitByArgs(ns_, index_, args);
+                    t->debug_owner() = this;
+                    cm_txt = CommandContext(&ctxt_, t.get(), ci);
+                    ci->Invoke(args, &cm_txt);
                 }
-
-                auto parse = ::cmn::ParsedCommand(res.begin(), res.end(), res.size());
-                ::cmn::CmdArgList args = parse.ToCmdArgList();
-                Transaction t(ci);
-                t.InitByArgs(ns_, index_, args);
-                CommandContext cm_txt(&ctxt_, &t, ci);
-                ci->Invoke(args, &cm_txt);
+                else if (r == 0 ) { 
+                    socket_.Close();
+                    break;
+                }
+                else {
+                    // TODO
+                }            
             }
-            else if (r == 0 ) { 
-                socket_.Close();
-                break;
-            }
-            else {
-                // TODO
-            }            
+                      
+        }catch(const std::exception& e) {
+            std::cout << "ERR:" << e.what() << std::endl;
         }
-        co_return;
+        co_return;  
     }    
 
     void SendERROR() {
@@ -124,6 +134,13 @@ private:
     DbIndex index_ = 0;
 
     ConnectionContext ctxt_;
+
+    std::vector<std::string> Com;
+
+    ::cmn::CmdArgList args;
+    CommandId* ci = nullptr;
+    std::unique_ptr<Transaction> t;
+    CommandContext cm_txt;
 };
 
 class RedisServer {

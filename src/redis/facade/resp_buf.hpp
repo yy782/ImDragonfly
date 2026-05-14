@@ -8,8 +8,8 @@ using base::IoBuf::IoBuf;
 public:
 
 
-std::vector<std::string_view> ParseRESP() {
-    std::vector<std::string_view> result;
+std::vector<std::string> ParseRESP() {
+    std::vector<std::string> result;
     
     char* data = begin();
     size_t size = write_index_;

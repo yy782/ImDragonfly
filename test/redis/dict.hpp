@@ -1,70 +1,126 @@
-#ifndef __DICT_HPP
-#define __DICT_HPP
+/* Hash table implementation.
+ *
+ * This file implements in memory hash tables with insert/del/replace/find/
+ * get-random-element operations. Hash tables will auto resize if needed
+ * tables of power of two in size are used, collisions are handled by
+ * chaining. See the source code for more information... :)
+ *
+ * Copyright (c) 2006-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
 
-#include <stdint.h>
-#include <stdlib.h>
+#ifndef __DICT_H
+#define __DICT_H
 
 #define DICT_OK 0
 #define DICT_ERR 1
 
+/* Unused arguments generate annoying warnings... */
+#define DICT_NOTUSED(V) ((void)V)
+
 typedef struct dictEntry {
-    void *key;
-    union {
-        void *val;
-        uint64_t u64;
-        int64_t s64;
-        double d;
-    } v;
-    struct dictEntry *next;
+  void* key;
+  void* val;
+  struct dictEntry* next;
 } dictEntry;
 
-typedef struct dict dict;
-
 typedef struct dictType {
-    uint64_t (*hashFunction)(const void *key);
-    void *(*keyDup)(dict *d, const void *key);
-    void *(*valDup)(dict *d, const void *obj);
-    int (*keyCompare)(dict *d, const void *key1, const void *key2);
-    void (*keyDestructor)(dict *d, void *key);
-    void (*valDestructor)(dict *d, void *obj);
+  unsigned int (*hashFunction)(const void* key);
+  void* (*keyDup)(void* privdata, const void* key);
+  void* (*valDup)(void* privdata, const void* obj);
+  int (*keyCompare)(void* privdata, const void* key1, const void* key2);
+  void (*keyDestructor)(void* privdata, void* key);
+  void (*valDestructor)(void* privdata, void* obj);
 } dictType;
 
-#define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1<<(exp))
-#define DICTHT_SIZE_MASK(exp) ((exp) == -1 ? 0 : (DICTHT_SIZE(exp))-1)
-
-struct dict {
-    dictType *type;
-    dictEntry **ht_table[2];
-    unsigned long ht_used[2];
-    long rehashidx;
-    int16_t pauserehash;
-    signed char ht_size_exp[2];
-};
+typedef struct dict {
+  dictEntry** table;
+  dictType* type;
+  unsigned long size;
+  unsigned long sizemask;
+  unsigned long used;
+  void* privdata;
+} dict;
 
 typedef struct dictIterator {
-    dict *d;
-    long index;
-    int table, safe;
-    dictEntry *entry, *nextEntry;
+  dict* ht;
+  int index;
+  dictEntry *entry, *nextEntry;
 } dictIterator;
 
-#define DICT_HT_INITIAL_EXP 2
-#define DICT_HT_INITIAL_SIZE (1<<(DICT_HT_INITIAL_EXP))
+/* This is the initial size of every hash table */
+#define DICT_HT_INITIAL_SIZE 4
 
-#define dictSetUnsignedIntegerVal(entry, _val_) \
-    do { (entry)->v.u64 = _val_; } while(0)
+/* ------------------------------- Macros ------------------------------------*/
+#define dictFreeEntryVal(ht, entry) \
+  if ((ht)->type->valDestructor)    \
+  (ht)->type->valDestructor((ht)->privdata, (entry)->val)
 
-#define dictGetUnsignedIntegerVal(he) ((he)->v.u64)
-#define dictGetKey(he) ((he)->key)
-#define dictSize(d) ((d)->ht_used[0]+(d)->ht_used[1])
+#define dictSetHashVal(ht, entry, _val_)                      \
+  do {                                                        \
+    if ((ht)->type->valDup)                                   \
+      entry->val = (ht)->type->valDup((ht)->privdata, _val_); \
+    else                                                      \
+      entry->val = (_val_);                                   \
+  } while (0)
 
-uint64_t dictGenHashFunction(const void *key, size_t len);
+#define dictFreeEntryKey(ht, entry) \
+  if ((ht)->type->keyDestructor)    \
+  (ht)->type->keyDestructor((ht)->privdata, (entry)->key)
 
-dict *dictCreate(dictType *type);
-int dictAdd(dict *d, void *key, void *val);
-dictEntry *dictFind(dict *d, const void *key);
-int dictDelete(dict *d, const void *key);
-void dictRelease(dict *d);
-void dictEmpty(dict *d, void(callback)(dict*));
+#define dictSetHashKey(ht, entry, _key_)                      \
+  do {                                                        \
+    if ((ht)->type->keyDup)                                   \
+      entry->key = (ht)->type->keyDup((ht)->privdata, _key_); \
+    else                                                      \
+      entry->key = (_key_);                                   \
+  } while (0)
 
-#endif /* __DICT_HPP */
+#define dictCompareHashKeys(ht, key1, key2) \
+  (((ht)->type->keyCompare) ? (ht)->type->keyCompare((ht)->privdata, key1, key2) : (key1) == (key2))
+
+#define dictHashKey(ht, key) (ht)->type->hashFunction(key)
+
+#define dictGetEntryKey(he) ((he)->key)
+#define dictGetEntryVal(he) ((he)->val)
+#define dictSlots(ht) ((ht)->size)
+#define dictSize(ht) ((ht)->used)
+
+/* API */
+unsigned int dictGenHashFunction(const unsigned char* buf, int len);
+dict* dictCreate(dictType* type, void* privDataPtr);
+int dictExpand(dict* ht, unsigned long size);
+int dictAdd(dict* ht, void* key, void* val);
+int dictReplace(dict* ht, void* key, void* val);
+int dictDelete(dict* ht, const void* key);
+void dictRelease(dict* ht);
+dictEntry* dictFind(dict* ht, const void* key);
+dictIterator* dictGetIterator(dict* ht);
+dictEntry* dictNext(dictIterator* iter);
+void dictReleaseIterator(dictIterator* iter);
+
+#endif /* __DICT_H */

@@ -29,7 +29,9 @@ public:
     }
 
     BackedArguments(const BackedArguments& other) = default;
-
+    ~BackedArguments() {
+        storage_.clear();
+    }
 
     template <typename I> 
     BackedArguments(I begin, I end, size_t len) {
@@ -162,27 +164,27 @@ void BackedArguments::Assign(I begin, I end, size_t len) {
 
 
 
-class ParsedCommand : BackedArguments{
-public:
+// class ParsedCommand : BackedArguments{
+// public:
 
-    using BackedArguments::BackedArguments;
+//     using BackedArguments::BackedArguments;
 
-    CmdArgList ToCmdArgList() 
-    {
-        vec_.clear();
-        for(const std::string_view sv : view(0))
-        {
-            vec_.push_back(sv);
-        }
-        CmdArgList full_span(vec_);
+//     CmdArgList ToCmdArgList() 
+//     {
+//         vec_.clear();
+//         for(const std::string_view sv : view(0))
+//         {
+//             vec_.push_back(sv);
+//         }
+//         CmdArgList full_span(vec_);
 
-        return full_span;
-    }
+//         return full_span;
+//     }
 
-private:
+// private:
 
-    std::vector<std::string_view> vec_;    
-};
+//     std::vector<std::string_view> vec_;    
+// };
 
 
 

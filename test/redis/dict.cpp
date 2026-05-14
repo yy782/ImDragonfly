@@ -1,203 +1,358 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
+/* Hash table implementation.
+ *
+ * This file implements in memory hash tables with insert/del/replace/find/
+ * get-random-element operations. Hash tables will auto resize if needed
+ * tables of power of two in size are used, collisions are handled by
+ * chaining. See the source code for more information... :)
+ *
+ * Copyright (c) 2006-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of Redis nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include "dict.hpp"
+
 #include <assert.h>
 #include <limits.h>
-#include "dict.hpp"
-#include "zmalloc.hpp"
+#include <stdlib.h>
 
-extern uint64_t siphash(const uint8_t *in, const size_t inlen, const uint8_t *k);
+#include "alloc.hpp"
+#include "fmacros.hpp"
 
-static uint8_t dict_hash_function_seed[16] = {0};
+/* -------------------------- private prototypes ---------------------------- */
 
-uint64_t dictGenHashFunction(const void *key, size_t len) {
-    return siphash(reinterpret_cast<const uint8_t*>(key), len, dict_hash_function_seed);
+static int _dictExpandIfNeeded(dict* ht);
+static unsigned long _dictNextPower(unsigned long size);
+static int _dictKeyIndex(dict* ht, const void* key);
+static int _dictInit(dict* ht, dictType* type, void* privDataPtr);
+
+/* -------------------------- hash functions -------------------------------- */
+
+/* Generic hash function (a popular one from Bernstein).
+ * I tested a few and this was the best. */
+unsigned int dictGenHashFunction(const unsigned char* buf, int len) {
+  unsigned int hash = 5381;
+
+  while (len--)
+    hash = ((hash << 5) + hash) + (*buf++); /* hash * 33 + c */
+  return hash;
 }
 
-static int _dictExpandIfNeeded(dict *d);
-static signed char _dictNextExp(unsigned long size);
-static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing);
-static int _dictInit(dict *d, dictType *type);
+/* ----------------------------- API implementation ------------------------- */
 
-static void _dictReset(dict *d, int htidx) {
-    d->ht_table[htidx] = NULL;
-    d->ht_used[htidx] = 0;
-    d->ht_size_exp[htidx] = -1;
+/* Reset an hashtable already initialized with ht_init().
+ * NOTE: This function should only called by ht_destroy(). */
+static void _dictReset(dict* ht) {
+  ht->table = NULL;
+  ht->size = 0;
+  ht->sizemask = 0;
+  ht->used = 0;
 }
 
-int _dictInit(dict *d, dictType *type) {
-    _dictReset(d, 0);
-    _dictReset(d, 1);
-    d->type = type;
-    d->rehashidx = -1;
-    d->pauserehash = 0;
-    return DICT_OK;
-}
-
-dict *dictCreate(dictType *type) {
-    dict *d = static_cast<dict*>(zmalloc(sizeof(*d)));
-    if (!d) return NULL;
-    _dictInit(d, type);
-    return d;
-}
-
-static signed char _dictNextExp(unsigned long size) {
-    unsigned long i = DICT_HT_INITIAL_SIZE;
-    if (size >= LONG_MAX) return LONG_MAX;
-    while (1) {
-        if (i >= size) return i;
-        i *= 2;
-    }
-}
-
-int dictExpand(dict *d, unsigned long size) {
-    unsigned long realsize = _dictNextExp(size);
-    if (dictSize(d) > 0 || realsize == DICTHT_SIZE(d->ht_size_exp[0])) {
-        return DICT_ERR;
-    }
-
-    dictEntry **new_ht = static_cast<dictEntry**>(zcalloc(realsize * sizeof(dictEntry *)));
-    if (!new_ht) return DICT_ERR;
-
-    d->ht_table[0] = new_ht;
-    d->ht_size_exp[0] = realsize == 0 ? -1 : __builtin_ctzll(realsize);
-    d->ht_used[0] = 0;
-    return DICT_OK;
-}
-
-static int _dictExpandIfNeeded(dict *d) {
-    if (d->ht_table[0] == NULL) {
-        return dictExpand(d, DICT_HT_INITIAL_SIZE);
-    }
-    if ((double)d->ht_used[0] / DICTHT_SIZE(d->ht_size_exp[0]) > 1.0) {
-        return dictExpand(d, d->ht_used[0] * 2);
-    }
-    return DICT_OK;
-}
-
-static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **existing) {
-    unsigned long idx, table;
-    dictEntry *he;
-
-    if (_dictExpandIfNeeded(d) == DICT_ERR) return -1;
-
-    idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[0]);
-    table = 0;
-
-    he = d->ht_table[table][idx];
-    while (he) {
-        if (d->type->keyCompare(d, key, he->key)) {
-            if (existing) *existing = he;
-            return -1;
-        }
-        he = he->next;
-    }
-    return idx;
-}
-
-int dictAdd(dict *d, void *key, void *val) {
-    dictEntry *entry = static_cast<dictEntry*>(zmalloc(sizeof(*entry)));
-    if (!entry) return DICT_ERR;
-
-    if (d->type->keyDup) {
-        key = d->type->keyDup(d, key);
-        if (!key) {
-            zfree(entry);
-            return DICT_ERR;
-        }
-    }
-    entry->key = key;
-
-    if (d->type->valDup) {
-        val = d->type->valDup(d, val);
-        if (!val) {
-            if (d->type->keyDestructor) d->type->keyDestructor(d, entry->key);
-            zfree(entry);
-            return DICT_ERR;
-        }
-    }
-    entry->v.val = val;
-    entry->next = NULL;
-
-    long index = _dictKeyIndex(d, key, dictGenHashFunction(key, sizeof(uint64_t)), NULL);
-    if (index == -1) {
-        if (d->type->keyDestructor) d->type->keyDestructor(d, entry->key);
-        if (d->type->valDestructor) d->type->valDestructor(d, entry->v.val);
-        zfree(entry);
-        return DICT_ERR;
-    }
-
-    entry->next = d->ht_table[0][index];
-    d->ht_table[0][index] = entry;
-    d->ht_used[0]++;
-    return DICT_OK;
-}
-
-dictEntry *dictFind(dict *d, const void *key) {
-    dictEntry *he;
-    unsigned long idx, hash;
-
-    if (d->ht_used[0] == 0) return NULL;
-
-    hash = dictGenHashFunction(key, sizeof(uint64_t));
-    idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[0]);
-    he = d->ht_table[0][idx];
-    while (he) {
-        if (d->type->keyCompare(d, key, he->key)) {
-            return he;
-        }
-        he = he->next;
-    }
+/* Create a new hash table */
+dict* dictCreate(dictType* type, void* privDataPtr) {
+  dict* ht = static_cast<dict*>(hi_malloc(sizeof(*ht)));
+  if (ht == NULL)
     return NULL;
+
+  _dictInit(ht, type, privDataPtr);
+  return ht;
 }
 
-int dictDelete(dict *d, const void *key) {
-    dictEntry *he, **prevHe;
-    unsigned long idx, hash;
+/* Initialize the hash table */
+static int _dictInit(dict* ht, dictType* type, void* privDataPtr) {
+  _dictReset(ht);
+  ht->type = type;
+  ht->privdata = privDataPtr;
+  return DICT_OK;
+}
 
-    if (d->ht_used[0] == 0) return DICT_ERR;
+/* Expand or create the hashtable */
+int dictExpand(dict* ht, unsigned long size) {
+  dict n; /* the new hashtable */
+  unsigned long realsize = _dictNextPower(size), i;
 
-    hash = dictGenHashFunction(key, sizeof(uint64_t));
-    idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[0]);
-    he = d->ht_table[0][idx];
-    prevHe = &d->ht_table[0][idx];
-
-    while (he) {
-        if (d->type->keyCompare(d, key, he->key)) {
-            *prevHe = he->next;
-            if (d->type->keyDestructor) d->type->keyDestructor(d, he->key);
-            if (d->type->valDestructor) d->type->valDestructor(d, he->v.val);
-            zfree(he);
-            d->ht_used[0]--;
-            return DICT_OK;
-        }
-        prevHe = &he->next;
-        he = he->next;
-    }
+  /* the size is invalid if it is smaller than the number of
+   * elements already inside the hashtable */
+  if (ht->used > size)
     return DICT_ERR;
-}
 
-void dictEmpty(dict *d, void(callback)(dict*)) {
-    (void)callback;
-    unsigned long i;
+  _dictInit(&n, ht->type, ht->privdata);
+  n.size = realsize;
+  n.sizemask = realsize - 1;
+  n.table = static_cast<dictEntry**>(hi_calloc(realsize, sizeof(dictEntry*)));
+  if (n.table == NULL)
+    return DICT_ERR;
+
+  /* Copy all the elements from the old to the new table:
+   * note that if the old hash table is empty ht->size is zero,
+   * so dictExpand just creates an hash table. */
+  n.used = ht->used;
+  for (i = 0; i < ht->size && ht->used > 0; i++) {
     dictEntry *he, *nextHe;
 
-    for (i = 0; i < DICTHT_SIZE(d->ht_size_exp[0]); i++) {
-        he = d->ht_table[0][i];
-        while (he) {
-            nextHe = he->next;
-            if (d->type->keyDestructor) d->type->keyDestructor(d, he->key);
-            if (d->type->valDestructor) d->type->valDestructor(d, he->v.val);
-            zfree(he);
-            he = nextHe;
-        }
+    if (ht->table[i] == NULL)
+      continue;
+
+    /* For each hash entry on this slot... */
+    he = ht->table[i];
+    while (he) {
+      unsigned int h;
+
+      nextHe = he->next;
+      /* Get the new element index */
+      h = dictHashKey(ht, he->key) & n.sizemask;
+      he->next = n.table[h];
+      n.table[h] = he;
+      ht->used--;
+      /* Pass to the next element */
+      he = nextHe;
     }
-    zfree(d->ht_table[0]);
-    _dictReset(d, 0);
+  }
+  assert(ht->used == 0);
+  hi_free(ht->table);
+
+  /* Remap the new hashtable in the old */
+  *ht = n;
+  return DICT_OK;
 }
 
-void dictRelease(dict *d) {
-    dictEmpty(d, NULL);
-    zfree(d);
+/* Add an element to the target hash table */
+int dictAdd(dict* ht, void* key, void* val) {
+  int index;
+  dictEntry* entry;
+
+  /* Get the index of the new element, or -1 if
+   * the element already exists. */
+  if ((index = _dictKeyIndex(ht, key)) == -1)
+    return DICT_ERR;
+
+  /* Allocates the memory and stores key */
+  entry = static_cast<dictEntry*>(hi_malloc(sizeof(*entry)));
+  if (entry == NULL)
+    return DICT_ERR;
+
+  entry->next = ht->table[index];
+  ht->table[index] = entry;
+
+  /* Set the hash entry fields. */
+  dictSetHashKey(ht, entry, key);
+  dictSetHashVal(ht, entry, val);
+  ht->used++;
+  return DICT_OK;
 }
+
+/* Add an element, discarding the old if the key already exists.
+ * Return 1 if the key was added from scratch, 0 if there was already an
+ * element with such key and dictReplace() just performed a value update
+ * operation. */
+int dictReplace(dict* ht, void* key, void* val) {
+  dictEntry *entry, auxentry;
+
+  /* Try to add the element. If the key
+   * does not exists dictAdd will succeed. */
+  if (dictAdd(ht, key, val) == DICT_OK)
+    return 1;
+  /* It already exists, get the entry */
+  entry = dictFind(ht, key);
+  if (entry == NULL)
+    return 0;
+
+  /* Free the old value and set the new one */
+  /* Set the new value and free the old one. Note that it is important
+   * to do that in this order, as the value may just be exactly the same
+   * as the previous one. In this context, think to reference counting,
+   * you want to increment (set), and then decrement (free), and not the
+   * reverse. */
+  auxentry = *entry;
+  dictSetHashVal(ht, entry, val);
+  dictFreeEntryVal(ht, &auxentry);
+  return 0;
+}
+
+/* Search and remove an element */
+int dictDelete(dict* ht, const void* key) {
+  unsigned int h;
+  dictEntry *de, *prevde;
+
+  if (ht->size == 0)
+    return DICT_ERR;
+  h = dictHashKey(ht, key) & ht->sizemask;
+  de = ht->table[h];
+
+  prevde = NULL;
+  while (de) {
+    if (dictCompareHashKeys(ht, key, de->key)) {
+      /* Unlink the element from the list */
+      if (prevde)
+        prevde->next = de->next;
+      else
+        ht->table[h] = de->next;
+
+      dictFreeEntryKey(ht, de);
+      dictFreeEntryVal(ht, de);
+      hi_free(de);
+      ht->used--;
+      return DICT_OK;
+    }
+    prevde = de;
+    de = de->next;
+  }
+  return DICT_ERR; /* not found */
+}
+
+/* Destroy an entire hash table */
+static int _dictClear(dict* ht) {
+  unsigned long i;
+
+  /* Free all the elements */
+  for (i = 0; i < ht->size && ht->used > 0; i++) {
+    dictEntry *he, *nextHe;
+
+    if ((he = ht->table[i]) == NULL)
+      continue;
+    while (he) {
+      nextHe = he->next;
+      dictFreeEntryKey(ht, he);
+      dictFreeEntryVal(ht, he);
+      hi_free(he);
+      ht->used--;
+      he = nextHe;
+    }
+  }
+  /* Free the table and the allocated cache structure */
+  hi_free(ht->table);
+  /* Re-initialize the table */
+  _dictReset(ht);
+  return DICT_OK; /* never fails */
+}
+
+/* Clear & Release the hash table */
+void dictRelease(dict* ht) {
+  _dictClear(ht);
+  hi_free(ht);
+}
+
+dictEntry* dictFind(dict* ht, const void* key) {
+  dictEntry* he;
+  unsigned int h;
+
+  if (ht->size == 0)
+    return NULL;
+  h = dictHashKey(ht, key) & ht->sizemask;
+  he = ht->table[h];
+  while (he) {
+    if (dictCompareHashKeys(ht, key, he->key))
+      return he;
+    he = he->next;
+  }
+  return NULL;
+}
+
+dictIterator* dictGetIterator(dict* ht) {
+  dictIterator* iter = static_cast<dictIterator*>(hi_malloc(sizeof(*iter)));
+  if (iter == NULL)
+    return NULL;
+
+  iter->ht = ht;
+  iter->index = -1;
+  iter->entry = NULL;
+  iter->nextEntry = NULL;
+  return iter;
+}
+
+dictEntry* dictNext(dictIterator* iter) {
+  while (1) {
+    if (iter->entry == NULL) {
+      iter->index++;
+      if (iter->index >= (signed)iter->ht->size)
+        break;
+      iter->entry = iter->ht->table[iter->index];
+    } else {
+      iter->entry = iter->nextEntry;
+    }
+    if (iter->entry) {
+      /* We need to save the 'next' here, the iterator user
+       * may delete the entry we are returning. */
+      iter->nextEntry = iter->entry->next;
+      return iter->entry;
+    }
+  }
+  return NULL;
+}
+
+void dictReleaseIterator(dictIterator* iter) {
+  hi_free(iter);
+}
+
+/* ------------------------- private functions ------------------------------ */
+
+/* Expand the hash table if needed */
+static int _dictExpandIfNeeded(dict* ht) {
+  /* If the hash table is empty expand it to the initial size,
+   * if the table is "full" double its size. */
+  if (ht->size == 0)
+    return dictExpand(ht, DICT_HT_INITIAL_SIZE);
+  if (ht->used == ht->size)
+    return dictExpand(ht, ht->size * 2);
+  return DICT_OK;
+}
+
+/* Our hash table capability is a power of two */
+static unsigned long _dictNextPower(unsigned long size) {
+  unsigned long i = DICT_HT_INITIAL_SIZE;
+
+  if (size >= LONG_MAX)
+    return LONG_MAX;
+  while (1) {
+    if (i >= size)
+      return i;
+    i *= 2;
+  }
+}
+
+/* Returns the index of a free slot that can be populated with
+ * an hash entry for the given 'key'.
+ * If the key already exists, -1 is returned. */
+static int _dictKeyIndex(dict* ht, const void* key) {
+  unsigned int h;
+  dictEntry* he;
+
+  /* Expand the hashtable if needed */
+  if (_dictExpandIfNeeded(ht) == DICT_ERR)
+    return -1;
+  /* Compute the key hash value */
+  h = dictHashKey(ht, key) & ht->sizemask;
+  /* Search if this slot does not already contain the given key */
+  he = ht->table[h];
+  while (he) {
+    if (dictCompareHashKeys(ht, key, he->key))
+      return -1;
+    he = he->next;
+  }
+  return h;
+}
+

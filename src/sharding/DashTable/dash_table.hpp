@@ -311,7 +311,7 @@ private:
 template <typename _Key, typename _Value, typename Policy>
 DashTable<_Key, _Value, Policy>::DashTable(size_t capacity_log, const Policy& policy,
                                            PMR_NS::memory_resource* mr)
-    : Base(capacity_log), policy_(policy), segment_(mr) {
+    : Base(capacity_log), policy_(policy), segment_(mr) { 
     segment_.resize(unique_segments_);
     for (uint32_t i = 0; i < segment_.size(); ++i) {
         segment_[i] = ConstructSegment(global_depth_, i);  
@@ -324,9 +324,9 @@ DashTable<_Key, _Value, Policy>::~DashTable() {
     PMR_NS::polymorphic_allocator<SegmentType> pa(resource);
     using alloc_traits = std::allocator_traits<decltype(pa)>;
 
-    IterateDistinct([&](SegmentType* seg) {
-        alloc_traits::destroy(pa, seg);
-        alloc_traits::deallocate(pa, seg, 1);
+    IterateDistinct([&](SegmentType* seg) { // 遍历物理段
+        alloc_traits::destroy(pa, seg); // 调用析构
+        alloc_traits::deallocate(pa, seg, 1); // 释放内存
         return false;
     });
 }
@@ -336,8 +336,8 @@ DashTable<_Key, _Value, Policy>::~DashTable() {
 template <typename _Key, typename _Value, typename Policy>
 template <typename U>
 auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
-    uint64_t key_hash = DoHash(key);
-    uint32_t seg_id = SegmentId(key_hash); 
+    uint64_t key_hash = DoHash(key); // 使用std::hash进行哈希
+    uint32_t seg_id = SegmentId(key_hash); // 使用 hash >> (64 - global_depth_)  高位作为 segment ID
     if (auto seg_it = segment_[seg_id]->FindIt(key_hash, EqPred(key)); seg_it.found()) {
         return {this, seg_id, seg_it.index, seg_it.slot};
     }
@@ -346,18 +346,13 @@ auto DashTable<_Key, _Value, Policy>::Find(U&& key) const -> const_iterator {
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename Pred>
-auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator {
+auto DashTable<_Key, _Value, Policy>::FindFirst(uint64_t key_hash, Pred&& pred) -> iterator { // pred 精确比较键是否相等
     uint32_t seg_id = SegmentId(key_hash);
     if (auto seg_it = segment_[seg_id]->FindIt(key_hash, pred); seg_it.found()) {
         return {this, seg_id, seg_it.index, seg_it.slot};
     }
     return {};
 }
-
-
-
-
-
 
 
 template <typename _Key, typename _Value, typename Policy>
@@ -379,7 +374,7 @@ void DashTable<_Key, _Value, Policy>::IterateDistinct(Cb&& cb) {
     size_t i = 0;
     while (i < segment_.size()) {
         auto* seg = segment_[i];
-        size_t next_id = NextSeg(i);
+        size_t next_id = NextSeg(i); // 获取实际的物理段
         if (cb(seg))
             break;
         i = next_id;
@@ -404,21 +399,21 @@ void DashTable<_Key, _Value, Policy>::Clear() {
         using alloc_traits = std::allocator_traits<decltype(pa)>;
 
         size_t dest = 0, src = 0;
-        size_t new_size = (1 << initial_depth_);
+        size_t new_size = (1 << initial_depth_); // 全局目录，是initial_depth_, 或者global_depth_的2次幂
         bucket_count_ = 0;
-        while (src < segment_.size()) {
-        auto* seg = segment_[src];
-        size_t next_src = NextSeg(src);  
-        if (dest < new_size) {
-            seg->set_local_depth(initial_depth_);
-            bucket_count_ += seg->num_buckets();
-            segment_[dest++] = seg;
-        } else {
-            alloc_traits::destroy(pa, seg);
-            alloc_traits::deallocate(pa, seg, 1);
-        }
+        while (src < segment_.size()) { // 遍历每个段，从左往右遍历物理段，段数小于new_size，放入，否则摧毁
+            auto* seg = segment_[src];
+            size_t next_src = NextSeg(src);  
+            if (dest < new_size) {
+                seg->set_local_depth(initial_depth_);
+                bucket_count_ += seg->num_buckets();
+                segment_[dest++] = seg;
+            } else {
+                alloc_traits::destroy(pa, seg);
+                alloc_traits::deallocate(pa, seg, 1);
+            }
 
-        src = next_src;
+            src = next_src;
         }
 
         global_depth_ = initial_depth_;
@@ -432,18 +427,18 @@ template <typename U, typename V, typename EvictionPolicy>
 auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, EvictionPolicy& ev,
                                                      InsertMode mode) -> std::pair<iterator, bool> {
     uint64_t key_hash = DoHash(key);
-    uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段
+    uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段, hash >> (64 - global_depth_);
 
     while (true) {
         assert(target_seg_id < segment_.size());
         SegmentType* target = segment_[target_seg_id];
-        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热， !!!!!!!!!!!!!!!!!!!
+        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
 
         typename SegmentType::Iterator it;
         bool res = true;
         unsigned num_buckets = target->num_buckets();
 
-        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) {
+        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
             ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
         };
 
@@ -465,13 +460,14 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
             return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
         }
         if (target->local_depth() == global_depth_) { 
+            // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
             IncreaseDepth(global_depth_ + 1);
 
             target_seg_id = SegmentId(key_hash);
             assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
         }
 
-        ev.RecordSplit(target);
+        ev.RecordSplit(target); // 统计数据告诉淘汰策略
         Split(target_seg_id, ev);
     }
 
@@ -481,7 +477,7 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename EvictionPolicy>
-void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) {
+void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev) { // NO
     SegmentType* source = segment_[seg_id];
 
     uint32_t chunk_size = 1u << (global_depth_ - source->local_depth()); // 该段覆盖的目录项数量
@@ -509,7 +505,7 @@ void DashTable<_Key, _Value, Policy>::Split(uint32_t seg_id, EvictionPolicy& ev)
 }
 
 template <typename _Key, typename _Value, typename Policy>
-void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) {
+void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) { // NO
     assert(!segment_.empty());
     assert(new_depth > global_depth_);
     size_t prev_sz = segment_.size();
@@ -519,7 +515,7 @@ void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) {
     for (int i = prev_sz - 1; i >= 0; --i) {
         size_t offs = i * repl_cnt;
         std::fill(segment_.begin() + offs, segment_.begin() + offs + repl_cnt, segment_[i]);
-        segment_[i]->set_segment_id(offs);  // update segment id.
+        segment_[i]->set_segment_id(offs);  
     }
     global_depth_ = new_depth;
 }

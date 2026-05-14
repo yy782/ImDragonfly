@@ -100,13 +100,15 @@ void UringProactor::SubmitPendingOps() {
         auto* data = new PendingOp{op};
         io_uring_sqe_set_data(sqe, data);
 
-        std::cout << "Submitted op: fd=" << op.fd << ", type=" << op.op_type << std::endl;
+
     }
     
     int ret = io_uring_submit(&ring_->ring); 
 
-    if ( ret != 0 )
-        std::cout << "Submitted " << ret << " operations to io_uring"  << std::endl;
+    if ( ret != 0 ) {
+        // TODO
+    }
+
 }
 
 void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
@@ -127,7 +129,7 @@ void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
         return;
     }
     
-    std::cout<< "Received CQE" << std::endl;
+
     auto* op = static_cast<PendingOp*>(data);
     if (!op) return;
     
@@ -140,8 +142,6 @@ void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
             break;
         }
         case 1: { // read
-
-            std::cout << "Read completed, res=" << res << std::endl;
             auto* awaitable = static_cast<UringSocket::ReadAwaitable*>(op->awaitable);
             awaitable->result_ = res;
             break;

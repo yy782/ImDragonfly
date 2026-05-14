@@ -12,8 +12,8 @@ using ShardId = uint16_t;
 
 using SlotId = std::uint16_t;
 
-using ArgSlice = std::span<const std::string_view>; // from arg_range.h
-using IndexSlice = std::pair<uint32_t, uint32_t>;
+using ArgSlice = std::span<const std::string>; // from arg_range.h
+using IndexSlice = uint32_t; // not same
 
 
 

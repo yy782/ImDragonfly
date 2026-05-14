@@ -168,10 +168,10 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 
     auto& sparams = std::get<SetCmd::SetParams>(params_result); // 获取解析后的 SetParams 结构体
 
-    auto cb = [key = std::string(key), 
-           value = std::string(value), 
+    auto cb = [key, 
+           value, 
            sparams](Transaction* t, EngineShard* shard)-> OpResult<void> {
-        return SetCmd(t->GetOpArgs(shard)).Set(sparams, std::string_view(key), std::string_view(value));
+        return SetCmd(t->GetOpArgs(shard)).Set(sparams, key, value);
     };
 
     auto result = co_await cmd::SingleHopT(cb);
@@ -191,7 +191,7 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
 
-    auto cb = [key = std::string(args[1])](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
+    auto cb = [key = args[1]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
         auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
         if (it_res.GetInnerIt().owner() == nullptr) { // 没找到

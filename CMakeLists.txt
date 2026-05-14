@@ -22,9 +22,8 @@ include(cmake/third_party.cmake)
 
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(WARNING_OPTIONS
+    set(CXX_WARNING_OPTIONS
         -g -O0
-        -std=c++20
         -rdynamic
         -march=native
         -Wall
@@ -39,9 +38,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         -Wwrite-strings
     )
 else()
-    set(WARNING_OPTIONS
+    set(CXX_WARNING_OPTIONS
         -O3                     # 生产优化
-        -std=c++20
         -march=native
         -DNDEBUG
         -Wall
@@ -51,10 +49,6 @@ else()
         -Wno-conversion   
     )
 endif()    
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    add_compile_options(${WARNING_OPTIONS})
-endif()
 
 # 主代码
 add_subdirectory(net)
@@ -72,7 +66,7 @@ target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/net
 )
-
+target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
     incomplete-imdragonfly

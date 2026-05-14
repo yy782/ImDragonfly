@@ -26,7 +26,7 @@ def main():
     
     # 命令行交互
     print("Redis 客户端已启动")
-    print("支持命令: SET key value, GET key, SHUTDOWN, 或输入 'quit' 退出\n")
+    print("支持命令: SET key value, GET key, DEL key, SHUTDOWN, 或输入 'quit' 退出\n")
     
     while True:
         try:
@@ -59,6 +59,14 @@ def main():
                 else:
                     print(f"{value}")
             
+            elif command == 'DEL' and len(parts) == 2:
+                key = parts[1]
+                result = r.delete(key)
+                if result:
+                    print(f"✓ OK - 已删除键: {key}")
+                else:
+                    print("(nil) - 键不存在")
+            
             elif command == 'SHUTDOWN':
                 print("⚠️  正在关闭 Redis 服务器...")
                 try:
@@ -78,6 +86,7 @@ def main():
                 print("错误: 无效命令")
                 print("用法: SET key value")
                 print("      GET key")
+                print("      DEL key")
                 print("      SHUTDOWN")
                 
         except KeyboardInterrupt:

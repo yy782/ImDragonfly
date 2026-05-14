@@ -64,6 +64,7 @@ public:
 
     using Handler = util::function_base<true, true, fu2::capacity_default, false, false,
                                       void(CmdArgList, CommandContext*) const>;
+    // using Handler = std::function<void(CmdArgList, CommandContext*)>;
 
     // Returns the invoke time in usec.
     void Invoke(CmdArgList args, CommandContext* cmd_cntx) const {

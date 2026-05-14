@@ -3,6 +3,7 @@
 #include "command_layer/cmn_types.hpp"
 #include "sharding/namespaces.hpp"
 #include <span>
+#include <iostream>
 namespace dfly {
 
 
@@ -31,7 +32,7 @@ class ShardArgs {
 public:
     class Iterator {
         ArgSlice arglist_;
-        std::span<const IndexSlice>::iterator index_it_; // not same
+        std::vector<IndexSlice>::const_iterator index_it_; // not same
         uint32_t delta_ = 0;
 
     public:
@@ -40,9 +41,7 @@ public:
         using difference_type = ptrdiff_t;
         using pointer = value_type*;
         using reference = value_type&;
-
-        // First version, corresponds to spans over arguments.
-        Iterator(::cmn::ArgSlice list, std::span<const IndexSlice>::iterator it)
+        Iterator(::cmn::ArgSlice list, std::vector<IndexSlice>::const_iterator it)
             : arglist_(list), index_it_(it) {
         }
 
@@ -60,7 +59,7 @@ public:
 
         Iterator& operator++() {
             ++delta_;
-            if (index() >= index_it_->second) {
+            if (index() >= *index_it_) {
                 ++index_it_;
                 ++delta_ = 0;
             }
@@ -74,26 +73,31 @@ public:
         }
 
         size_t index() const {
-            return index_it_->first + delta_;
+            return *index_it_ + delta_;
         }
     };
 
     using const_iterator = Iterator;
 
-    ShardArgs(::cmn::ArgSlice fa, std::span<const IndexSlice> s) : slice_(ArgsIndexPair(fa, s)) {
+    ShardArgs(::cmn::ArgSlice fa, std::vector<IndexSlice> s) 
+    : 
+    slice_(fa), 
+    index_(s)
+    {
     }
 
-    ShardArgs() : slice_(ArgsIndexPair{}) {
+    ShardArgs()  {
     }
 
     size_t Size() const;
 
     Iterator cbegin() const {
-        return Iterator{slice_.first, slice_.second.begin()};
+
+        return Iterator{slice_, index_.begin()};
     }
 
     Iterator cend() const {
-        return Iterator{slice_.first, slice_.second.end()};
+        return Iterator{slice_, index_.end()};
     }
 
     Iterator begin() const {
@@ -105,15 +109,16 @@ public:
     }
 
     bool Empty() const {
-        return slice_.second.empty();
+        return index_.empty();
     }
 
     std::string_view Front() const {
         return *cbegin();
     }
 private:
-    using ArgsIndexPair = std::pair<::cmn::ArgSlice, std::span<const IndexSlice>>;
-    ArgsIndexPair slice_;
+
+    ::cmn::ArgSlice slice_;
+    std::vector<IndexSlice> index_;
 };
 
 

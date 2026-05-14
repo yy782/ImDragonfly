@@ -5,10 +5,10 @@
 
 namespace cmn {
 
-using ArgSlice = std::span<const std::string_view>; // 这两个是等价的
+using ArgSlice = std::span<const std::string>; // 这两个是等价的
 
 
-using CmdArgList = std::span<const std::string_view>;    
+using CmdArgList = std::span<const std::string>;    
 
 }
 
