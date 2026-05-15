@@ -25,7 +25,11 @@ int main(int argc, char *argv[]) {
     FLAGS_logtostderr = false;
     FLAGS_alsologtostderr = false;
     FLAGS_minloglevel = 0;
-    
+    FLAGS_v = 2;  
+#ifndef NDEBUG
+    FLAGS_logbufsecs = 0;
+#endif
+
     google::InitGoogleLogging(argv[0]);
     
     LOG(INFO) << "ImDragonfly server starting...";

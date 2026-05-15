@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# python3 test_multi_connection.py
 """
 测试多连接场景下服务端稳定性的测试脚本
 
@@ -45,7 +46,8 @@ class ConnectionWorker(threading.Thread):
         try:
             # 创建连接
             self.client = redis.Redis(host=HOST, port=PORT, decode_responses=True)
-            
+            self.client.ping()
+            log(f"Worker {self.worker_id}: ✓ 成功连接到 Redis\n")
             while not self.stop_event.is_set():
                 try:
                     self._execute_random_command()

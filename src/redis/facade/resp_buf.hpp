@@ -18,14 +18,12 @@ std::vector<std::string> ParseRESP() {
     if (pos >= size) {
         return result;
     }
-    
-    // 必须以 '*' 开头
+
     if (data[pos] != '*') {
         return result;
     }
     pos++;
-    
-    // 读取数组元素个数
+
     int64_t num_elements = 0;
     while (pos < size && std::isdigit(data[pos])) {
         num_elements = num_elements * 10 + (data[pos] - '0');
@@ -35,24 +33,20 @@ std::vector<std::string> ParseRESP() {
     if (num_elements <= 0 || pos + 2 > size) {
         return result;
     }
-    
-    // 检查 \r\n
+
     if (data[pos] != '\r' || data[pos+1] != '\n') {
         return result;
     }
     pos += 2;
-    
-    // 解析每个元素
+
     for (int64_t i = 0; i < num_elements; i++) {
         if (pos >= size) return result;
-        
-        // 每个元素必须是批量字符串
+
         if (data[pos] != '$') {
             return result;
         }
         pos++;
-        
-        // 读取字符串长度
+
         int64_t len = 0;
         while (pos < size && std::isdigit(data[pos])) {
             len = len * 10 + (data[pos] - '0');
@@ -62,30 +56,23 @@ std::vector<std::string> ParseRESP() {
         if (len < 0 || pos + 2 > size) {
             return result;
         }
-        
-        // 检查 \r\n
+
         if (data[pos] != '\r' || data[pos+1] != '\n') {
             return result;
         }
         pos += 2;
-        
-        // 检查数据是否足够
+
         if (pos + len + 2 > size) {
             return result;
         }
-        
-        // 添加字符串视图
         result.emplace_back(data + pos, len);
-        
-        // 跳过数据和结尾的 \r\n
         pos += len;
         if (pos + 2 > size || data[pos] != '\r' || data[pos+1] != '\n') {
             return result;
         }
         pos += 2;
     }
-    
-    // 解析成功，更新 p_ 并消费数据
+
     p_ = pos;
     return result;
 }

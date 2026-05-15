@@ -12,6 +12,7 @@
 #include "sharding/op_status.hpp"
 #include "network/redis_server.hpp"
 #include <atomic>
+#include <glog/logging.h>
 
 namespace dfly {
 using namespace dfly::cmd;
@@ -56,6 +57,7 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
 }
 
 void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
+    ASSERT_TRUE(!args.empty());
     CmdDel(args, cmd_cntx);
     return;
 }

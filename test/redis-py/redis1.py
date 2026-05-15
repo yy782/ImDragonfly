@@ -1,5 +1,5 @@
 # python3 redis1.py
-
+# cd test/redis-py
 import redis
 import sys
 
