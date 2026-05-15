@@ -4,21 +4,23 @@
 
 #include <functional>
 #include "util/maths.hpp"
+#include <glog/logging.h>
 
 namespace dfly{
 
 EngineShardSet* shard_set = nullptr;
 
 void EngineShardSet::Init(uint32_t sz) {
+    LOG(INFO) << "Initializing EngineShardSet with " << sz << " shards";
     shards_.reset(new EngineShard*[sz]);
     size_ = sz;
-    //size_t max_shard_file_size = GetTieredFileLimit(sz);
+    
     pp_->AwaitOnAll([this](base::UringProactorPtr pb) {
         InitThreadLocal(pb);
     });
 
     namespaces = new Namespaces();
-
+    LOG(INFO) << "EngineShardSet initialized with " << sz << " shards and namespace support";
 }
 
 

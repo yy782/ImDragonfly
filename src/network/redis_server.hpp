@@ -12,6 +12,7 @@
 #include "base/uring_proactor_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
+#include <cstring>
 
 namespace dfly{
 using base::UringProactorPtr;
@@ -27,51 +28,51 @@ public:
     }
     
     cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
+        int fd = socket_.fd();
+        LOG(INFO) << "New session created for fd: " << fd;
 
         try{
-            int fd = socket_.fd();
-            LOG(INFO) << "Session Read for fd: " << fd;
-            std::cout << "Session Read for fd: " << fd << std::endl;
-
             ctxt_.owner_ = shared_from_this();
-            
 
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
-                if (r>0) {
+                if (r > 0) {
                     RecvBuf_.hasWritten(r);
                     Com = RecvBuf_.ParseRESP();
                     if (Com.empty()) continue;
                     args = ::cmn::CmdArgList(Com);
+                    
+                    VLOG(1) << "Received command: " << args[0] << " with " << args.size() << " arguments";
+                    
                     ci = CIs->Find(args[0]);
                     if (!ci) { 
+                        LOG(WARNING) << "Unknown command: " << args[0] << " from fd: " << fd;
                         SendERROR();
                         continue;
                     }
-
-                    // auto parse = ::cmn::ParsedCommand(res.begin(), res.end(), res.size());
-                    // ::cmn::CmdArgList args = parse.ToCmdArgList();
-
-                    
 
                     t.reset(new Transaction(ci));
                     t->InitByArgs(ns_, index_, args);
                     t->debug_owner() = this;
                     cm_txt = CommandContext(&ctxt_, t.get(), ci);
+                    
+                    VLOG(2) << "Executing command: " << ci->name();
                     ci->Invoke(args, &cm_txt);
+                    VLOG(2) << "Command " << ci->name() << " executed successfully";
                 }
-                else if (r == 0 ) { 
+                else if (r == 0) { 
+                    LOG(INFO) << "Connection closed by client, fd: " << fd;
                     socket_.Close();
                     break;
                 }
                 else {
-                    // TODO
+                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
                 }            
             }
                       
-        }catch(const std::exception& e) {
-            std::cout << "ERR:" << e.what() << std::endl;
+        } catch(const std::exception& e) {
+            LOG(ERROR) << "Exception in session fd:" << fd << ": " << e.what();
         }
         co_return;  
     }    
@@ -185,19 +186,20 @@ public:
                     auto fd = co_await server->ListenSocket_.AsyncAccept();
 
                     if (fd > 0){
-
-
-                        // LOG(INFO) << "Accepted new connection, addr: " << base::AddressToString(base::Address(fd));
-                        std::cout<< "Accepted new connection, addr: " << base::AddressToString(base::Address(fd)) << std::endl;
+                        std::string addr = base::AddressToString(base::Address(fd));
+                        LOG(INFO) << "Accepted new connection, addr: " << addr;
 
                         auto p = server->NextProactor();
+                        VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
 
                         auto session = std::make_shared<RedisSession>(fd, p);
                         
                         p->DispatchBrief([session](){
                             session->DoRead();
                         });                    
-                    }                 
+                    } else if (fd < 0) {
+                        LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                    }
                 }
                 co_return;
             };

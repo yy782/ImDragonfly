@@ -1,4 +1,7 @@
-#pragma once 
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+#pragma once
 
 #include <assert.h>
 #include <immintrin.h>
@@ -206,7 +209,7 @@ public:
 
         for (unsigned i = 0; i < kStashFpLen; ++i) {
             if ((ob & 1) && (stash_arr_[i] == fp) && (om & 1)) {
-                unsigned pos = (stash_pos_ >> (i * 2)) & 3;
+                unsigned pos = (stash_pos_ >> (i * 2)) & 3; // 从 stash_pos_ 中提取当前 Stash 指针的 2 位
                 auto sid = func(i, pos);
                 if (sid != BucketBase::kNanSlot) {
                     return std::pair<unsigned, SlotId>(pos, sid);
@@ -279,9 +282,9 @@ protected:
         stash_arr_[free_slot] = fp;
         stash_busy_ |= (1u << free_slot); 
         stash_probe_mask_ |= (unsigned(probe) << free_slot);
-        free_slot *= 2;
-        stash_pos_ &= (~(3 << free_slot));       
-        stash_pos_ |= (stash_pos << free_slot);  
+        free_slot *= 2; // 计算空闲槽位的索引在stash_pos_的起始比特位
+        stash_pos_ &= (~(3 << free_slot)); // 将 stash_pos_ 中目标 2 位区域清零，同时保留其他位不变。
+        stash_pos_ |= (stash_pos << free_slot);  // 填入目标2位
         return true;        
     }
 
@@ -289,12 +292,12 @@ protected:
     bool ClearStash(uint8_t fp, unsigned stash_pos, bool probe){
         auto cb = [stash_pos, this](unsigned i, unsigned pos) -> SlotId {
             if (pos == stash_pos) {
-            stash_busy_ &= (~(1u << i));
-            stash_probe_mask_ &= (~(1u << i));
-            stash_pos_ &= (~(3u << (i * 2)));
+                stash_busy_ &= (~(1u << i));
+                stash_probe_mask_ &= (~(1u << i));
+                stash_pos_ &= (~(3u << (i * 2)));
 
-            assert(0u == ((stash_pos_ >> (i * 2)) & 3));
-            return 0;
+                assert(0u == ((stash_pos_ >> (i * 2)) & 3));
+                return 0;
             }
             return kNanSlot;
         };
@@ -308,7 +311,7 @@ protected:
     StashFpArray stash_arr_; // 存储 Stash 槽位的指纹
 
     uint8_t stash_busy_ = 0;  
-    uint8_t stash_pos_ = 0;   
+    uint8_t stash_pos_ = 0;   // stash_busy_能判断哪些溢出桶有 Stash 引用， 只不过是用位判断的，stash_pos_就是根据位来获得溢出桶ID
     uint8_t stash_probe_mask_ = 0;
 
 
@@ -603,11 +606,11 @@ public:
     uint64_t token() const {
         return val_;
     }
-    explicit operator bool() const { // 为什么要 explicit
+    explicit operator bool() const { // explicit：避免int x = DashCursor + 1;
         return val_ != 0;
     }
 private:
-    uint64_t val_;
+    uint64_t val_;// 64位压缩存储：segment_id (高 56 位)+ bucket_id(低 8 位)
 };
 
 
@@ -671,7 +674,7 @@ auto Segment<Key, Value, Policy>::Bucket::FindByFp(uint8_t fp_hash, bool probe, 
         return kNanSlot;
 
     unsigned delta = __builtin_ctz(mask);
-    mask >>= delta;
+    mask >>= delta; // 将 mask 右移 delta 位，将第一个 1 位移动到最低位
     for (unsigned i = delta; i < kSlotNum; ++i) {
         static_assert(std::is_invocable_v<Pred, const Key_t&>);
 
@@ -703,7 +706,7 @@ auto Segment<Key, Value, Policy>::Insert(U&& key, V&& value, Hash_t key_hash, Pr
 template <typename Key, typename Value, typename Policy>
 template <typename U, typename V, typename OnMoveCb>
 auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value, Hash_t key_hash, bool spread,
-                                             OnMoveCb&& on_move_cb) -> Iterator {
+                                             OnMoveCb&& on_move_cb) -> Iterator { // on_move_cb 是一个回调函数，用于处理元素移动通知淘汰策略
     const uint8_t bid = HomeIndex(key_hash);
     const uint8_t nid = NextBid(bid); 
 

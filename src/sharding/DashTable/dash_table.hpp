@@ -1,3 +1,6 @@
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
 #pragma once
 
 
@@ -429,46 +432,48 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value, Evictio
     uint64_t key_hash = DoHash(key);
     uint32_t target_seg_id = SegmentId(key_hash); // 使用哈希值的高 global_depth_ 位确定目标段, hash >> (64 - global_depth_);
 
-    // 缺少了while(true)
-    assert(target_seg_id < segment_.size());
-    SegmentType* target = segment_[target_seg_id];
-    __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
+    while (true) {
+        assert(target_seg_id < segment_.size());
+        SegmentType* target = segment_[target_seg_id];
+        __builtin_prefetch(target, 0, 1); // 预取指令 , 预热 
 
-    typename SegmentType::Iterator it;
-    bool res = true;
-    unsigned num_buckets = target->num_buckets();
+        typename SegmentType::Iterator it;
+        bool res = true;
+        unsigned num_buckets = target->num_buckets();
 
-    auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
-        ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
-    };
+        auto move_cb = [&](uint32_t segment_id, detail::PhysicalBid from, detail::PhysicalBid to) { // 基本用于统计信息, 并不影响插入逻辑
+            ev.OnMove(Cursor{global_depth_, segment_id, from}, Cursor{global_depth_, segment_id, to});
+        };
 
-    if (mode == InsertMode::kForceInsert) {
-        it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
-        res = it.found();  
-    } else {
-        std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
-                                        EqPred(key), move_cb); 
+        if (mode == InsertMode::kForceInsert) {
+            it = target->InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true, move_cb); 
+            res = it.found();  
+        } else {
+            std::tie(it, res) = target->Insert(std::forward<U>(key), std::forward<V>(value), key_hash,
+                                            EqPred(key), move_cb); 
+        }
+
+        if (res) {  // success
+            bucket_count_ += (target->num_buckets() - num_buckets);
+            ++size_;
+            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, true);
+        }
+
+        if (it.found()) {
+            return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
+        }
+        if (target->local_depth() == global_depth_) { 
+            // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
+            IncreaseDepth(global_depth_ + 1);
+
+            target_seg_id = SegmentId(key_hash);
+            assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
+        }
+
+        ev.RecordSplit(target); // 统计数据告诉淘汰策略
+        Split(target_seg_id, ev);        
     }
 
-    if (res) {  // success
-        bucket_count_ += (target->num_buckets() - num_buckets);
-        ++size_;
-        return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, true);
-    }
-
-    if (it.found()) {
-        return std::make_pair(iterator{this, target_seg_id, it.index, it.slot}, false);
-    }
-    if (target->local_depth() == global_depth_) { 
-        // 这个 Segment 的 local_depth 已经等于全局深度，意味着它在目录中只独占一个逻辑槽，没有多余的目录项可以用来映射即将分裂出的“兄弟段”
-        IncreaseDepth(global_depth_ + 1);
-
-        target_seg_id = SegmentId(key_hash);
-        assert(target_seg_id < segment_.size() && segment_[target_seg_id] == target);
-    }
-
-    ev.RecordSplit(target); // 统计数据告诉淘汰策略
-    Split(target_seg_id, ev);
 
     return std::make_pair(iterator{}, false);
 }

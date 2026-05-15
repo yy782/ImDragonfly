@@ -1,5 +1,6 @@
 #include "engine_shard.hpp"
 #include "detail/stateless_alloceator.hpp"
+#include <glog/logging.h>
 
 
 namespace dfly{
@@ -8,10 +9,12 @@ thread_local mi_heap_t* data_heap = nullptr; // 线程本地堆指针
 thread_local EngineShard* EngineShard::shard_ = nullptr;
 
 void EngineShard::InitThreadLocal(base::UringProactorPtr pb) {
+    LOG(INFO) << "Initializing EngineShard thread local for proactor " << pb->GetPoolIndex();
     data_heap = mi_heap_new();
     void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(EngineShard), alignof(EngineShard));
     shard_ = new (ptr) EngineShard(pb, data_heap);
-    InitTLStatelessAllocMR(shard_->memory_resource()); // 初始化无状态内存分配器
+    InitTLStatelessAllocMR(shard_->memory_resource());
+    LOG(INFO) << "EngineShard thread local initialized, shard_id=" << shard_->shard_id();
 }
 EngineShard::EngineShard(base::UringProactorPtr pb, mi_heap_t* heap) : 
 queue_(kQueueLen),

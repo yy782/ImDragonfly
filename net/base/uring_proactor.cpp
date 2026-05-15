@@ -2,6 +2,7 @@
 #include <liburing.h>
 #include <errno.h>
 #include <cstring>
+#include <glog/logging.h>
 
 namespace base {
 
@@ -11,7 +12,7 @@ struct UringProactor::io_uring_ring {
     ~io_uring_ring() { io_uring_queue_exit(&ring); }
 };
 
-// ============== UringProactor 实现 ==============
+
 
 UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size)
     : thread_index_(index)
@@ -20,6 +21,9 @@ UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size
     , running_(false)
     , stop_(false)
 { 
+    LOG(INFO) << "Initializing UringProactor index=" << index 
+              << ", queue_size=" << queue_size 
+              << ", ring_size=" << ring_size;
     
     // 初始化 io_uring
     ring_ = std::make_unique<io_uring_ring>();
@@ -28,21 +32,25 @@ UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size
     
     int ret = io_uring_queue_init_params(ring_size, &ring_->ring, &params);
     if (ret < 0) {
-        throw std::system_error(-ret, std::generic_category(), "io_uring_init failed");
+        LOG(FATAL) << "io_uring_init failed: " << strerror(-ret);
     }
     ring_fd_ = ring_->ring.ring_fd;
+    VLOG(1) << "io_uring initialized, ring_fd=" << ring_fd_;
     
     // 创建 eventfd
     event_fd_ = eventfd(0, EFD_NONBLOCK);
     if (event_fd_ < 0) {
-        throw std::system_error(errno, std::generic_category(), "eventfd failed");
+        LOG(FATAL) << "eventfd failed: " << strerror(errno);
     }
+    VLOG(1) << "eventfd created, fd=" << event_fd_;
     
     // 注册 eventfd 到 io_uring
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
     io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
     io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(WAKEUP_COOKIE));
     io_uring_submit(&ring_->ring);
+    
+    LOG(INFO) << "UringProactor index=" << index << " initialized successfully";
 }
 
 UringProactor::~UringProactor() {
@@ -71,11 +79,9 @@ void UringProactor::SubmitPendingOps() {
     while (pending_ops_->try_dequeue(op)) {
         struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
         if (!sqe) {
-            // 队列满了，先提交一批
             io_uring_submit(&ring_->ring);
             sqe = io_uring_get_sqe(&ring_->ring);
             if (!sqe) {
-                // 还是没拿到，重新入队
                 pending_ops_->try_enqueue(std::move(op));
                 continue;
             }
@@ -162,9 +168,11 @@ void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
 }
 
 void UringProactor::loop() {
-    loop_thread_id_ = std::this_thread::get_id();
+    loop_thread_id_ = util::Thread::current_tid();
     running_ = true;
     stop_ = false;
+    
+    LOG(INFO) << "UringProactor index=" << thread_index_ << " event loop starting";
     
     struct __kernel_timespec timeout;
     timeout.tv_sec = 0;
@@ -189,13 +197,14 @@ void UringProactor::loop() {
     }
     
     running_ = false;
+    LOG(INFO) << "UringProactor index=" << thread_index_ << " event loop stopped";
 }
 
 void UringProactor::stop() {
     stop_ = true;
     Wakeup();
     
-    if (std::this_thread::get_id() != loop_thread_id_ && running_) {
+    if (util::Thread::current_tid() != loop_thread_id_ && running_) {
         while (running_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }

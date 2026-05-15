@@ -1,3 +1,6 @@
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
 #pragma once
 #include "DashTable/dash_table.hpp"
 #include "DashTable/compact_obj.hpp"

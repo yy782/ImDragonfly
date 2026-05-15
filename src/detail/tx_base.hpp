@@ -1,3 +1,6 @@
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
 #pragma once
 #include "detail/common_types.hpp"
 #include "command_layer/cmn_types.hpp"
