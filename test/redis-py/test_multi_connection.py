@@ -4,6 +4,8 @@ import threading
 import time
 from datetime import datetime
 
+running_time = 10
+
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
@@ -59,8 +61,8 @@ def test_concurrent_with_interval(interval_ms):
         t.start()
         time.sleep(0.2)  # 错开启动
     
-    # 运行30秒
-    time.sleep(30)
+
+    time.sleep(running_time)
     stop_event.set()
     
     for t in workers:
@@ -71,13 +73,3 @@ def test_concurrent_with_interval(interval_ms):
 if __name__ == "__main__":
 
     test_concurrent_with_interval(10)     # 10ms间隔
-
-
-
-
-
-
-
-
-
-# python3 test_multi_connection.py

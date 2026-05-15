@@ -21,11 +21,6 @@ public:
     void PreShutdown();
     void Shutdown();
 
-
-    // template <typename F> 
-    // auto Await(ShardId sid, F&& f) { // 同步等待
-    //     return shards_[sid]->GetQueue()->Await(std::forward<F>(f));
-    // }
     template <typename F> 
     auto Add(ShardId sid, F&& f) { // 异步执行
         assert(sid < size_);
@@ -69,7 +64,7 @@ private:
 
 
 
-ShardId Shard(std::string_view key);
+
 
 
 

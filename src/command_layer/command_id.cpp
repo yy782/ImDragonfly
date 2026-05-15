@@ -2,12 +2,11 @@
 
 namespace facade{
 
-CommandId::CommandId(const char* name, int8_t arity, int8_t first_key,
-                     int8_t last_key)
+CommandId::CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset)
     : name_(name),
-      arity_(arity),
-      first_key_(first_key),
-      last_key_(last_key){
+      keys_start_(keys_start),
+      keys_nums_(keys_nums),
+      keys_offset_(keys_offset){
 }
 
 }

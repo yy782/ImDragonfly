@@ -5,33 +5,36 @@
 namespace cppcoro
 {
 
-
 template<class TaskPromise>
-class AsyncTask {
+class AsyncTaskBase {
 public:
     using promise_type = TaskPromise;
 
-    AsyncTask() =delete;
-    explicit AsyncTask(std::coroutine_handle<promise_type> coroutine)
+    AsyncTaskBase() =delete;
+    explicit AsyncTaskBase(std::coroutine_handle<promise_type> coroutine)
         : coroutine_(coroutine)
     {}
-    AsyncTask(AsyncTask&&) =delete;
-    AsyncTask(const AsyncTask&) = delete;
-    AsyncTask& operator=(const AsyncTask&) = delete;
-    AsyncTask& operator=(AsyncTask&&) =delete; 
-    ~AsyncTask() = default;
+    AsyncTaskBase(AsyncTaskBase&&) =delete;
+    AsyncTaskBase(const AsyncTaskBase&) = delete;
+    AsyncTaskBase& operator=(const AsyncTaskBase&) = delete;
+    AsyncTaskBase& operator=(AsyncTaskBase&&) =delete; 
+    ~AsyncTaskBase() = default;
   
 private:
     std::coroutine_handle<promise_type> coroutine_;
-
 };
-
-class AsyncPromiseBase {
+class AsyncPromise {
 public:
-    AsyncPromiseBase() noexcept = default;
-    AsyncPromiseBase(const AsyncPromiseBase&) = delete;
-    AsyncPromiseBase& operator=(const AsyncPromiseBase&) = delete;
-    ~AsyncPromiseBase() = default;
+    template<typename ...Args>
+    AsyncPromise(Args&&...) noexcept {
+
+    }
+    AsyncPromise() noexcept {
+
+    }
+    AsyncPromise(const AsyncPromise&) = delete;
+    AsyncPromise& operator=(const AsyncPromise&) = delete;
+    ~AsyncPromise() = default;
 
     void return_void() noexcept
     {}
@@ -49,18 +52,16 @@ public:
         return std::suspend_never{};
     }
 
+    AsyncTaskBase<AsyncPromise> get_return_object() noexcept{
+        return AsyncTaskBase<AsyncPromise>{ std::coroutine_handle<AsyncPromise>::from_promise(*this) };
+    }    
 };
 
+using AsyncTask = AsyncTaskBase<AsyncPromise>;
 
-class AsyncPromise : public AsyncPromiseBase {
-public:
-      AsyncPromise() noexcept = default;
 
-      AsyncTask<AsyncPromise> get_return_object() noexcept{
-          return AsyncTask<AsyncPromise>{ std::coroutine_handle<AsyncPromise>::from_promise(*this) };
-      }
 
-};
+
 
 
 

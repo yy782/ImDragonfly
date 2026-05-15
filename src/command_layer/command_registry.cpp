@@ -12,9 +12,8 @@ namespace dfly {
 using namespace facade;
 
 
-CommandId::CommandId(const char* name, int8_t arity, int8_t first_key,
-                     int8_t last_key)
-    : facade::CommandId(name, arity, first_key, last_key) {
+CommandId::CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset)
+    : facade::CommandId(name, keys_start, keys_nums, keys_offset) {
 }
 
 CommandId::~CommandId() {
@@ -22,7 +21,7 @@ CommandId::~CommandId() {
 
 CommandId CommandId::Clone(const std::string_view name) const {
     CommandId cloned =
-        CommandId{name.data(), arity_, first_key_, last_key_};
+        CommandId{name.data(), keys_start_, keys_nums_, keys_offset_};
     cloned.handler_ = handler_;
     return cloned;
 }

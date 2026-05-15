@@ -12,7 +12,7 @@
 #include "command_layer/cmn_types.hpp"
 #include "util/function.hpp"
 #include "sharding/op_status.hpp"
-#include "conn_context.hpp"
+#include "detail/conn_context.hpp"
 #include "sharding/engine_shard.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "cppcoro/task.hpp"
@@ -45,8 +45,9 @@ struct CoroTask {
 class Coro {
 public:
     Coro() = default;
-    Coro(CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx_{cmd_cntx} {
-      (void)arg;
+    template<typename... Args>
+    Coro(CommandContext* cmd_cntx, Args&&...) : cmd_cntx_{cmd_cntx} {
+
     }
     CoroTask get_return_object() noexcept{
       return CoroTask{ std::coroutine_handle<Coro>::from_promise(*this) };

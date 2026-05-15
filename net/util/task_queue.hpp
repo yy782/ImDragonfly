@@ -27,7 +27,7 @@ public:
     }
 
     template <typename F> 
-    cppcoro::AsyncTask<cppcoro::AsyncPromise> Add(F&& f) {
+    cppcoro::AsyncTask Add(F&& f) {
         while (true) {
             auto key = push_ec_.prepareWait();
             if (TryAdd(std::forward<F>(f))) {

@@ -88,48 +88,43 @@ public:
         lock_.unlock();
     }
 
-
-    auto wait(uint32_t epoch) noexcept{
-        struct WaitAwaitable{
-            EventCount* event_;
-            uint32_t epoch_;
+    struct WaitAwaitable{
+        EventCount* event_;
+        uint32_t epoch_;
 
 
 
-            bool SuspendWithResume = true;
-            detail::Waiter waiter {};
+        bool SuspendWithResume = true;
+        detail::Waiter waiter {};
 
-            bool await_ready() const noexcept
+        bool await_ready() const noexcept
+        {
+            return false;
+        }
+        bool await_suspend(
+            std::coroutine_handle<> awaitingCoroutine) noexcept
             {
-                return false;
+                std::unique_lock lk(event_->lock_); 
+                if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
+                        waiter.handler = awaitingCoroutine;
+                        event_->wait_queue_.Link(&waiter);
+                        lk.unlock();
+                        SuspendWithResume = true;
+                }
+                else {
+                        SuspendWithResume = false;
+                        lk.unlock();
+                }
+                return SuspendWithResume;
             }
-            bool await_suspend(
-                std::coroutine_handle<> awaitingCoroutine) noexcept
-              {
-                    std::unique_lock lk(event_->lock_); 
-                    if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
-                            waiter.handler = awaitingCoroutine;
-                            event_->wait_queue_.Link(&waiter);
-                            lk.unlock();
-                            SuspendWithResume = true;
-                    }
-                    else {
-                            SuspendWithResume = false;
-                            lk.unlock();
-                    }
-                    return SuspendWithResume;
-              }
 
 
-              bool await_resume() 
-              {
-                    if(SuspendWithResume) {
-                        event_->finishWait();
-                    }
-
-                    return SuspendWithResume;
-              }
-        };
+            bool await_resume() 
+            {
+                return SuspendWithResume;
+            }
+    };
+    auto wait(uint32_t epoch) noexcept{
         return WaitAwaitable{this, epoch};
     }
 
@@ -265,80 +260,64 @@ private:
 };
 
 
-// class EmbeddedBlockingCounter {
-// public:
-//     EmbeddedBlockingCounter(unsigned start_count = 0) : ec_{}, count_{start_count} {
-//     }
+class EmbeddedBlockingCounter {
+public:
+    EmbeddedBlockingCounter(unsigned start_count = 0) : ec_{}, count_{start_count} {
+    }
+    cppcoro::task<bool> Wait(){
+        uint64_t cnt;
+        co_await ec_.await(WaitCondition(&cnt));
+        co_return (cnt & kCancelFlag) == 0;
+    }
+    void Start(unsigned cnt) {
+        count_.store(cnt, std::memory_order_relaxed);
+    }
+    void Add(unsigned cnt = 1) {
+        count_.fetch_add(cnt, std::memory_order_relaxed);
+    }
+    void Dec(){
+        uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
+        if (prev == 1)
+            ec_.notifyAll();
+    }
+    void Cancel(){
+        count_.fetch_or(kCancelFlag, std::memory_order_acq_rel);
+        ec_.notifyAll();
+    }
+    bool IsCompleted() const{
+        uint64_t v = 0;
+        bool result = WaitCondition(&v)();
+        if (result)  // acquire semantics for "if completed, then action"
+            std::atomic_thread_fence(std::memory_order_acquire);
+        return result;
+    }
 
-//     // Returns true on success (reaching 0), false when cancelled. Acquire semantics
-//     bool Wait(){
-//         uint64_t cnt;
-//         ec_.await(WaitCondition(&cnt));
-//         return (cnt & kCancelFlag) == 0;
-//     }
-
-
-//     // Start with specified count. Current value must be strictly zero (not cancelled).
-//     void Start(unsigned cnt) {
-//         count_.store(cnt, std::memory_order_relaxed);
-//     }
-
-//     // Add to blocking counter
-//     void Add(unsigned cnt = 1) {
-//         count_.fetch_add(cnt, std::memory_order_relaxed);
-//     }
-
-//     // Decrement from blocking counter. Release semantics.
-//     void Dec(){
-//         uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
-//         if (prev == 1)
-//             ec_.notifyAll();
-//     }
-
-//     // Cancel blocking counter, unblock wait. Release semantics.
-//     void Cancel(){
-//         count_.fetch_or(kCancelFlag, std::memory_order_acq_rel);
-//         ec_.notifyAll();
-//     }
-
-
-//     // Return true if count is zero or cancelled. Has acquire semantics to be used in if checks
-//     bool IsCompleted() const{
-//         uint64_t v = 0;
-//         bool result = WaitCondition(&v)();
-//         if (result)  // acquire semantics for "if completed, then action"
-//             std::atomic_thread_fence(std::memory_order_acquire);
-//         return result;
-//     }
-
-// private:
-//     const uint64_t kCancelFlag = (1ULL << 63);
-
-//     // Re-usable functor for wait condition, stores result in provided pointer
-//     std::function<bool()> WaitCondition(uint64_t* cnt) const {
-//         return [this, cnt]() -> bool {
-//             *cnt = count_.load(std::memory_order_relaxed);  // EventCount provides acquire
-//             return *cnt == 0 || (*cnt & kCancelFlag);
-//         };
-//     }
+private:
+    const uint64_t kCancelFlag = (1ULL << 63);
+    std::function<bool()> WaitCondition(uint64_t* cnt) const {
+        return [this, cnt]() -> bool {
+            *cnt = count_.load(std::memory_order_relaxed);  // EventCount provides acquire
+            return *cnt == 0 || (*cnt & kCancelFlag);
+        };
+    }
   
-//     EventCount ec_;
-//     std::atomic<uint64_t> count_;
-// };
+    EventCount ec_;
+    std::atomic<uint64_t> count_;
+};
 
 
-// class BlockingCounter {
-//  public:
-//   BlockingCounter(unsigned start_count) : 
-//       counter_{std::make_shared<EmbeddedBlockingCounter>(start_count)} {}
+class BlockingCounter {
+ public:
+  BlockingCounter(unsigned start_count) : 
+      counter_{std::make_shared<EmbeddedBlockingCounter>(start_count)} {}
 
-//   EmbeddedBlockingCounter* operator->() {
-//       return counter_.get();
-//   }
+  EmbeddedBlockingCounter* operator->() {
+      return counter_.get();
+  }
 
-//  private:
-//   std::shared_ptr<EmbeddedBlockingCounter> counter_;
-// };
+ private:
+  std::shared_ptr<EmbeddedBlockingCounter> counter_;
+};
 
 
 

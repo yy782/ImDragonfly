@@ -15,11 +15,11 @@
 #include "sharding/engine_shard.hpp"
 #include "command_registry.hpp"
 #include "sharding/op_status.hpp"
-#include "conn_context.hpp"
+#include "detail/conn_context.hpp"
+
 #include "transaction_layer/transaction.hpp"
 #include "cmd_support.hpp"
 #include "network/redis_server.hpp"
-
 namespace dfly {
 
 namespace {
@@ -34,6 +34,7 @@ StringResult ReadString(DbIndex dbid, std::string_view key, const PrimeValue& pv
     (void)dbid;
     (void)key;
     (void)es;
+    // 分层存储扩展
 
     return StringResult{pv.ToString()};
 }
@@ -42,11 +43,13 @@ StringResult ReadString(DbIndex dbid, std::string_view key, const PrimeValue& pv
 using ::cmd::CmdArgParser;
 using cmd::CoroTask;
 using ::cmd::CmdArgParser;
+using Slice = Transaction::Slice;
 // Helper for performing SET operations with various options
+
 class SetCmd { // SET 命令处理器
 public:
-    explicit SetCmd(OpArgs op_args)
-        : op_args_(op_args) {
+    explicit SetCmd(const Slice& slice)
+        : slice_(slice) {
     }
 
     enum SetFlags {
@@ -73,8 +76,7 @@ private:
     void AddNew(const SetParams& params, const DbSlice::Iterator& it, std::string_view key,
                 std::string_view value);
 
-    const OpArgs op_args_;
-
+    Slice slice_;
 };
 
 
@@ -83,14 +85,14 @@ facade::OpResult<void> SetCmd::Set(const SetParams& params, std::string_view key
 
 
 
-    auto& db_slice = op_args_.GetDbSlice();
-    auto op_res = db_slice.AddOrFind(op_args_.db_cntx_, key, std::nullopt);
+    DbSlice& db_slice = slice_.GetDbSlice();
+    auto op_res = db_slice.AddOrFind(slice_.GetDbContext(), key, std::nullopt);
 
 
-    if (!op_res->is_new_) {
+    if (!op_res->is_new) {
         return SetExisting(params, value, &(*op_res));
     } else {
-        AddNew(params, op_res->it_, key, value);
+        AddNew(params, op_res->it, key, value);
         return OpStatus::OK;
     }
 }
@@ -99,18 +101,18 @@ facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, std::string_
                              DbSlice::ItAndUpdater* it_upd) {
 
   
-    PrimeValue& prime_value = it_upd->it_->second;
+    PrimeValue& prime_value = it_upd->it->second;
 
 
-    auto& db_slice = op_args_.GetDbSlice();
+    auto& db_slice = slice_.GetDbSlice();
     uint64_t at_ms =
-        params.expire_after_ms_ ? params.expire_after_ms_ + op_args_.db_cntx_.time_now_ms_ : 0;
+        params.expire_after_ms_ ? params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs() : 0;
 
     if (!(params.flags_ & SET_KEEP_EXPIRE)) {
         if (at_ms) {
-            db_slice.AddExpire(op_args_.db_cntx_.db_index_, it_upd->it_, at_ms);
+            db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it, at_ms);
         } else {
-            db_slice.RemoveExpire(op_args_.db_cntx_.db_index_, it_upd->it_);
+            db_slice.RemoveExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it);
         }
     }
     prime_value.SetString(value);
@@ -122,12 +124,12 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it, std::s
 
     (void)key;                    
 
-  auto& db_slice = op_args_.GetDbSlice();
+  auto& db_slice = slice_.GetDbSlice();
   it->second = PrimeValue{value};
 
   if (params.expire_after_ms_) {
-      db_slice.AddExpire(op_args_.db_cntx_.db_index_, it,
-                        params.expire_after_ms_ + op_args_.db_cntx_.time_now_ms_);
+      db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it,
+                        params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
   }
 }
 
@@ -139,10 +141,7 @@ struct ErrorReply{};
 std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     CmdArgParser parser, const CommandContext* cmd_cntx) {
     SetCmd::SetParams sparams;
-
-
     (void)cmd_cntx;
-
     while (parser.HasNext()) {
         if (parser.Check("EX")) { // not same
             if (parser.HasError())
@@ -154,10 +153,27 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     return sparams;
 }
 
+CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
+    auto cb = [&args](Transaction* tx, EngineShard* es) -> OpResult<void> {
+        auto& slice = tx->GetSlice(es->shard_id());
+        for (const auto& [key, keyId] : slice) {
+            auto& value = args[keyId + 1];
+            auto it_res = tx->GetDbSlice(es->shard_id()).AddOrUpdate(tx->GetDbContext(), key, PrimeValue{value}, 0);
+            if (it_res.status() !=  facade::OpStatus::OK) {
+                // TODO 
+            }            
+        }
+
+        return {};       
+    };
+    co_await cmd::SingleHopT(cb);
+    auto conn = cmd_cntx->conn_cntx()->owner();
+    conn->SendStatus("OK");
+    co_return;
+}
 
 
-
-CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     args = args.subspan(1); // Skip command name
 
     CmdArgParser parser{args};
@@ -171,13 +187,13 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     auto cb = [key, 
            value, 
            sparams](Transaction* t, EngineShard* shard)-> OpResult<void> {
-        return SetCmd(t->GetOpArgs(shard)).Set(sparams, key, value);
+        return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
     };
 
     auto result = co_await cmd::SingleHopT(cb);
 
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
         conn->SendStatus("OK"); 
@@ -188,7 +204,30 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
     co_return;
 }
 
-CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
+
+
+CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
+    std::vector<std::string> vec(cmd_cntx->tx()->GetKeyNum());
+    auto cb = [&vec](Transaction* tx, EngineShard* es) -> OpResult<void> {
+        auto& slice = tx->GetSlice(es->shard_id());
+        for (auto& [key, keyId] : slice) {
+            auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
+            if (it_res.GetInnerIt().owner() == nullptr) { // 没找到
+                vec[keyId - 1] = ""; // args第一个参数是MGET,与vec不同，要减一
+            }else {
+                vec[keyId - 1] = ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es);
+            }             
+        }
+        return {};        
+    };
+    co_await cmd::SingleHopT(cb); // 这里不需要b.Wait()吗
+    auto conn = cmd_cntx->conn_cntx()->owner();
+    conn->SendVec(std::move(vec));
+    co_return;
+
+
+}
+CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
 
 
     auto cb = [key = args[1]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
@@ -201,9 +240,8 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
         return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
     };
-
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (result.status() == OpStatus::OK) {   
         conn->Send(result.value());
     } else {
@@ -217,22 +255,30 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-void Set(CmdArgList args, CommandContext* cmd_cntx){
-    CmdSet(args, cmd_cntx);
+void Set(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdSet(cmd_cntx, args);
 }
 
-void Get(CmdArgList args, CommandContext* cmd_cntx){
-    CmdGet(args, cmd_cntx);
+void Get(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdGet(cmd_cntx, args);
 }
+void MSET(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdMSet(cmd_cntx, args);
+}
+
+void MGET(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdMGet(cmd_cntx, args);
+}
+
 
 void RegisterStringFamily(CommandRegistry* registry) {
 
     registry->StartFamily();
     *registry
-        << CI{"SET", -3, 1, 1}.SetAsyncHandler(
-                Set)
-        << CI{"GET", 2, 1, 1}.SetAsyncHandler(
-                Get)
+        << CI{"SET", /*keys_start*/ 1, /*keys_nums*/ 1, /*keys_offset*/ kInvalidKeysOffset}.SetHandler(Set)
+        << CI{"GET", 1, 1, kInvalidKeysOffset}.SetHandler(Get)
+        << CI{"MGET", 1, kInvalidKeysNum, 1}.SetHandler(MGET)
+        << CI{"MSET", 1, kInvalidKeysNum, 2}.SetHandler(MSET)
         ;
 }
 

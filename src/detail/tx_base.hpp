@@ -12,121 +12,38 @@ namespace dfly {
 
 
 
-struct DbContext {
-    Namespace* ns_ = nullptr; 
-    DbIndex db_index_ = 0;
-    uint64_t time_now_ms_ = 0;
-    DbSlice& GetDbSlice(ShardId shard_id) const{
-        return ns_->GetDbSlice(shard_id);        
-    }  
-};
-
-struct OpArgs {
-    EngineShard* shard_ = nullptr;
-    const Transaction* tx_ = nullptr;
-    DbContext db_cntx_;
-
-    // Convenience method.
-    DbSlice& GetDbSlice() const;
-};
-
-
-class ShardArgs {
+class DbContext {
 public:
-    class Iterator {
-        ArgSlice arglist_;
-        std::vector<IndexSlice>::const_iterator index_it_; // not same
-        uint32_t delta_ = 0;
-
-    public:
-        using iterator_category = std::input_iterator_tag;
-        using value_type = std::string_view;
-        using difference_type = ptrdiff_t;
-        using pointer = value_type*;
-        using reference = value_type&;
-        Iterator(::cmn::ArgSlice list, std::vector<IndexSlice>::const_iterator it)
-            : arglist_(list), index_it_(it) {
-        }
-
-        bool operator==(const Iterator& o) const {
-            return index_it_ == o.index_it_ && delta_ == o.delta_ && arglist_.data() == o.arglist_.data();
-        }
-
-        bool operator!=(const Iterator& o) const {
-            return !(*this == o);
-        }
-
-        std::string_view operator*() const {
-            return arglist_[index()];
-        }
-
-        Iterator& operator++() {
-            ++delta_;
-            if (index() >= *index_it_) {
-                ++index_it_;
-                ++delta_ = 0;
-            }
-            return *this;
-        }
-
-        Iterator operator++(int) {
-            Iterator copy = *this;
-            operator++();
-            return copy;
-        }
-
-        size_t index() const {
-            return *index_it_ + delta_;
-        }
-    };
-
-    using const_iterator = Iterator;
-
-    ShardArgs(::cmn::ArgSlice fa, std::vector<IndexSlice> s) 
-    : 
-    slice_(fa), 
-    index_(s)
-    {
+    DbContext() = default;
+    DbContext(const Namespace* ns, DbIndex index, uint64_t time_now_ms)
+        : ns_(ns), db_index_(index), time_now_ms_(time_now_ms) {}
+    DbContext(const DbContext& o) noexcept {
+        *this = o;
     }
-
-    ShardArgs()  {
+    DbContext& operator=(const DbContext& o) noexcept {
+        ns_ = o.ns_;
+        db_index_ = o.db_index_;
+        time_now_ms_ = o.time_now_ms_;
+        return *this;
     }
-
-    size_t Size() const;
-
-    Iterator cbegin() const {
-
-        return Iterator{slice_, index_.begin()};
+    DbSlice& GetDbSlice(ShardId shard_id) const {
+        return ns_->GetDbSlice(shard_id);        
     }
-
-    Iterator cend() const {
-        return Iterator{slice_, index_.end()};
+    const Namespace* GetNamespace() const {
+        return ns_;
     }
-
-    Iterator begin() const {
-        return cbegin();
+    DbIndex GetDbIndex() const {
+        return db_index_;
     }
-
-    Iterator end() const {
-        return cend();
-    }
-
-    bool Empty() const {
-        return index_.empty();
-    }
-
-    std::string_view Front() const {
-        return *cbegin();
+    uint64_t GetTimeNowMs() const {
+        return time_now_ms_;
     }
 private:
-
-    ::cmn::ArgSlice slice_;
-    std::vector<IndexSlice> index_;
+    const Namespace* ns_; 
+    DbIndex db_index_;
+    uint64_t time_now_ms_;
+ 
 };
-
-
-
-
 
 
 }  // namespace dfly

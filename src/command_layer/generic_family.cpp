@@ -16,31 +16,29 @@
 
 namespace dfly {
 using namespace dfly::cmd;
-facade::OpResult<uint32_t> OpDel(const OpArgs& op_args, const ShardArgs& keys) {
-
-    auto& db_slice = op_args.GetDbSlice();
+facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
     uint32_t res = 0;
-    for (std::string_view key : keys) {
-        auto it = db_slice.FindMutable(op_args.db_cntx_, key).it_;  // post_updater will run immediately
+    auto& slice = tx->GetSlice(db_slice.shard_id());
+    for (const auto& [key, keyId] : slice) {
+        auto it = db_slice.FindMutable(tx->GetDbContext(), key).it;  
         if (!IsValid(it.GetInnerIt())) {
             continue;
         }
-        db_slice.Del(op_args.db_cntx_, it, nullptr);
+        db_slice.Del(tx->GetDbContext(), it, nullptr);
         ++res;
     }
 
     return res;
 }
 
-CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
 
     (void)args;
 
     std::atomic<uint32_t> result = 0;
     auto cb = [&](Transaction* tx, EngineShard* es) -> facade::OpResult<void> {
-        auto shard_args = tx->GetShardArgs(es->shard_id());
-        auto op_args = tx->GetOpArgs(es);
-        auto res = OpDel(op_args, shard_args);
+        DbSlice& dbslice = tx->GetDbSlice(es->shard_id());
+        auto res = OpDel(tx, dbslice);
         result.fetch_add(res.value_or(0), std::memory_order_relaxed);
         return {OpStatus::OK};
     };
@@ -48,7 +46,7 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
     uint32_t del_cnt = result.load(std::memory_order_relaxed);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
     if ( res.status() == OpStatus::OK)
         conn->Send(del_cnt);
     else 
@@ -56,15 +54,15 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
     co_return;
 }
 
-void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
     assert(!args.empty());
-    CmdDel(args, cmd_cntx);
+    CmdDel(cmd_cntx, args);
     return;
 }
 
 
-void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (args.size() > 1) {
         return conn->SendERROR();
     }
@@ -75,16 +73,15 @@ void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
     (void)args;
 
-    auto Op = [](const OpArgs& op_args, const ShardArgs& keys) -> facade::OpResult<uint32_t> {
-        auto& db_slice = op_args.GetDbSlice();
+    auto Op = [](Transaction* tx, DbSlice& db_slice) -> facade::OpResult<uint32_t> {
+        auto& slice = tx->GetSlice(db_slice.shard_id());
         uint32_t res = 0;
-
-        for (std::string_view key : keys) {
-          auto find_res = db_slice.FindReadOnly(op_args.db_cntx_, key);
+        for (const auto& [key, keyId] : slice) {
+          auto find_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
           res += IsValid(find_res.GetInnerIt());
         }
         return {res};    
@@ -92,16 +89,15 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
 
     std::atomic<uint32_t> result{0};
 
-    auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
-      ShardArgs shard_args = t->GetShardArgs(shard->shard_id());
-      auto res = Op(t->GetOpArgs(shard), shard_args);
+    auto cb = [&result, &Op](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
+      auto res = Op(t, t->GetDbSlice(es->shard_id()));
       result.fetch_add(res.value_or(0), std::memory_order_relaxed);
       return {OpStatus::OK};
     };
 
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if(res.status() == OpStatus::OK)
     {
         
@@ -109,36 +105,35 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
     }
     else 
     {
-        conn->SendERROR();
+        conn->SendInteger(0);
     }
 
     co_return;
 
 }
 
-void GenericFamily::Exists(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdExists(args, cmd_cntx);
+void GenericFamily::Exists(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdExists(cmd_cntx, args);
 }
 
 
 
-CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) {
+CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key, int64_t sec) {
     
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
-        auto op_args = t->GetOpArgs(shard);
-        auto& db_slice = op_args.GetDbSlice();
-        auto find_res = db_slice.FindMutable(op_args.db_cntx_, key);
-        if (!IsValid(find_res.it_.GetInnerIt())) {
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
+        auto& db_slice = t->GetDbSlice(es->shard_id());
+        auto find_res = db_slice.FindMutable(t->GetDbContext(), key);
+        if (!IsValid(find_res.it.GetInnerIt())) {
           return {OpStatus::KEY_NOTFOUND};
         }
-
-        return db_slice.UpdateExpire(op_args.db_cntx_, find_res.it_, sec);     
+        auto ttlTime = t->GetDbContext().GetTimeNowMs()/1000 + sec; // 精度丢失
+        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it, ttlTime);     
     };
     auto res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
-    if(res == OpStatus::OK)
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    if(res.status() == OpStatus::OK)    
     {
         
         conn->SendStatus("OK");
@@ -151,11 +146,11 @@ CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) 
     co_return;
 }
 
-void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
-    std::string_view key = args[0];
-    std::string_view sec = args[1];
+void GenericFamily::Expire(CommandContext* cmd_cntx, CmdArgList args) {
+    std::string_view key = args[1];
+    std::string_view sec = args[2];
     int64_t int_arg = std::atoi(sec.data());
-    CmdExpire(key, int_arg, cmd_cntx);
+    CmdExpire(cmd_cntx, key, int_arg);
 }
 
 
@@ -165,10 +160,10 @@ void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
 // }
 
 
-CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
+CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<int64_t> {
-      auto& db_slice = t->GetDbSlice(shard->shard_id());
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> {
+      auto& db_slice = t->GetDbSlice(es->shard_id());
       auto it = db_slice.FindReadOnly(t->GetDbContext(), key);
       if (!IsValid(it.GetInnerIt()))
         return {OpStatus::KEY_NOTFOUND};
@@ -183,29 +178,35 @@ CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
 
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;  
+    auto conn = cmd_cntx->conn_cntx()->owner();  
     if(res.status() == OpStatus::OK)
     {
         conn->Send(res.value());
     }
     else 
     {
-        conn->SendERROR();
+        if (res.status() == OpStatus::KEY_NOTFOUND) {
+            conn->SendInteger(-2);
+        }else if (res.status() == OpStatus::SKIPPED) {
+            conn->SendInteger(-1);
+        }else {
+            conn->SendERROR();
+        }
     }
     co_return;    
 }
 
 
-void GenericFamily::ExpireTime(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdExpireTime(args[0], cmd_cntx);
+void GenericFamily::ExpireTime(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdExpireTime(cmd_cntx, args[1]);
 }
 
 
-CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
+CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<int64_t> { 
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> { 
 
-        auto& db_slice = t->GetDbSlice(shard->shard_id());
+        auto& db_slice = t->GetDbSlice(es->shard_id());
         auto it = db_slice.FindReadOnly(t->GetDbContext(), key);
         if (!IsValid(it.GetInnerIt()))
             return {OpStatus::KEY_NOTFOUND};
@@ -213,13 +214,14 @@ CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
         if (!it.GetInnerIt()->first.HasExpire())
             return {OpStatus::SKIPPED};
 
-        auto ttlTime = it.GetInnerIt()->first.GetExpireTime();
-        return ttlTime - t->GetDbContext().time_now_ms_;
+        auto ttlTime = it.GetInnerIt()->first.GetExpireTime() - t->GetDbContext().GetTimeNowMs() / 1000;
+        assert(ttlTime > 0);
+        return ttlTime;
     };
   
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
 
     if(res.status() == OpStatus::OK)
     {
@@ -228,20 +230,26 @@ CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
     }
     else 
     {
-        conn->SendERROR();
+        if (res.status() == OpStatus::KEY_NOTFOUND) {
+            conn->SendInteger(-2);
+        }else if (res.status() == OpStatus::SKIPPED) {
+            conn->SendInteger(-1);
+        }else {
+            conn->SendERROR();
+        }
     }
     co_return;      
 }
 
-void GenericFamily::Ttl(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdTtl(args[0], cmd_cntx);
+void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdTtl(cmd_cntx, args[1]);
 }
 
-void GenericFamily::Client_Info(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
 
     std::vector<std::string_view> cli = {"CLIENT", "SETINFO", "LIB-NAME", "redis-py"};
     std::span<const std::string_view> cl(cli);
-    auto conn = cmd_cntx->conn_cntx()->owner_; 
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (cl.size() != args.size() || 
         !std::equal(cl.begin(), cl.end(), args.begin())) {
         conn->SendERROR();
@@ -250,7 +258,7 @@ void GenericFamily::Client_Info(CmdArgList args, CommandContext* cmd_cntx) {
     }
 }
 
-void GenericFamily::ShutDown(CmdArgList, CommandContext*) {
+void GenericFamily::ShutDown(CommandContext*, CmdArgList) {
     ser->Stop();
 }
 
@@ -264,13 +272,14 @@ void GenericFamily::Register(CommandRegistry* registry) {
 
   registry->StartFamily();
   *registry
-      << CI{"DEL",-2, 1, -1}.SetHandler(&GenericFamily::Delex)
-      << CI{"PING", -1, 0, 0}.SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", -2, 1, -1}.SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", -3, 1, 1}.SetHandler(&GenericFamily::Expire)
-      << CI{"TTL", 2, 1, 1}.SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", -4, 0, 0}.SetHandler(&GenericFamily::Client_Info)
-      << CI{"SHUTDOWN", 1, 0, 0}.SetHandler(&GenericFamily::ShutDown)
+      << CI{"DEL", /*keys_start*/ 1, /*keys_nums*/ kInvalidKeysNum, /*keys_offset*/ 1}.SetHandler(&GenericFamily::Delex)
+      << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ping)
+      << CI{"EXISTS", 1, kInvalidKeysNum, 1}.SetHandler(&GenericFamily::Exists)
+      << CI{"EXPIRE", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Expire)
+      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::ExpireTime)
+      << CI{"TTL", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ttl)
+      << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)
       ;
 }
 

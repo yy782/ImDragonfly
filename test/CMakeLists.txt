@@ -18,6 +18,21 @@ target_include_directories(db_table_test PRIVATE
 target_compile_options(db_table_test PRIVATE ${CXX_WARNING_OPTIONS})
 gtest_discover_tests(db_table_test)
 
+add_executable(synchronization_test synchronization_test.cpp)
+target_link_libraries(synchronization_test PRIVATE
+    incomplete-imdragonfly
+    net
+    third_party_deps
+    GTest::gtest
+    GTest::gtest_main
+)
+target_include_directories(synchronization_test PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/net
+)
+target_compile_options(synchronization_test PRIVATE ${CXX_WARNING_OPTIONS})
+gtest_discover_tests(synchronization_test)
+
 add_library(redis_dict STATIC
     redis/alloc.cpp
     redis/dict.cpp
