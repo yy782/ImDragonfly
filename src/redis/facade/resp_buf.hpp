@@ -13,7 +13,7 @@ std::vector<std::string> ParseRESP() {
     
     char* data = begin();
     size_t size = write_index_;
-    size_t pos = p_;
+    size_t pos = read_index_;  // 使用基类的 read_index_
     
     if (pos >= size) {
         return result;
@@ -67,17 +67,17 @@ std::vector<std::string> ParseRESP() {
         }
         result.emplace_back(data + pos, len);
         pos += len;
+        
         if (pos + 2 > size || data[pos] != '\r' || data[pos+1] != '\n') {
             return result;
         }
         pos += 2;
     }
-
-
-    consume(pos - p_);
-    p_ = pos;
-
-
+    
+    // 关键：成功解析完整 RESP 数组后，移动基类的读指针
+    size_t consumed = pos - read_index_;
+    consume(consumed);  // 调用基类的 consume 方法
+    
     return result;
 }
 
