@@ -73,7 +73,11 @@ std::vector<std::string> ParseRESP() {
         pos += 2;
     }
 
+
+    consume(pos - p_);
     p_ = pos;
+
+
     return result;
 }
 

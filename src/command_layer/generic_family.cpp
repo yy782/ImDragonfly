@@ -57,7 +57,7 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
 }
 
 void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
-    ASSERT_TRUE(!args.empty());
+    assert(!args.empty());
     CmdDel(args, cmd_cntx);
     return;
 }

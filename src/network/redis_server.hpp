@@ -39,6 +39,8 @@ public:
 
                 if (r > 0) {
                     RecvBuf_.hasWritten(r);
+                    assert(debug_com_deal_one_Com);
+                    debug_com_deal_one_Com = false;
                     Com = RecvBuf_.ParseRESP();
                     if (Com.empty()) continue;
                     args = ::cmn::CmdArgList(Com);
@@ -108,7 +110,9 @@ private:
         auto p = socket_.Proactor();
         p->DispatchBrief([this, s = std::move(s)](){
             SendBuf_.append(s);
-            DoWrite();            
+            DoWrite();     
+            
+            debug_com_deal_one_Com = true;
         });
     }
 
@@ -142,6 +146,8 @@ private:
     CommandId* ci = nullptr;
     std::unique_ptr<Transaction> t;
     CommandContext cm_txt;
+
+    std::atomic<bool> debug_com_deal_one_Com = true;
 };
 
 class RedisServer {
