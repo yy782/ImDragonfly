@@ -26,7 +26,7 @@ def main():
     
     # 命令行交互
     print("Redis 客户端已启动")
-    print("支持命令: SET key value, GET key, DEL key, SHUTDOWN, 或输入 'quit' 退出\n")
+    print("支持命令: SET key value, GET key, DEL key, MSET, MGET, SHUTDOWN, 或输入 'quit' 退出\n")
     
     while True:
         try:
@@ -39,7 +39,7 @@ def main():
                 break
             
             # 解析命令
-            parts = cmd.split(maxsplit=2)
+            parts = cmd.split()
             if not parts:
                 continue
             
@@ -58,14 +58,49 @@ def main():
                     print("(nil)")
                 else:
                     print(f"{value}")
-            
-            elif command == 'DEL' and len(parts) == 2:
-                key = parts[1]
-                result = r.delete(key)
+            elif command == 'MSET':
+                if len(parts) < 3 or len(parts) % 2 == 0:
+                    print("错误: MSET 需要 key-value 对，格式: MSET key1 value1 key2 value2 ...")
+                    continue
+                
+                # 构建参数字典
+                kv_pairs = {}
+                for i in range(1, len(parts), 2):
+                    key = parts[i]
+                    value = parts[i+1]
+                    kv_pairs[key] = value
+                
+                # 执行 MSET
+                result = r.mset(kv_pairs)
                 if result:
-                    print(f"✓ OK - 已删除键: {key}")
+                    print(f"✓ OK - 已设置 {len(kv_pairs)} 个键值对")
                 else:
-                    print("(nil) - 键不存在")
+                    print("✗ MSET 执行失败")
+            
+            elif command == 'MGET':
+                if len(parts) < 2:
+                    print("错误: MGET 需要至少一个 key，格式: MGET key1 key2 ...")
+                    continue
+                
+                keys = parts[1:]
+                values = r.mget(keys)
+                
+                # 输出结果
+                for key, value in zip(keys, values):
+                    if value is None:
+                        print(f"{key}: (nil)")
+                    else:
+                        print(f"{key}: {value}")
+            elif command == 'DEL':
+                if len(parts) < 2:
+                    print("错误: DEL 需要至少一个 key，格式: DEL key1 [key2 key3 ...]")
+                    continue
+                keys = parts[1:]  # 获取所有要删除的键
+                result = r.delete(*keys)  # 使用 *keys 展开参数
+                if result == 0:
+                    print("(nil) - 没有键被删除（所有键都不存在）")
+                else:
+                    print(f"✓ OK - 已删除 {result} 个键")
             
             elif command == 'SHUTDOWN':
                 print("⚠️  正在关闭 Redis 服务器...")

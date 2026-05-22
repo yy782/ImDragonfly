@@ -53,7 +53,7 @@ class CommandId : public facade::CommandId {
 public:
     using CmdArgList = ::cmn::CmdArgList;
 
-    CommandId(const char* name, int8_t arity, int8_t first_key, int8_t last_key);
+    CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset);
 
     CommandId(CommandId&& o) = default;
 
@@ -64,35 +64,18 @@ public:
 
     using Handler = util::function_base<true, true, fu2::capacity_default, false, false,
                                       void(CmdArgList, CommandContext*) const>;
-    // using Handler = std::function<void(CmdArgList, CommandContext*)>;
-
-    // Returns the invoke time in usec.
     void Invoke(CmdArgList args, CommandContext* cmd_cntx) const {
         handler_(args, cmd_cntx);
     }
 
-    template <typename RT> 
-    CommandId&& SetAsyncHandler(RT f(CmdArgList, CommandContext*)) && {
-        support_async_ = true;
-        handler_ = [f](CmdArgList args, CommandContext* cntx) { f(args, cntx); };
-        return std::move(*this);
-    }
 
-    CommandId&& SetHandler(Handler f, bool async_support = false) && {
-        support_async_ |= async_support;
+    CommandId&& SetHandler(Handler f) && {
         handler_ = std::move(f);
         return std::move(*this);
     }
 
 
-
-    bool SupportsAsync() const {
-        return support_async_;
-    }
-
  private:
-
-    bool support_async_{false};// 是否支持异步执行
 
     Handler handler_;
 };

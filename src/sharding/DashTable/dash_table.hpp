@@ -237,7 +237,7 @@ public:
         slot_id_ += delta;
         Seek2Occupied();
         return *this;
-    }    
+    }   
     IteratorPairType operator->() const {
         auto* seg = owner_->segment_[seg_id_];
         return {seg->Key(bucket_id_, slot_id_), seg->Value(bucket_id_, slot_id_)};

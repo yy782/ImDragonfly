@@ -16,16 +16,15 @@
 
 namespace dfly {
 using namespace dfly::cmd;
-facade::OpResult<uint32_t> OpDel(const OpArgs& op_args, const ShardArgs& keys) {
-
-    auto& db_slice = op_args.GetDbSlice();
+facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
     uint32_t res = 0;
-    for (std::string_view key : keys) {
-        auto it = db_slice.FindMutable(op_args.db_cntx_, key).it_;  // post_updater will run immediately
+    auto& slice = tx->GetSlice(db_slice.shard_id());
+    for (const auto& [key, keyId] : slice) {
+        auto it = db_slice.FindMutable(tx->GetDbContext(), key).it_;  
         if (!IsValid(it.GetInnerIt())) {
             continue;
         }
-        db_slice.Del(op_args.db_cntx_, it, nullptr);
+        db_slice.Del(tx->GetDbContext(), it, nullptr);
         ++res;
     }
 
@@ -38,9 +37,8 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
 
     std::atomic<uint32_t> result = 0;
     auto cb = [&](Transaction* tx, EngineShard* es) -> facade::OpResult<void> {
-        auto shard_args = tx->GetShardArgs(es->shard_id());
-        auto op_args = tx->GetOpArgs(es);
-        auto res = OpDel(op_args, shard_args);
+        DbSlice& dbslice = tx->GetDbSlice(es->shard_id());
+        auto res = OpDel(tx, dbslice);
         result.fetch_add(res.value_or(0), std::memory_order_relaxed);
         return {OpStatus::OK};
     };
@@ -79,12 +77,11 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
 
     (void)args;
 
-    auto Op = [](const OpArgs& op_args, const ShardArgs& keys) -> facade::OpResult<uint32_t> {
-        auto& db_slice = op_args.GetDbSlice();
+    auto Op = [](Transaction* tx, DbSlice& db_slice) -> facade::OpResult<uint32_t> {
+        auto& slice = tx->GetSlice(db_slice.shard_id());
         uint32_t res = 0;
-
-        for (std::string_view key : keys) {
-          auto find_res = db_slice.FindReadOnly(op_args.db_cntx_, key);
+        for (const auto& [key, keyId] : slice) {
+          auto find_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
           res += IsValid(find_res.GetInnerIt());
         }
         return {res};    
@@ -92,9 +89,8 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
 
     std::atomic<uint32_t> result{0};
 
-    auto cb = [&result, &Op](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
-      ShardArgs shard_args = t->GetShardArgs(shard->shard_id());
-      auto res = Op(t->GetOpArgs(shard), shard_args);
+    auto cb = [&result, &Op](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
+      auto res = Op(t, t->GetDbSlice(es->shard_id()));
       result.fetch_add(res.value_or(0), std::memory_order_relaxed);
       return {OpStatus::OK};
     };
@@ -125,15 +121,14 @@ void GenericFamily::Exists(CmdArgList args, CommandContext* cmd_cntx) {
 CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) {
     
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<void> {
-        auto op_args = t->GetOpArgs(shard);
-        auto& db_slice = op_args.GetDbSlice();
-        auto find_res = db_slice.FindMutable(op_args.db_cntx_, key);
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
+        auto& db_slice = t->GetDbSlice(es->shard_id());
+        auto find_res = db_slice.FindMutable(t->GetDbContext(), key);
         if (!IsValid(find_res.it_.GetInnerIt())) {
           return {OpStatus::KEY_NOTFOUND};
         }
 
-        return db_slice.UpdateExpire(op_args.db_cntx_, find_res.it_, sec);     
+        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it_, sec);     
     };
     auto res = co_await cmd::SingleHopT(cb);
 
@@ -167,8 +162,8 @@ void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
 
 CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<int64_t> {
-      auto& db_slice = t->GetDbSlice(shard->shard_id());
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> {
+      auto& db_slice = t->GetDbSlice(es->shard_id());
       auto it = db_slice.FindReadOnly(t->GetDbContext(), key);
       if (!IsValid(it.GetInnerIt()))
         return {OpStatus::KEY_NOTFOUND};
@@ -203,9 +198,9 @@ void GenericFamily::ExpireTime(CmdArgList args, CommandContext* cmd_cntx) {
 
 CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
 
-    auto cb = [&](Transaction* t, EngineShard* shard) -> facade::OpResult<int64_t> { 
+    auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> { 
 
-        auto& db_slice = t->GetDbSlice(shard->shard_id());
+        auto& db_slice = t->GetDbSlice(es->shard_id());
         auto it = db_slice.FindReadOnly(t->GetDbContext(), key);
         if (!IsValid(it.GetInnerIt()))
             return {OpStatus::KEY_NOTFOUND};
@@ -264,13 +259,13 @@ void GenericFamily::Register(CommandRegistry* registry) {
 
   registry->StartFamily();
   *registry
-      << CI{"DEL",-2, 1, -1}.SetHandler(&GenericFamily::Delex)
-      << CI{"PING", -1, 0, 0}.SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", -2, 1, -1}.SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", -3, 1, 1}.SetHandler(&GenericFamily::Expire)
-      << CI{"TTL", 2, 1, 1}.SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", -4, 0, 0}.SetHandler(&GenericFamily::Client_Info)
-      << CI{"SHUTDOWN", 1, 0, 0}.SetHandler(&GenericFamily::ShutDown)
+      << CI{"DEL", /*keys_start*/ 1, /*keys_nums*/ kInvalidKeysNum, /*keys_offset*/ 1}.SetHandler(&GenericFamily::Delex)
+      << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ping)
+      << CI{"EXISTS", 1, kInvalidKeysNum, 1}.SetHandler(&GenericFamily::Exists)
+      << CI{"EXPIRE", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Expire)
+      << CI{"TTL", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ttl)
+      << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)
       ;
 }
 

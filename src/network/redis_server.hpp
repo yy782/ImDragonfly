@@ -93,7 +93,9 @@ public:
     void Send(const std::string_view& s){
         Send(std::string(s));
     }
-
+    void SendVec(const std::vector<std::string>& v) {
+        SendImp(BuildArray(v));
+    }
     void SendStatus(const std::string& s){
         SendImp(BuildSimpleString(s));
     }
@@ -134,19 +136,15 @@ private:
     base::UringSocket socket_; 
     RESP_Buf RecvBuf_;
     RESP_Buf SendBuf_;
-
     Namespace* ns_ = &namespaces->GetDefaultNamespace(); 
     DbIndex index_ = 0;
 
     ConnectionContext ctxt_;
-
-    std::vector<std::string> Com;
-
+    std::vector<std::string_view> Com;
     ::cmn::CmdArgList args;
     CommandId* ci = nullptr;
     std::unique_ptr<Transaction> t;
     CommandContext cm_txt;
-
     std::atomic<bool> debug_com_deal_one_Com = true;
 };
 
