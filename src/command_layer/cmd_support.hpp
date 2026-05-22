@@ -45,8 +45,9 @@ struct CoroTask {
 class Coro {
 public:
     Coro() = default;
-    Coro(CmdArgList arg, CommandContext* cmd_cntx) : cmd_cntx_{cmd_cntx} {
-      (void)arg;
+    template<typename... Args>
+    Coro(CommandContext* cmd_cntx, Args&&...) : cmd_cntx_{cmd_cntx} {
+
     }
     CoroTask get_return_object() noexcept{
       return CoroTask{ std::coroutine_handle<Coro>::from_promise(*this) };

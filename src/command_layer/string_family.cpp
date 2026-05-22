@@ -152,7 +152,7 @@ std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     return sparams;
 }
 
-CoroTask CmdMSet(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
     auto cb = [&args](Transaction* tx, EngineShard* es) -> OpResult<void> {
         auto& slice = tx->GetSlice(es->shard_id());
         for (const auto& [key, keyId] : slice) {
@@ -172,7 +172,7 @@ CoroTask CmdMSet(CmdArgList args, CommandContext* cmd_cntx) {
 }
 
 
-CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     args = args.subspan(1); // Skip command name
 
     CmdArgParser parser{args};
@@ -205,7 +205,7 @@ CoroTask CmdSet(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-CoroTask CmdMGet(CmdArgList /*args*/, CommandContext* cmd_cntx) {
+CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
     std::vector<std::string> vec(cmd_cntx->tx()->GetKeyNum());
     auto cb = [&vec](Transaction* tx, EngineShard* es) -> OpResult<void> {
         auto& slice = tx->GetSlice(es->shard_id());
@@ -226,7 +226,7 @@ CoroTask CmdMGet(CmdArgList /*args*/, CommandContext* cmd_cntx) {
 
 
 }
-CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
 
 
     auto cb = [key = args[1]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
@@ -255,19 +255,19 @@ CoroTask CmdGet(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-void Set(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdSet(args, cmd_cntx);
+void Set(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdSet(cmd_cntx, args);
 }
 
-void Get(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdGet(args, cmd_cntx);
+void Get(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdGet(cmd_cntx, args);
 }
-void MSET(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdMSet(args, cmd_cntx);
+void MSET(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdMSet(cmd_cntx, args);
 }
 
-void MGET(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdMGet(args, cmd_cntx);
+void MGET(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdMGet(cmd_cntx, args);
 }
 
 

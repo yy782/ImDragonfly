@@ -31,7 +31,7 @@ facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
     return res;
 }
 
-CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
 
     (void)args;
 
@@ -54,14 +54,14 @@ CoroTask CmdDel(CmdArgList args, CommandContext* cmd_cntx) {
     co_return;
 }
 
-void GenericFamily::Delex(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
     assert(!args.empty());
-    CmdDel(args, cmd_cntx);
+    CmdDel(cmd_cntx, args);
     return;
 }
 
 
-void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner_;
     if (args.size() > 1) {
         return conn->SendERROR();
@@ -73,7 +73,7 @@ void GenericFamily::Ping(CmdArgList args, CommandContext* cmd_cntx) {
 
 
 
-CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
+CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
     (void)args;
 
@@ -112,13 +112,13 @@ CoroTask CmdExists(CmdArgList args, CommandContext* cmd_cntx) {
 
 }
 
-void GenericFamily::Exists(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdExists(args, cmd_cntx);
+void GenericFamily::Exists(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdExists(cmd_cntx, args);
 }
 
 
 
-CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) {
+CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key, int64_t sec) {
     
 
     auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
@@ -127,8 +127,8 @@ CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) 
         if (!IsValid(find_res.it_.GetInnerIt())) {
           return {OpStatus::KEY_NOTFOUND};
         }
-
-        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it_, sec);     
+        auto ttlTime = t->GetDbContext().time_now_ms_/1000 + sec; // 精度丢失
+        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it_, ttlTime);     
     };
     auto res = co_await cmd::SingleHopT(cb);
 
@@ -146,11 +146,11 @@ CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) 
     co_return;
 }
 
-void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Expire(CommandContext* cmd_cntx, CmdArgList args) {
     std::string_view key = args[1];
     std::string_view sec = args[2];
     int64_t int_arg = std::atoi(sec.data());
-    CmdExpire(key, int_arg, cmd_cntx);
+    CmdExpire(cmd_cntx, key, int_arg);
 }
 
 
@@ -160,7 +160,7 @@ void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
 // }
 
 
-CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
+CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
 
     auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> {
       auto& db_slice = t->GetDbSlice(es->shard_id());
@@ -191,12 +191,12 @@ CoroTask CmdExpireTime(std::string_view key, CommandContext* cmd_cntx) {
 }
 
 
-void GenericFamily::ExpireTime(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdExpireTime(args[0], cmd_cntx);
+void GenericFamily::ExpireTime(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdExpireTime(cmd_cntx, args[1]);
 }
 
 
-CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
+CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
 
     auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<int64_t> { 
 
@@ -209,7 +209,7 @@ CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
             return {OpStatus::SKIPPED};
 
         auto ttlTime = it.GetInnerIt()->first.GetExpireTime();
-        return ttlTime - t->GetDbContext().time_now_ms_;
+        return ttlTime - t->GetDbContext().time_now_ms_ / 1000;
     };
   
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
@@ -228,11 +228,11 @@ CoroTask CmdTtl(std::string_view key, CommandContext* cmd_cntx) {
     co_return;      
 }
 
-void GenericFamily::Ttl(CmdArgList args, CommandContext* cmd_cntx) {
-    CmdTtl(args[0], cmd_cntx);
+void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdTtl(cmd_cntx, args[1]);
 }
 
-void GenericFamily::Client_Info(CmdArgList args, CommandContext* cmd_cntx) {
+void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
 
     std::vector<std::string_view> cli = {"CLIENT", "SETINFO", "LIB-NAME", "redis-py"};
     std::span<const std::string_view> cl(cli);
@@ -245,7 +245,7 @@ void GenericFamily::Client_Info(CmdArgList args, CommandContext* cmd_cntx) {
     }
 }
 
-void GenericFamily::ShutDown(CmdArgList, CommandContext*) {
+void GenericFamily::ShutDown(CommandContext*, CmdArgList) {
     ser->Stop();
 }
 
@@ -263,6 +263,7 @@ void GenericFamily::Register(CommandRegistry* registry) {
       << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ping)
       << CI{"EXISTS", 1, kInvalidKeysNum, 1}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Expire)
+      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::ExpireTime)
       << CI{"TTL", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ttl)
       << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
       << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)

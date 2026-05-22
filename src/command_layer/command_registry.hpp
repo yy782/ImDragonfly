@@ -63,9 +63,9 @@ public:
 
 
     using Handler = util::function_base<true, true, fu2::capacity_default, false, false,
-                                      void(CmdArgList, CommandContext*) const>;
-    void Invoke(CmdArgList args, CommandContext* cmd_cntx) const {
-        handler_(args, cmd_cntx);
+                                      void(CommandContext*, CmdArgList) const>;
+    void Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
+        handler_(cmd_cntx, args);
     }
 
 

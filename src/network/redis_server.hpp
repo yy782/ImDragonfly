@@ -50,7 +50,7 @@ public:
                     ci = CIs->Find(args[0]);
                     if (!ci) { 
                         LOG(WARNING) << "Unknown command: " << args[0] << " from fd: " << fd;
-                        SendERROR();
+                        SendERROR("unknown command:" + std::string(args[0]));
                         continue;
                     }
 
@@ -60,7 +60,7 @@ public:
                     cm_txt = CommandContext(&ctxt_, t.get(), ci);
                     
                     VLOG(2) << "Executing command: " << ci->name();
-                    ci->Invoke(args, &cm_txt);
+                    ci->Invoke(&cm_txt, args);
                     VLOG(2) << "Command " << ci->name() << " executed successfully";
                 }
                 else if (r == 0) { 
@@ -79,10 +79,9 @@ public:
         co_return;  
     }    
 
-    void SendERROR() {
-        SendImp(BuildError({"NULL"}));
+    void SendERROR(std::string err = "NULL") {
+        SendImp(BuildError(err));
     }
-
     void Send(int64_t n) {
         SendImp(BuildInteger(n));
     }
@@ -104,6 +103,9 @@ public:
     }
     void SendStatus(const char* s){
         SendStatus(std::string(s)); 
+    }
+    void SendInteger(int64_t n) {
+        SendImp(BuildInteger(n));
     }
 private:
 

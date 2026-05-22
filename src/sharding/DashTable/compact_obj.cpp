@@ -43,7 +43,7 @@ void CompactKey::SetExpireTime(uint64_t abs_ms) {
         return;
     }
 
-    u_.ttl_str_.str_ = std::move(u_.str_);
+    u_.ttl_str_.str_ = u_.str_;
     u_.ttl_str_.exp_ms_ = abs_ms;
     tag_ = TTL_STR_TAG;
 }

@@ -18,12 +18,7 @@ std::vector<std::string_view> ParseRESP() {
     size_t size = write_index_;
     size_t pos = read_index_;  // 使用基类的 read_index_
     
-#ifndef NDEBUG 
-    std::cout << this->peek() << std::endl;
-    std::cout << pos << std::endl;
-    std::cout << size << std::endl;
-    std::cout << std::endl;
-#endif
+
 
     if (pos >= size) {
         return result;
