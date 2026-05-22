@@ -23,8 +23,7 @@ private:
     static void Ping(CmdArgList args, CommandContext* cmd_cntx); // 处理 PING 命令，用于测试连接
     static void Exists(CmdArgList args, CommandContext* cmd_cntx); // 处理 EXISTS 命令，检查键是否存在
     static void Expire(CmdArgList args, CommandContext* cmd_cntx); // 处理 EXPIRE 命令，设置键的过期时间（秒）
-    static void Persist(CmdArgList args, CommandContext* cmd_cntx); // 处理 PERSIST 命令，移除键的过期时间
-    static void Keys(CmdArgList args, CommandContext* cmd_cntx); // 处理 KEYS 命令，根据模式查找键 
+    static void Persist(CmdArgList args, CommandContext* cmd_cntx); // 处理 PERSIST 命令，移除键的过期时间 
 
     static void ExpireTime(CmdArgList args, CommandContext* cmd_cntx); // 处理 EXPIRETIME 命令，获取键的过期时间（秒）
     static void Ttl(CmdArgList args, CommandContext* cmd_cntx); // 处理 TTL 命令，获取键的剩余生存时间（秒）

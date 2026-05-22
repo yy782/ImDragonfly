@@ -147,8 +147,8 @@ CoroTask CmdExpire(std::string_view key, int64_t sec, CommandContext* cmd_cntx) 
 }
 
 void GenericFamily::Expire(CmdArgList args, CommandContext* cmd_cntx) {
-    std::string_view key = args[0];
-    std::string_view sec = args[1];
+    std::string_view key = args[1];
+    std::string_view sec = args[2];
     int64_t int_arg = std::atoi(sec.data());
     CmdExpire(key, int_arg, cmd_cntx);
 }

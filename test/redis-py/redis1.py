@@ -26,7 +26,7 @@ def main():
     
     # 命令行交互
     print("Redis 客户端已启动")
-    print("支持命令: SET key value, GET key, DEL key, MSET, MGET, SHUTDOWN, 或输入 'quit' 退出\n")
+    print("支持命令: SET, GET, DEL, MSET, MGET, EXISTS, EXPIRE, PERSIST, TTL, EXPIRETIME, SELECT, SHUTDOWN, 或输入 'quit' 退出\n")
     
     while True:
         try:
@@ -58,6 +58,7 @@ def main():
                     print("(nil)")
                 else:
                     print(f"{value}")
+                    
             elif command == 'MSET':
                 if len(parts) < 3 or len(parts) % 2 == 0:
                     print("错误: MSET 需要 key-value 对，格式: MSET key1 value1 key2 value2 ...")
@@ -91,16 +92,83 @@ def main():
                         print(f"{key}: (nil)")
                     else:
                         print(f"{key}: {value}")
+                        
             elif command == 'DEL':
                 if len(parts) < 2:
                     print("错误: DEL 需要至少一个 key，格式: DEL key1 [key2 key3 ...]")
                     continue
-                keys = parts[1:]  # 获取所有要删除的键
-                result = r.delete(*keys)  # 使用 *keys 展开参数
+                keys = parts[1:]
+                result = r.delete(*keys)
                 if result == 0:
                     print("(nil) - 没有键被删除（所有键都不存在）")
                 else:
                     print(f"✓ OK - 已删除 {result} 个键")
+            
+            elif command == 'EXISTS':
+                if len(parts) < 2:
+                    print("错误: EXISTS 需要至少一个 key，格式: EXISTS key1 [key2 ...]")
+                    continue
+                keys = parts[1:]
+                result = r.exists(*keys)
+                print(f"(integer) {result}")
+            
+            elif command == 'EXPIRE':
+                if len(parts) != 3:
+                    print("错误: EXPIRE 格式: EXPIRE key seconds")
+                    continue
+                key = parts[1]
+                try:
+                    seconds = int(parts[2])
+                except ValueError:
+                    print("错误: seconds 必须是整数")
+                    continue
+                result = r.expire(key, seconds)
+                if result:
+                    print(f"(integer) 1")
+                else:
+                    print(f"(integer) 0")
+            
+            elif command == 'PERSIST':
+                if len(parts) != 2:
+                    print("错误: PERSIST 格式: PERSIST key")
+                    continue
+                key = parts[1]
+                result = r.persist(key)
+                if result:
+                    print(f"(integer) 1")
+                else:
+                    print(f"(integer) 0")
+            
+            elif command == 'TTL':
+                if len(parts) != 2:
+                    print("错误: TTL 格式: TTL key")
+                    continue
+                key = parts[1]
+                result = r.ttl(key)
+                print(f"(integer) {result}")
+            
+            elif command == 'EXPIRETIME':
+                if len(parts) != 2:
+                    print("错误: EXPIRETIME 格式: EXPIRETIME key")
+                    continue
+                key = parts[1]
+                result = r.expiretime(key)
+                print(f"(integer) {result}")
+            
+            elif command == 'SELECT':
+                if len(parts) != 2:
+                    print("错误: SELECT 格式: SELECT db")
+                    continue
+                try:
+                    db = int(parts[1])
+                except ValueError:
+                    print("错误: db 必须是整数")
+                    continue
+                try:
+                    r.select(db)
+                    print(f"✓ OK - 已切换到数据库 {db}")
+                except Exception as e:
+                    print(f"错误: {e}")
             
             elif command == 'SHUTDOWN':
                 print("⚠️  正在关闭 Redis 服务器...")
@@ -121,7 +189,15 @@ def main():
                 print("错误: 无效命令")
                 print("用法: SET key value")
                 print("      GET key")
-                print("      DEL key")
+                print("      DEL key [key ...]")
+                print("      MSET key value [key value ...]")
+                print("      MGET key [key ...]")
+                print("      EXISTS key [key ...]")
+                print("      EXPIRE key seconds")
+                print("      PERSIST key")
+                print("      TTL key")
+                print("      EXPIRETIME key")
+                print("      SELECT db")
                 print("      SHUTDOWN")
                 
         except KeyboardInterrupt:

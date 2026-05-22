@@ -33,6 +33,7 @@ StringResult ReadString(DbIndex dbid, std::string_view key, const PrimeValue& pv
     (void)dbid;
     (void)key;
     (void)es;
+    // 分层存储扩展
 
     return StringResult{pv.ToString()};
 }

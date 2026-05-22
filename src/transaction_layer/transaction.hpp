@@ -90,7 +90,8 @@ public:
             
             ArgsIndexPair pa;
             const Slice* slice;
-            Iterator(std::string_view key, uint32_t keyId, const Slice* sl) : pa(key, keyId), slice(sl) {}
+            uint32_t idx;
+            Iterator(std::string_view key, uint32_t keyId, const Slice* sl, uint32_t id) : pa(key, keyId), slice(sl), idx(id) {}
             bool operator==(const Iterator& o) const {
             return pa == o.pa;
             }
@@ -105,11 +106,11 @@ public:
                 return &pa;
             }
             Iterator& operator++() {
-                if (pa.second + 1 >= slice->keyIds.size()) {
+                if (idx + 1 >= slice->keyIds.size()) {
                     *this = slice->cend();
                     return *this;
                 }else {
-                    uint32_t nextId = slice->keyIds[pa.second + 1];
+                    uint32_t nextId = slice->keyIds[++idx];
                     std::string_view key = slice->lists[nextId];
                     pa = ArgsIndexPair(key, nextId);
                     return *this;                    
@@ -123,14 +124,14 @@ public:
             }else {
                uint32_t keyId = keyIds[0];
                std::string_view key = lists[keyId]; 
-               return Iterator(key, keyId, this);
+               return Iterator(key, keyId, this, 0);
             }
         }
 
         Iterator cend() const {
             uint32_t keyId = lists.size();
             std::string_view key;
-            return Iterator(key, keyId, this);
+            return Iterator(key, keyId, this, keyIds.size());
         }
 
         Iterator begin() const {
