@@ -105,7 +105,7 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
     }
     else 
     {
-        conn->SendERROR();
+        conn->SendInteger(0);
     }
 
     co_return;
@@ -185,7 +185,13 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
     }
     else 
     {
-        conn->SendERROR();
+        if (res.status() == OpStatus::KEY_NOTFOUND) {
+            conn->SendInteger(-2);
+        }else if (res.status() == OpStatus::SKIPPED) {
+            conn->SendInteger(-1);
+        }else {
+            conn->SendERROR();
+        }
     }
     co_return;    
 }
@@ -208,8 +214,9 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
         if (!it.GetInnerIt()->first.HasExpire())
             return {OpStatus::SKIPPED};
 
-        auto ttlTime = it.GetInnerIt()->first.GetExpireTime();
-        return ttlTime - t->GetDbContext().time_now_ms_ / 1000;
+        auto ttlTime = it.GetInnerIt()->first.GetExpireTime() - t->GetDbContext().time_now_ms_ / 1000;
+        assert(ttlTime > 0);
+        return ttlTime;
     };
   
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
@@ -223,7 +230,13 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
     }
     else 
     {
-        conn->SendERROR();
+        if (res.status() == OpStatus::KEY_NOTFOUND) {
+            conn->SendInteger(-2);
+        }else if (res.status() == OpStatus::SKIPPED) {
+            conn->SendInteger(-1);
+        }else {
+            conn->SendERROR();
+        }
     }
     co_return;      
 }

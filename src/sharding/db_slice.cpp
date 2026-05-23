@@ -51,14 +51,13 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
     }
 }
 auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optional<unsigned> req_obj_type,
-                           UpdateStatsMode stats_mode) const -> OpResult<PrimeIterator> {
+                           UpdateStatsMode) const -> OpResult<PrimeIterator> {
     if (!IsDbValid(cntx.db_index_)) {
         return OpStatus::KEY_NOTFOUND;
     }
 
     auto& db = *db_arr_[cntx.db_index_];
     PrimeIterator it = db.prime_.Find(key);
-    int miss_weight = (stats_mode == UpdateStatsMode::kReadStats);
 
     if (!IsValid(it)) {
         return OpStatus::KEY_NOTFOUND;
@@ -67,12 +66,12 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
     if (req_obj_type.has_value() && it->second.ObjType() != req_obj_type.value()) {
         return OpStatus::WRONG_TYPE;
     }
-    auto& pv = it->second;
 
 
-    (void)pv;
-    (void)miss_weight;
-
+    it = ExpireIfNeeded(cntx, it);
+    if (!IsValid(it)) {
+        return OpStatus::KEY_NOTFOUND;
+    }
     return it;
 }
 
@@ -233,7 +232,7 @@ PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) con
 
     int64_t expire_time = it->first.GetExpireTime();
 
-    if (int64_t(cntx.time_now_ms_) < expire_time ) {
+    if (int64_t(cntx.time_now_ms_ / 1000) < expire_time) {
         return it;
     }
 
