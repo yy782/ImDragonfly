@@ -35,4 +35,15 @@ inline std::string BuildArray(const std::vector<std::string>& items) {
     return res;
 }
 
+
+inline std::string BuildMultiArray(const std::vector<std::string>& items) {
+    std::string res = "*" + std::to_string(items.size()) + "\r\n";
+    for (const auto& item : items) {
+        res += item;
+    }
+    return res;
+}
+
+
+
 }

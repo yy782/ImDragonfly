@@ -22,7 +22,7 @@ class  CommandContext{
 public:
     CommandContext() = default;
 
-    CommandContext(ConnectionContext* conn_cntx, Transaction* transaction, CommandId* cid) : 
+    CommandContext(ConnectionContext* conn_cntx, Transaction* transaction, const CommandId* cid) : 
     conn_cntx_(conn_cntx), 
     transaction_(transaction),
     cid_(cid) 
@@ -41,7 +41,7 @@ public:
 private:
     ConnectionContext* conn_cntx_;
     Transaction* transaction_;
-    const CommandId* cid_ = nullptr;
+    const CommandId* cid_;
 };
 
 
