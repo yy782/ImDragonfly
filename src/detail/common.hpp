@@ -10,7 +10,7 @@ inline Namespaces* namespaces = nullptr;
 
 class RedisSession;
 using RedisSessionPtr = std::shared_ptr<RedisSession>;
-
+using RedisSessionWeakPtr = std::weak_ptr<RedisSession>;
 inline ShardId Shard(std::string_view key, ssize_t shard_set_size){
     size_t hash = std::hash<std::string_view>{}(key);
     return hash % shard_set_size;   

@@ -152,7 +152,7 @@ private:
 
 
     friend class ConnectionContext;
-
+    
     base::UringSocket socket_; 
     RESP_Buf RecvBuf_;
     RESP_Buf SendBuf_;

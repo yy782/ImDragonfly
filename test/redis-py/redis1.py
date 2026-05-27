@@ -116,6 +116,7 @@ class RedisClientWithTransaction:
             print(f"(error) {e}")
         finally:
             self.reset_transaction_state()
+            self.watched_keys.clear()
     
     def handle_exec(self):
         """处理 EXEC 命令 - 执行事务"""

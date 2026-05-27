@@ -5,7 +5,7 @@
 #include "DashTable/dash_table.hpp"
 #include "DashTable/compact_obj.hpp"
 #include "DashTable/table_policy.hpp"
-
+#include "detail/common.hpp"
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
 #include <unordered_map>
@@ -41,17 +41,18 @@ struct DbTable :
     public:
 
         WatchedKeyContext(ConnectionContext* o_conn_context);
-        bool operator==(const WatchedKeyContext& o) noexcept {
-            return conn_context == o.conn_context && key_version == o.key_version;
-        }
+        bool operator==(const WatchedKeyContext& o) const noexcept;
+        bool isExpired() const noexcept ;
     private:
         friend class DbSlice;
         ConnectionContext* conn_context;
+
+        RedisSessionWeakPtr sess;
         uint64_t key_version;        
     };
     PrimeTable prime_;
     DbIndex index_;
-    std::unordered_map<std::string_view, std::vector<WatchedKeyContext>> watched_keys_;
+    std::unordered_map<std::string, std::vector<WatchedKeyContext>> watched_keys_;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
 }  // namespace dfly
