@@ -20,7 +20,7 @@ facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
     uint32_t res = 0;
     auto& slice = tx->GetSlice(db_slice.shard_id());
     for (const auto& [key, keyId] : slice) {
-        auto it = db_slice.FindMutable(tx->GetDbContext(), key).it_;  
+        auto it = db_slice.FindMutable(tx->GetDbContext(), key).it;  
         if (!IsValid(it.GetInnerIt())) {
             continue;
         }
@@ -46,7 +46,7 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
     uint32_t del_cnt = result.load(std::memory_order_relaxed);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
     if ( res.status() == OpStatus::OK)
         conn->Send(del_cnt);
     else 
@@ -62,7 +62,7 @@ void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
 
 
 void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (args.size() > 1) {
         return conn->SendERROR();
     }
@@ -97,7 +97,7 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if(res.status() == OpStatus::OK)
     {
         
@@ -124,16 +124,16 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key, int64_t sec) 
     auto cb = [&](Transaction* t, EngineShard* es) -> facade::OpResult<void> {
         auto& db_slice = t->GetDbSlice(es->shard_id());
         auto find_res = db_slice.FindMutable(t->GetDbContext(), key);
-        if (!IsValid(find_res.it_.GetInnerIt())) {
+        if (!IsValid(find_res.it.GetInnerIt())) {
           return {OpStatus::KEY_NOTFOUND};
         }
-        auto ttlTime = t->GetDbContext().time_now_ms_/1000 + sec; // 精度丢失
-        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it_, ttlTime);     
+        auto ttlTime = t->GetDbContext().GetTimeNowMs()/1000 + sec; // 精度丢失
+        return db_slice.UpdateExpire(t->GetDbContext(), find_res.it, ttlTime);     
     };
     auto res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
-    if(res == OpStatus::OK)
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    if(res.status() == OpStatus::OK)    
     {
         
         conn->SendStatus("OK");
@@ -178,7 +178,7 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
 
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;  
+    auto conn = cmd_cntx->conn_cntx()->owner();  
     if(res.status() == OpStatus::OK)
     {
         conn->Send(res.value());
@@ -214,14 +214,14 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
         if (!it.GetInnerIt()->first.HasExpire())
             return {OpStatus::SKIPPED};
 
-        auto ttlTime = it.GetInnerIt()->first.GetExpireTime() - t->GetDbContext().time_now_ms_ / 1000;
+        auto ttlTime = it.GetInnerIt()->first.GetExpireTime() - t->GetDbContext().GetTimeNowMs() / 1000;
         assert(ttlTime > 0);
         return ttlTime;
     };
   
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
 
     if(res.status() == OpStatus::OK)
     {
@@ -249,7 +249,7 @@ void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
 
     std::vector<std::string_view> cli = {"CLIENT", "SETINFO", "LIB-NAME", "redis-py"};
     std::span<const std::string_view> cl(cli);
-    auto conn = cmd_cntx->conn_cntx()->owner_; 
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (cl.size() != args.size() || 
         !std::equal(cl.begin(), cl.end(), args.begin())) {
         conn->SendERROR();

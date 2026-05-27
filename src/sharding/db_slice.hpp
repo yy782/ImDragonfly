@@ -60,11 +60,36 @@ public:
 
     using Iterator = IteratorT<PrimeIterator>;
     using ConstIterator = IteratorT<PrimeConstIterator>; 
-    using Context = DbContext;   
+    using Context = DbContext;  
+    
+    class AutoUpdater {
+    public:
+        AutoUpdater() = default;
+        AutoUpdater(const AutoUpdater& o) = delete;
+        AutoUpdater& operator=(const AutoUpdater& o) = delete;
+        AutoUpdater(AutoUpdater&& o) noexcept;
+        AutoUpdater& operator=(AutoUpdater&& o) noexcept;
+        ~AutoUpdater();
+        void Run();
+        void Cancel();
+    private:
+        struct Fields {
+            DbSlice* db_slice = nullptr;
+            DbIndex db_ind = 0;
+            Iterator it;
+            std::string_view key;
+        };
+        AutoUpdater(DbIndex db_ind, std::string_view key, const Iterator& it, DbSlice* db_slice);
+        friend class DbSlice;
+        Fields fields_ = {};
+    };    
+
+
     struct ItAndUpdater 
     {
-        Iterator it_;
-        bool is_new_ = false;
+        Iterator it;
+        AutoUpdater post_updater;
+        bool is_new = false;
     };
 
 
@@ -85,7 +110,7 @@ public:
 
     void PerformDeletionAtomic(const Iterator& del_it, DbTable* table); // 实际的删除函数
 
-    ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改）
+    ItAndUpdater FindMutable(const Context& cntx, std::string_view key); // Iterator it：指向 key 的迭代器（可修改），这里这里返回迭代器可能必须要修改迭代器数值
     ConstIterator FindReadOnly(const Context& cntx, std::string_view key) const; // 查找 key，返回只读迭代器
     facade::OpResult<ItAndUpdater> AddOrFind(const Context& cntx, std::string_view key, 
                                     std::optional<unsigned> req_obj_type); // 如果 key 存在就返回它，不存在就创建空值并返回。
@@ -109,8 +134,10 @@ public:
     void ExpireAllIfNeeded();
 
 
-
-
+    void RegisterWatchedKey(std::string_view key,
+                                    ConnectionContext* conn_cntx);
+    void PostUpdate(DbIndex db_ind, std::string_view key);
+    void UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys);
 private:
     enum class UpdateStatsMode : uint8_t {
         kReadStats,

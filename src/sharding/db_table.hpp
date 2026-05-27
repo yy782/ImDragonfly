@@ -8,6 +8,7 @@
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
+#include <unordered_map>
 namespace dfly{
 using PrimeKey = detail::PrimeKey;
 using PrimeValue = detail::PrimeValue;
@@ -23,8 +24,7 @@ inline bool IsValid(PrimeConstIterator it) {
     return !it.is_done();
 }
 using DbIndex = uint16_t;
-//uint32_t thread_index;
-
+class ConnectionContext;
 
 struct DbTable : 
     boost::intrusive_ref_counter<DbTable, boost::thread_unsafe_counter> 
@@ -37,9 +37,21 @@ struct DbTable :
 
     DbIndex index() const { return index_; } 
 
+    class WatchedKeyContext {
+    public:
 
+        WatchedKeyContext(ConnectionContext* o_conn_context);
+        bool operator==(const WatchedKeyContext& o) noexcept {
+            return conn_context == o.conn_context && key_version == o.key_version;
+        }
+    private:
+        friend class DbSlice;
+        ConnectionContext* conn_context;
+        uint64_t key_version;        
+    };
     PrimeTable prime_;
     DbIndex index_;
+    std::unordered_map<std::string_view, std::vector<WatchedKeyContext>> watched_keys_;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
 }  // namespace dfly

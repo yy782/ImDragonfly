@@ -19,12 +19,12 @@ Namespace::Namespace() {
     });
 }
 
-DbSlice& Namespace::GetCurrentDbSlice() {
+DbSlice& Namespace::GetCurrentDbSlice() const {
     EngineShard* es = EngineShard::tlocal();
     return GetDbSlice(es->shard_id());
 }
 
-DbSlice& Namespace::GetDbSlice(ShardId sid) {
+DbSlice& Namespace::GetDbSlice(ShardId sid) const {
     return *shard_db_slices_[sid];
 }
 Namespaces::Namespaces() {

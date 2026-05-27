@@ -43,21 +43,7 @@ void EngineShardSet::InitThreadLocal(base::UringProactorPtr pb) {
     shards_[es->shard_id()] = es;
 }
 
-ShardId Shard(std::string_view key)
-{
-    auto size = shard_set->size();
-    size_t hash = std::hash<std::string_view>{}(key);
 
-    if(util::isPowerOfTwo(size))
-    {
-        return hash & (size-1);
-    }
-    else 
-        return hash % size;
-
-
-    return hash;    
-}
 
 
 }  // namespace dfly

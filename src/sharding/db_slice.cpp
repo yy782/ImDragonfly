@@ -2,6 +2,7 @@
 #include <optional>
 #include "engine_shard.hpp"
 #include "util/Time.hpp"
+#include "detail/conn_context.hpp"
 namespace dfly{ 
 
 
@@ -29,9 +30,6 @@ DbSlice::ItAndUpdater DbSlice::FindMutable(const Context& cntx, std::string_view
   return std::move(FindMutableInternal(cntx, key, std::nullopt).value());
 }
 DbSlice::ConstIterator DbSlice::FindReadOnly(const Context& cntx, std::string_view key) const {
-
-    
-
     auto res = FindInternal(cntx, key, std::nullopt, UpdateStatsMode::kReadStats);
     return {*res, StringOrView::FromView(key)};
 }
@@ -45,18 +43,19 @@ OpResult<DbSlice::ItAndUpdater> DbSlice::FindMutableInternal(const Context& cntx
     auto it = Iterator(*res, StringOrView::FromView(key));
 
     if (res->IsOccupied()) {
-        return {{it}};
+        return {{it, AutoUpdater(cntx.GetDbIndex(), key, it, this)}};
     } else {
         return OpStatus::KEY_NOTFOUND;
     }
 }
 auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optional<unsigned> req_obj_type,
-                           UpdateStatsMode) const -> OpResult<PrimeIterator> {
-    if (!IsDbValid(cntx.db_index_)) {
+                           UpdateStatsMode stats_mode) const -> OpResult<PrimeIterator> {
+    (void)stats_mode;
+    if (!IsDbValid(cntx.GetDbIndex())) {
         return OpStatus::KEY_NOTFOUND;
     }
 
-    auto& db = *db_arr_[cntx.db_index_];
+    auto& db = *db_arr_[cntx.GetDbIndex()];
     PrimeIterator it = db.prime_.Find(key);
 
     if (!IsValid(it)) {
@@ -92,19 +91,19 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std
                                                 PrimeValue obj, uint64_t expire_at_ms) {
     auto op_result = AddOrUpdateInternal(cntx, key, std::move(obj), expire_at_ms);
     auto& res = *op_result;
-    return DbSlice::ItAndUpdater{.it_ = res.it_};
+    return DbSlice::ItAndUpdater{res.it, AutoUpdater(cntx.GetDbIndex(), key, res.it, this), true}; // 注意一下
 }
 
 facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, std::string_view key,
                                                            std::optional<unsigned> req_obj_type) {
 
-    DbTable& db = *db_arr_[cntx.db_index_];
+    DbTable& db = *db_arr_[cntx.GetDbIndex()];
     auto res = FindInternal(cntx, key, req_obj_type, UpdateStatsMode::kMutableStats);
 
     if (res.ok()) {
         Iterator it(*res, StringOrView::FromView(key));
         if (res->IsOccupied()) {
-            return ItAndUpdater{.it_ = it, .is_new_ = false};
+            return ItAndUpdater{it, AutoUpdater(cntx.GetDbIndex(), key, it, this), false};
         } else {
             res = OpStatus::KEY_NOTFOUND;
         }
@@ -116,14 +115,14 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
     try {
         it = db.prime_.InsertNew(key, PrimeValue{});
     } catch (std::bad_alloc& e) {
-        return OpStatus::WRONG_TYPE; // 这里的错误类型不太准确，但我们没有更合适的选项了
+        return OpStatus::WRONG_TYPE; 
     }
 
     (void)status;
 
     return ItAndUpdater{
-        .it_ = Iterator(it, StringOrView::FromView(key)),
-        .is_new_ = true};
+        Iterator(it, StringOrView::FromView(key)),
+        AutoUpdater(cntx.GetDbIndex(), key, Iterator(it, StringOrView::FromView(key)), this), true};
 }
 
 
@@ -139,16 +138,16 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Conte
 
 
     auto& res = *op_result;
-    if (!res.is_new_ ) // not same 
+    if (!res.is_new ) // not same 
         return op_result;
 
-    auto& it = res.it_;
+    auto& it = res.it;
     it->second = std::move(obj);
 
     if (expire_at_ms) {
-        AddExpire(cntx.db_index_, it, expire_at_ms);
+        AddExpire(cntx.GetDbIndex(), it, expire_at_ms);
     } else {
-        RemoveExpire(cntx.db_index_, it);
+        RemoveExpire(cntx.GetDbIndex(), it);
     }
 
     return op_result;
@@ -156,15 +155,13 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Conte
 
 
 void DbSlice::Del(Context cntx, Iterator it, DbTable* db_table) {
-    DbTable* table = db_table ? db_table : db_arr_[cntx.db_index_].get();
-    // auto obj_type = it->second.ObjType();
-
-
+    DbTable* table = db_table ? db_table : db_arr_[cntx.GetDbIndex()].get();
     PerformDeletionAtomic(it, table); // 执行实际删除
 }
 
 void DbSlice::DelMutable(Context cntx, ItAndUpdater it_updater) {
-    Del(cntx, it_updater.it_);
+    it_updater.post_updater.Run();
+    Del(cntx, it_updater.it);
 }
 
 void DbSlice::PerformDeletionAtomic(const Iterator& del_it, DbTable* table) {
@@ -208,38 +205,25 @@ bool DbSlice::RemoveExpire(DbIndex db_ind, const Iterator& main_it) {
     return true;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 DbSlice::Iterator DbSlice::ExpireIfNeeded(const Context& cntx, Iterator it) const {
     return Iterator::FromPrime(ExpireIfNeeded(cntx, it.GetInnerIt()));
 }
 
 PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) const {
-    (void)cntx;
     if (!it->first.HasExpire()) {
         return it;
     }
 
     int64_t expire_time = it->first.GetExpireTime();
 
-    if (int64_t(cntx.time_now_ms_ / 1000) < expire_time) {
+    if (int64_t(cntx.GetTimeNowMs() / 1000) < expire_time) {
         return it;
     }
 
     std::string scratch;
     std::string_view key = it->first.GetSlice(&scratch);
 
-    auto& db = db_arr_[cntx.db_index_];
+    auto& db = db_arr_[cntx.GetDbIndex()];
     const_cast<DbSlice*>(this)->PerformDeletionAtomic(Iterator(it, StringOrView::FromView(key)),
                                                         db.get());
 
@@ -255,7 +239,7 @@ void DbSlice::ExpireAllIfNeeded() {
 
         auto cb = [&](PrimeTable::iterator prime_it) {
             if (prime_it->first.HasExpire()) {
-                ExpireIfNeeded(Context{nullptr, db_index, util::GetCurrentTimeMs()}, prime_it);
+                ExpireIfNeeded(Context(nullptr, db_index, util::GetCurrentTimeMs()), prime_it);
             }
         };
 
@@ -267,11 +251,77 @@ void DbSlice::ExpireAllIfNeeded() {
 }
 
 
+void DbSlice::RegisterWatchedKey(std::string_view key,
+                                 ConnectionContext* conn_cntx) {
+    db_arr_[conn_cntx->GetDbIndex()]->watched_keys_[key].emplace_back(conn_cntx);
+}
+
+void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
+    auto& db = *db_arr_[db_ind];
+    auto& watched_keys = db.watched_keys_;
+    if (!watched_keys.empty()) {
+        if (auto wit = watched_keys.find(key); wit != watched_keys.end()) {
+            for (auto& key_cntx : wit->second)
+            {
+                if (!key_cntx.conn_context->SetDirty(key_cntx.key_version)) {
+                    // 清除key_cntx的所有数据 TODO
+                }
+            }
+            watched_keys.erase(wit);
+        }
+    }
+}
+
+void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys) {
+    auto& db = *db_arr_[conn_cntx->GetDbIndex()];
+    for (const auto& key : keys) {
+        if (auto wit = db.watched_keys_.find(key); wit != db.watched_keys_.end()) { // 这里需要优化
+            auto& vec = wit->second;
+            for (auto& key_cntx : vec) {
+                if (key_cntx.conn_context != conn_cntx) continue;
+                std::erase(wit->second, key_cntx);
+            }
+            if (wit->second.empty()) {
+                db.watched_keys_.erase(wit);
+            }            
+        }
+    }
+}
 
 
 
+void DbSlice::AutoUpdater::Cancel() {
+    fields_ = {}; 
+}
+DbSlice::AutoUpdater::AutoUpdater(AutoUpdater&& o) noexcept {
+    *this = std::move(o);
+}
+DbSlice::AutoUpdater& DbSlice::AutoUpdater::operator=(AutoUpdater&& o) noexcept {
+    Run();
+    fields_ = o.fields_;
+    o.Cancel();
+    return *this;
+}
 
 
+DbSlice::AutoUpdater::~AutoUpdater() {
+    Run();
+}
+
+
+void DbSlice::AutoUpdater::Run() {
+    if (fields_.db_slice == nullptr) {
+        return;
+    }
+
+    fields_.db_slice->PostUpdate(fields_.db_ind, fields_.key);
+    Cancel();
+}
+
+DbSlice::AutoUpdater::AutoUpdater(DbIndex db_ind, std::string_view key, const Iterator& it,
+                                  DbSlice* db_slice)
+    : fields_{db_slice, db_ind, it, key} {
+}
 
 
 }  // namespace dfly

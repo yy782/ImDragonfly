@@ -2,7 +2,7 @@
 
 #include "command_layer/cmn_types.hpp"
 #include "command_layer/command_registry.hpp"
-#include "command_layer/conn_context.hpp"
+#include "detail/conn_context.hpp"
 
 namespace dfly {
 

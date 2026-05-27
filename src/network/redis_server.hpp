@@ -7,7 +7,7 @@
 
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
-#include "command_layer/conn_context.hpp"
+
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
@@ -30,11 +30,11 @@ public:
             
     }
     
-    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoRead(){
-        int fd = socket_.fd();
-        LOG(INFO) << "New session created for fd: " << fd;
-        context_.owner_ = shared_from_this();
+    cppcoro::AsyncTask DoRead(){
         try{
+            context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
+            int fd = socket_.fd();
+            LOG(INFO) << "New session created for fd: " << fd;            
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
@@ -63,8 +63,7 @@ public:
 
                     if (!transaction_ || transaction_->GetState() == Transaction::State::IDLE) {
                         transaction_.reset(new Transaction(ci));
-                        transaction_->setConnectionContext(&context_);
-                        transaction_->InitByArgs(ns_, index_, args_);
+                        transaction_->InitByArgs(&context_, args_);
                     }else {
                         if (transaction_->GetState() == Transaction::State::MULTI && !is_multi_command) {
                             transaction_->QueueCommand(ci, args_);
@@ -86,7 +85,7 @@ public:
             }
                       
         } catch(const std::exception& e) {
-            LOG(ERROR) << "Exception in session fd:" << fd << ": " << e.what();
+            std::cerr << "Exception in session fd:" << socket_.fd() << ": " << e.what() << std::endl;
         }
         co_return;  
     }    
@@ -127,7 +126,7 @@ private:
         auto p = socket_.Proactor(); 
                 
         if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
-            if (!transaction_->collectMultiRes(s)) return;
+            if (!transaction_->collectMultiRes(s)) return; // 可能多线程操作同一个容器
             s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
             transaction_->FinishOrDiscardMulti();
         }
@@ -139,7 +138,7 @@ private:
         });         
     }
 
-    cppcoro::AsyncTask<cppcoro::AsyncPromise> DoWrite() {
+    cppcoro::AsyncTask DoWrite() {
         while (SendBuf_.readable_size()) {
             auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
             if (wr>0) {
@@ -152,16 +151,14 @@ private:
     }
 
 
-    
+    friend class ConnectionContext;
 
     base::UringSocket socket_; 
     RESP_Buf RecvBuf_;
     RESP_Buf SendBuf_;
-    Namespace* ns_ = &namespaces->GetDefaultNamespace(); 
-    DbIndex index_ = 0;
-
     std::vector<std::string_view> Com_;
     ::cmn::CmdArgList args_;
+
     ConnectionContext context_;
     std::unique_ptr<Transaction> transaction_;   
 
@@ -205,25 +202,30 @@ public:
 
 
         main_proactor_->DispatchBrief([this]{
-            auto cb = [](RedisServer* server) -> cppcoro::AsyncTask<cppcoro::AsyncPromise> {
-                while(server->isRuning){
-                    auto fd = co_await server->ListenSocket_.AsyncAccept();
+            auto cb = [](RedisServer* server) -> cppcoro::AsyncTask {
+                try {
+                    while(server->isRuning){
+                        auto fd = co_await server->ListenSocket_.AsyncAccept();
 
-                    if (fd > 0){
-                        std::string addr = base::AddressToString(base::Address(fd));
-                        LOG(INFO) << "Accepted new connection, addr: " << addr;
+                        if (fd > 0){
+                            std::string addr = base::AddressToString(base::Address(fd));
+                            LOG(INFO) << "Accepted new connection, addr: " << addr;
 
-                        auto p = server->NextProactor();
-                        VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
+                            auto p = server->NextProactor();
+                            VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
 
-                        auto session = std::make_shared<RedisSession>(fd, p);
-                        
-                        p->DispatchBrief([session](){
-                            session->DoRead();
-                        });                    
-                    } else if (fd < 0) {
-                        LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                            auto session = std::make_shared<RedisSession>(fd, p);
+                            
+                            p->DispatchBrief([session](){
+                                session->DoRead();
+                            });                    
+                        } else if (fd < 0) {
+                            LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                        }                    
                     }
+                }catch(const std::exception& e) {
+                    std::cerr << "Exception in accept: " << e.what() << std::endl;
+
                 }
                 co_return;
             };

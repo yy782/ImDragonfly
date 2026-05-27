@@ -12,7 +12,7 @@
 #include "command_layer/cmn_types.hpp"
 #include "util/function.hpp"
 #include "sharding/op_status.hpp"
-#include "conn_context.hpp"
+#include "detail/conn_context.hpp"
 #include "sharding/engine_shard.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "cppcoro/task.hpp"

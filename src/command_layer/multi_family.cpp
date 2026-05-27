@@ -1,19 +1,22 @@
 #include "multi_family.hpp"
 
 #include "command_layer/command_registry.hpp"
-#include "command_layer/conn_context.hpp"
+#include "detail/conn_context.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "network/redis_server.hpp"
-
+#include "cmd_support.hpp"
+#include "util/synchronization.hpp"
+#include "cppcoro/async_task.hpp"
+#include <assert.h>
 namespace dfly {
-
+using namespace cmd;
 using facade::kInvalidKeysStart;
 using facade::kInvalidKeysNum;
 using facade::kInvalidKeysOffset;
 
 void MultiFamily::Multi(CommandContext* cmd_cntx, CmdArgList args) {
     (void)args;
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     auto tx = cmd_cntx->tx();
     
     if (tx->GetState() == Transaction::State::MULTI) {
@@ -27,7 +30,7 @@ void MultiFamily::Multi(CommandContext* cmd_cntx, CmdArgList args) {
 
 void MultiFamily::Exec(CommandContext* cmd_cntx, CmdArgList args) {
     (void)args;
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     auto tx = cmd_cntx->tx();
     
     if (tx->GetState() != Transaction::State::MULTI) {
@@ -36,10 +39,8 @@ void MultiFamily::Exec(CommandContext* cmd_cntx, CmdArgList args) {
     }
     
     if (tx->IsDirty()) {
-        conn->SendERROR("EXECABORT Transaction discarded because of previous errors.");
-        tx->SetState(Transaction::State::DISCARDED);
-        tx->ClearQueuedCommands();
-        tx->ClearDirtyKeys();
+        conn->Send(std::string(""));
+        tx->FinishOrDiscardMulti();
         return;
     }
     
@@ -51,20 +52,17 @@ void MultiFamily::Exec(CommandContext* cmd_cntx, CmdArgList args) {
     }
     
     tx->SetState(Transaction::State::EXEC);
-    
-    DbContext db = tx->GetDbContext();
 
     for (const auto& cmd : queued) {
         Transaction*& t = tx->CreateSubTransaction(cmd.cid);
-        t->setConnectionContext(tx->GetConnectionContext());
-        t->InitByArgs(db.ns_, db.db_index_, cmd.GetCmdArgList());
+        t->InitByArgs(tx->GetConnectionContext(), cmd.GetCmdArgList());
         cmd.cid->Invoke(&t->GetCommandContext(), cmd.GetCmdArgList());
     }
 }
 
 void MultiFamily::Discard(CommandContext* cmd_cntx, CmdArgList args) {
     (void)args;
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     auto tx = cmd_cntx->tx();
     
     if (tx->GetState() != Transaction::State::MULTI) {
@@ -76,31 +74,40 @@ void MultiFamily::Discard(CommandContext* cmd_cntx, CmdArgList args) {
     conn->SendStatus("OK");
 }
 
-void MultiFamily::Watch(CommandContext* cmd_cntx, CmdArgList args) {
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+
+cppcoro::AsyncTask CmdWatch(CommandContext* cmd_cntx, CmdArgList args) {
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     auto tx = cmd_cntx->tx();
     
     if (tx->GetState() == Transaction::State::MULTI) {
         conn->SendERROR("WATCH inside MULTI is not allowed");
-        return;
+        co_return;
     }
-    
+    size_t keyNum = args.size() - 1;
+    util::EmbeddedBlockingCounter eb(keyNum);
     for (size_t i = 1; i < args.size(); ++i) {
-        tx->AddWatchKey(args[i]);
+        tx->AddWatchKey(args[i], [&eb](){
+            eb.Dec();
+    });
     }
-    
-    tx->SetState(Transaction::State::WATCH);
-    conn->SendStatus("OK");
+    bool isSuccess = co_await eb.Wait();
+    assert(isSuccess);
+    conn->SendStatus("OK");   
+    co_return; 
 }
+
+void MultiFamily::Watch(CommandContext* cmd_cntx, CmdArgList args) {
+    CmdWatch(cmd_cntx, args);
+}
+
 
 void MultiFamily::Unwatch(CommandContext* cmd_cntx, CmdArgList args) {
     (void)args;
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     auto tx = cmd_cntx->tx();
     
     tx->ClearWatchKeys();
-    tx->SetState(Transaction::State::IDLE);
-    conn->SendStatus("OK");
+    conn->SendStatus("OK");   
 }
 
 using CI = CommandId;

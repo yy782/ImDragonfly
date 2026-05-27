@@ -21,12 +21,12 @@ Transaction::Transaction(const CommandId* cid) : cid_(cid) {
     }
 }
 Transaction::~Transaction() {
-    std::cout << "!!!" << std::endl;
+
 }
-void Transaction::InitByArgs(Namespace* ns, DbIndex index, ::cmn::CmdArgList args){
-    ns_ = ns;
-    db_cntx_ = DbContext(ns, index, util::GetCurrentTimeMs()); 
-    cmd_cntx_ = CommandContext(owner_, this, cid_);
+void Transaction::InitByArgs(ConnectionContext* conn_cntx, CmdArgList args){
+    conn_cntx_ = conn_cntx;
+    db_cntx_ = DbContext(conn_cntx_->GetNamespace(), conn_cntx_->GetDbIndex(), util::GetCurrentTimeMs()); 
+    cmd_cntx_ = CommandContext(conn_cntx_, this, cid_);
     InitKeys(args);
 }
 void Transaction::InitKeys(::cmn::CmdArgList args) {
@@ -34,7 +34,7 @@ void Transaction::InitKeys(::cmn::CmdArgList args) {
     std::set<size_t> shards;
     for (size_t i = cid_->keys_start(); i < args.size(); i += cid_->keys_offset()) {
         std::string_view key = args[i];
-        ShardId sid = Shard(key);
+        ShardId sid = Shard(key, shard_set->size());
         Slices_[sid].keyIds.push_back(i);
         Slices_[sid].lists = full_args_;
         shards.insert(sid); 
@@ -65,12 +65,5 @@ void Transaction::QueueCommand(const CommandId* cid, CmdArgList args) {
     queued_commands_.push_back({cid, std::move(VecArgs), std::move(ViewArgs)});
 }
 
-void Transaction::AddWatchKey(std::string_view key) {
-    watch_keys_.insert(std::string(key));
-}
-
-void Transaction::MarkDirty(std::string_view key) {
-    dirty_keys_.insert(std::string(key));
-}
 
 }

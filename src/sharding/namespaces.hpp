@@ -21,9 +21,9 @@ class Namespace {
  public:
   Namespace();
 
-  DbSlice& GetCurrentDbSlice();
+  DbSlice& GetCurrentDbSlice() const;
 
-  DbSlice& GetDbSlice(ShardId sid);
+  DbSlice& GetDbSlice(ShardId sid) const;
   // BlockingController* GetOrAddBlockingController(EngineShard* shard);
   // BlockingController* GetBlockingController(ShardId sid);
 

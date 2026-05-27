@@ -16,7 +16,7 @@
 #include "util/function.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/cmn_types.hpp"
-#include "command_layer/conn_context.hpp"
+#include "detail/conn_context.hpp"
 #include "sharding/op_status.hpp"
 
 namespace dfly{
@@ -26,15 +26,14 @@ class CommandId;
 class Namespace;
 class RedisSession;
 class EngineShard;
+
 class Transaction{
 public:
 
     enum class State {
         IDLE,           // 空闲状态，未开启事务
         MULTI,          // MULTI 已执行，正在收集命令
-        EXEC,           // EXEC 已执行，正在执行事务
-        DISCARDED,      // DISCARDED 已执行，事务已放弃
-        WATCH           // WATCH 状态，正在监视键
+        EXEC           // EXEC 已执行，正在执行事务
     };
 
     struct QueuedCommand {
@@ -51,8 +50,8 @@ public:
 
     explicit Transaction(const CommandId* cid);
     ~Transaction();
-    void InitByArgs(Namespace* ns, DbIndex index, CmdArgList args);
-    void InitKeys(::cmn::CmdArgList args);
+    void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
+
 
     const DbContext& GetDbContext() const {
         return db_cntx_;
@@ -61,16 +60,14 @@ public:
         return db_cntx_;
     }  
     const DbSlice& GetDbSlice(ShardId shard_id) const {
-        return ns_->GetDbSlice(shard_id);
+        return db_cntx_.GetDbSlice(shard_id);
     }
     ConnectionContext* GetConnectionContext() {
-        return owner_;
+        return conn_cntx_;
     }
-    void setConnectionContext(ConnectionContext* owner) {
-        owner_ = owner;
-    }
+
     DbSlice& GetDbSlice(ShardId shard_id) {
-        return ns_->GetDbSlice(shard_id);
+        return db_cntx_.GetDbSlice(shard_id);   
     }
     CommandContext& GetCommandContext() {
         return cmd_cntx_;
@@ -79,8 +76,8 @@ public:
         return cmd_cntx_;
     }    
     
-    DbIndex& GetDbIndex() {
-        return db_cntx_.db_index_;
+    DbIndex GetDbIndex() {
+        return db_cntx_.GetDbIndex();    
     }
     uint32_t GetKeyNum() {
         return key_num_;
@@ -97,16 +94,15 @@ public:
     const std::vector<QueuedCommand>& GetQueuedCommands() const { return queued_commands_; }
     void ClearQueuedCommands() { queued_commands_.clear(); }
 
-    void AddWatchKey(std::string_view key);
-    const std::unordered_set<std::string>& GetWatchKeys() const { return watch_keys_; }
-    bool HasWatchKeys() const { return !watch_keys_.empty(); }
-    void ClearWatchKeys() { watch_keys_.clear(); }
-    void ClearDirtyKeys() { dirty_keys_.clear(); }
-    
-    void MarkDirty(std::string_view key);
-    bool IsDirty() const { return !dirty_keys_.empty(); }
-    bool IsKeyDirty(std::string_view key) const { return dirty_keys_.count(std::string(key)); }
+    template<typename Cb>
+    void AddWatchKey(std::string_view key, Cb&& cb) { return conn_cntx_->AddWatchKey(key, std::move(cb)); }
 
+    auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
+
+    const std::unordered_set<std::string_view>& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
+    bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
+    
+    bool IsDirty() const { return conn_cntx_->IsDirty(); }
 
     struct Slice{
         ShardId unique_shard_id;
@@ -198,7 +194,7 @@ public:
     Transaction*& CreateSubTransaction(Args&&... args) {
         SubTransactions_.emplace_back(new Transaction(std::forward<Args>(args)...));
         SubTransactions_.back()->setFatherTransaction(this);
-        return SubTransactions_.back();
+        return SubTransactions_.back(); // 可能会扩容失效
     }
     void ClearSubTransaction() {
         for (auto& t : SubTransactions_) {
@@ -222,12 +218,13 @@ public:
         return MultiRes_.size() == queued_commands_.size();
     }
 
+
+
     void startMulti() { // 这里没有清空状态
         SetState(Transaction::State::MULTI);
     }
     void FinishOrDiscardMulti() {
         SetState(Transaction::State::IDLE);
-        ClearDirtyKeys();
         ClearQueuedCommands();
         ClearWatchKeys();
         ClearMultiRes();
@@ -239,11 +236,11 @@ public:
     }
 
 private:
-
+    void InitKeys(::cmn::CmdArgList args);
     const CommandId* cid_;
     CmdArgList full_args_;
-    Namespace* ns_;
-    DbContext db_cntx_ = {};
+
+    DbContext db_cntx_;
     CommandContext cmd_cntx_;
     std::vector<Slice> Slices_;
     ShardId shard_id_cnt_ = 0;
@@ -252,12 +249,10 @@ private:
     State state_ = State::IDLE;
     std::vector<QueuedCommand> queued_commands_;
     std::vector<std::string> MultiRes_;
-    std::unordered_set<std::string> watch_keys_;
-    std::unordered_set<std::string> dirty_keys_;
     std::vector<Transaction*> SubTransactions_; 
     Transaction* fa_;
 
-    ConnectionContext* owner_;
+    ConnectionContext* conn_cntx_;
 
 };
 

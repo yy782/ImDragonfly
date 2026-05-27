@@ -70,18 +70,21 @@ class RedisClientWithTransaction:
     def handle_watch(self, keys: List[str]):
         """处理 WATCH 命令"""
         try:
-            result = self.r.watch(*keys)
+            for key in keys:
+                result = self.r.execute_command('WATCH', key)
+                if self.format_result(result) != 'OK':
+                    raise Exception(f"WATCH命令失败: 期望 'OK'，实际得到 '{result}'")
             self.watched_keys.update(keys)
-            print("OK")
+            self.print_result(result)
         except Exception as e:
             print(f"(error) {e}")
     
     def handle_unwatch(self):
         """处理 UNWATCH 命令"""
         try:
-            result = self.r.unwatch()
+            result = self.r.execute_command('UNWATCH')
             self.watched_keys.clear()
-            print("OK")
+            self.print_result(result)
         except Exception as e:
             print(f"(error) {e}")
     

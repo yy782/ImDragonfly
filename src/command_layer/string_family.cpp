@@ -15,7 +15,8 @@
 #include "sharding/engine_shard.hpp"
 #include "command_registry.hpp"
 #include "sharding/op_status.hpp"
-#include "conn_context.hpp"
+#include "detail/conn_context.hpp"
+
 #include "transaction_layer/transaction.hpp"
 #include "cmd_support.hpp"
 #include "network/redis_server.hpp"
@@ -88,10 +89,10 @@ facade::OpResult<void> SetCmd::Set(const SetParams& params, std::string_view key
     auto op_res = db_slice.AddOrFind(slice_.GetDbContext(), key, std::nullopt);
 
 
-    if (!op_res->is_new_) {
+    if (!op_res->is_new) {
         return SetExisting(params, value, &(*op_res));
     } else {
-        AddNew(params, op_res->it_, key, value);
+        AddNew(params, op_res->it, key, value);
         return OpStatus::OK;
     }
 }
@@ -100,18 +101,18 @@ facade::OpResult<void> SetCmd::SetExisting(const SetParams& params, std::string_
                              DbSlice::ItAndUpdater* it_upd) {
 
   
-    PrimeValue& prime_value = it_upd->it_->second;
+    PrimeValue& prime_value = it_upd->it->second;
 
 
     auto& db_slice = slice_.GetDbSlice();
     uint64_t at_ms =
-        params.expire_after_ms_ ? params.expire_after_ms_ + slice_.GetDbContext().time_now_ms_ : 0;
+        params.expire_after_ms_ ? params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs() : 0;
 
     if (!(params.flags_ & SET_KEEP_EXPIRE)) {
         if (at_ms) {
-            db_slice.AddExpire(slice_.GetDbContext().db_index_, it_upd->it_, at_ms);
+            db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it, at_ms);
         } else {
-            db_slice.RemoveExpire(slice_.GetDbContext().db_index_, it_upd->it_);
+            db_slice.RemoveExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it);
         }
     }
     prime_value.SetString(value);
@@ -127,8 +128,8 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it, std::s
   it->second = PrimeValue{value};
 
   if (params.expire_after_ms_) {
-      db_slice.AddExpire(slice_.GetDbContext().db_index_, it,
-                        params.expire_after_ms_ + slice_.GetDbContext().time_now_ms_);
+      db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it,
+                        params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
   }
 }
 
@@ -166,7 +167,7 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
         return {};       
     };
     co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
     conn->SendStatus("OK");
     co_return;
 }
@@ -192,7 +193,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     auto result = co_await cmd::SingleHopT(cb);
 
 
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
         conn->SendStatus("OK"); 
@@ -220,7 +221,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
         return {};        
     };
     co_await cmd::SingleHopT(cb); // 这里不需要b.Wait()吗
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner();
     conn->SendVec(std::move(vec));
     co_return;
 
@@ -239,9 +240,8 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
 
         return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
     };
-
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner_;
+    auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (result.status() == OpStatus::OK) {   
         conn->Send(result.value());
     } else {
