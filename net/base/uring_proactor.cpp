@@ -185,13 +185,20 @@ void UringProactor::loop() {
         // 2. 提交待处理的 I/O 操作
         SubmitPendingOps();
         
-        // 3. 等待完成事件
+        // 3. 等待完成事件并批量处理
         struct io_uring_cqe* cqe = nullptr;
         int ret = io_uring_wait_cqe_timeout(&ring_->ring, &cqe, &timeout);
         
         if (ret == 0 && cqe) {
             HandleCqe(cqe);
             io_uring_cqe_seen(&ring_->ring, cqe);
+            
+            struct io_uring_cqe* cqes[32];
+            unsigned int count = io_uring_peek_batch_cqe(&ring_->ring, cqes, 32);
+            for (unsigned int i = 0; i < count; ++i) {
+                HandleCqe(cqes[i]);
+                io_uring_cqe_seen(&ring_->ring, cqes[i]);
+            }
         }
         // 超时或错误则继续循环，再次处理任务队列
     }

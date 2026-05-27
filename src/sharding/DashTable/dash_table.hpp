@@ -246,9 +246,8 @@ public:
         return owner_ == nullptr;
     }
 
-    bool IsOccupied() const {
-        return (seg_id_ < owner_->segment_.size()) &&
-            ((owner_->segment_[seg_id_]->IsBusy(bucket_id_, slot_id_)));
+    bool IsOccupied() const { // not same
+        return seg_depth_ == owner_->depth();
     }
 
     Owner* owner() const {
@@ -270,14 +269,15 @@ private:
     Iterator(Owner* me, uint32_t seg_id, detail::PhysicalBid bid, uint8_t sid) : 
     owner_(me), 
     seg_id_(seg_id), 
+    seg_depth_(me->segment_[seg_id]->local_depth()),
     bucket_id_(bid), 
     slot_id_(sid) { } 
-
     void Seek2Occupied();
 
     // 迭代器的位置信息
     Owner* owner_;      // 所属的 DashTable
     uint32_t seg_id_;   // 当前 segment 索引
+    uint8_t  seg_depth_; // segment深度，当分裂后可能迭代器失效，需要重新查找
     detail::PhysicalBid bucket_id_;     // 当前 bucket 索引（0-67）
     uint8_t slot_id_;       // 当前槽位索引（0-13）
     
