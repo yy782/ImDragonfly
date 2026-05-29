@@ -10,6 +10,11 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
+#include <optional>
+#include <cstdlib>
+#include <cmath>
+#include "skiplist.hpp"
 
 namespace dfly {
 
@@ -236,6 +241,139 @@ public:
 
 private:
     std::unordered_set<std::string> data_;
+};
+
+struct ZSetEntry {
+    std::string member;
+    double score;
+
+    bool operator==(const ZSetEntry& other) const {
+        return score == other.score && member == other.member;
+    }
+};
+
+class ZSetCompare {
+public:
+    bool operator()(const ZSetEntry& a, const ZSetEntry& b) const {
+        if (a.score < b.score) return true;
+        if (a.score > b.score) return false;
+        return a.member < b.member;
+    }
+};
+
+class ZSetObject {
+public:
+    ZSetObject() = default;
+
+    ~ZSetObject() = default;
+
+    size_t Add(const std::string& member, double score) {
+        auto it = score_map_.find(member);
+        if (it != score_map_.end()) {
+            double old_score = it->second;
+            if (old_score == score) {
+                return 0;
+            }
+            ZSetEntry old_entry{it->first, old_score};
+            skip_list_.Remove(old_entry);
+            it->second = score;
+        }
+
+        ZSetEntry entry{member, score};
+        bool inserted = skip_list_.Insert(entry);
+        if (inserted) {
+            score_map_[member] = score;
+            return 1;
+        }
+        return 0;
+    }
+
+    size_t Remove(const std::string& member) {
+        auto it = score_map_.find(member);
+        if (it == score_map_.end()) {
+            return 0;
+        }
+
+        ZSetEntry entry{member, it->second};
+        bool removed = skip_list_.Remove(entry);
+        if (removed) {
+            score_map_.erase(member);
+            return 1;
+        }
+        return 0;
+    }
+
+    bool Contains(const std::string& member) const {
+        return score_map_.contains(member);
+    }
+
+    std::optional<double> Score(const std::string& member) const {
+        auto it = score_map_.find(member);
+        if (it == score_map_.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
+    size_t Length() const {
+        return skip_list_.Length();
+    }
+
+    bool Empty() const {
+        return skip_list_.Empty();
+    }
+
+    std::vector<std::pair<std::string, double>> Range(int64_t start, int64_t end) const {
+        std::vector<std::pair<std::string, double>> result;
+        auto nodes = skip_list_.Range(start, end);
+        for (auto* node : nodes) {
+            result.emplace_back(node->data.member, node->data.score);
+        }
+        return result;
+    }
+
+    std::vector<std::pair<std::string, double>> RevRange(int64_t start, int64_t end) const {
+        std::vector<std::pair<std::string, double>> result;
+        auto nodes = skip_list_.RevRange(start, end);
+        for (auto* node : nodes) {
+            result.emplace_back(node->data.member, node->data.score);
+        }
+        return result;
+    }
+
+    int64_t Rank(const std::string& member) const {
+        auto it = score_map_.find(member);
+        if (it == score_map_.end()) {
+            return -1;
+        }
+        ZSetEntry entry{member, it->second};
+        return skip_list_.Rank(entry);
+    }
+
+    int64_t RevRank(const std::string& member) const {
+        auto it = score_map_.find(member);
+        if (it == score_map_.end()) {
+            return -1;
+        }
+        return static_cast<int64_t>(skip_list_.Length()) - 1 - Rank(member);
+    }
+
+    size_t Count(double min, double max) const {
+        size_t count = 0;
+        auto nodes = skip_list_.Range(0, -1);
+        for (auto* node : nodes) {
+            if (node->data.score >= min && node->data.score <= max) {
+                count++;
+            } else if (node->data.score > max) {
+                break;
+            }
+        }
+        return count;
+    }
+
+private:
+    SkipList<ZSetEntry, ZSetCompare> skip_list_;
+    std::unordered_map<std::string, double> score_map_;
 };
 
 }  // namespace dfly

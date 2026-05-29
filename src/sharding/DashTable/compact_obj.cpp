@@ -18,6 +18,9 @@ RobjWrapper::~RobjWrapper() {
         case OBJ_SET:
             delete static_cast<SetObject*>(obj_inner_);
             break;
+        case OBJ_ZSET:
+            delete static_cast<ZSetObject*>(obj_inner_);
+            break;
         default:
             LOG(WARNING) << "Unknown type in RobjWrapper destructor: " << type_;
             break;
