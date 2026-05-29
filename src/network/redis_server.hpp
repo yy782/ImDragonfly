@@ -118,7 +118,9 @@ public:
     void SendInteger(int64_t n) {
         SendImp(BuildInteger(n));
     }
-    
+    void SendNULL() {
+        Send(std::string());
+    }
 private:
 
 
@@ -177,6 +179,9 @@ public:
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
         RegisterMulti(CIs);
+        RegisterListFamily(CIs);
+        RegisterHashFamily(CIs);
+        RegisterSetFamily(CIs);
         ser = this;
     }
 

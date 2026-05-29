@@ -7,8 +7,8 @@
 #include <string>
 #include <string_view>
 #include <glog/logging.h>
+#include "redis/redis_aux.hpp"
 namespace dfly{
-
 
 
 
@@ -17,6 +17,40 @@ using CompactObjType = unsigned;
 
 constexpr CompactObjType kInvalidCompactObjType = std::numeric_limits<CompactObjType>::max();
 
+
+class RobjWrapper{
+public:
+    RobjWrapper() = default;
+    RobjWrapper(CompactObjType type, void* obj_inner)
+        : type_(type), obj_inner_(obj_inner) {}
+    ~RobjWrapper();
+    RobjWrapper(const RobjWrapper&) = delete;
+    RobjWrapper& operator=(const RobjWrapper&) = delete;
+    RobjWrapper(RobjWrapper&& o) noexcept {
+        type_ = o.type_;
+        obj_inner_ = o.obj_inner_;
+        o.reset();
+    }
+    RobjWrapper& operator=(RobjWrapper&& o) noexcept {
+        if (this != &o) {
+            this->~RobjWrapper();
+            type_ = o.type_;
+            obj_inner_ = o.obj_inner_;
+            o.reset();
+        }
+        return *this;
+    }
+    CompactObjType type() const { return type_; }
+    void* obj_inner() const { return obj_inner_; }
+    bool operator==(const RobjWrapper& o) const;
+    void reset() {
+        type_ = kInvalidCompactObjType;
+        obj_inner_ = nullptr;
+    }
+private:
+    CompactObjType type_;
+    void* obj_inner_;
+};
 
 class CompactObj{
     static constexpr unsigned kInlineLen = 16;
@@ -56,6 +90,11 @@ public:
     CompactObj(const TtlString& s) :CompactObj(true) {
         SetTtlStr(s);
     }
+
+    CompactObj(CompactObjType type, void* obj_inner) :CompactObj(true) {
+        SetRobj(type, obj_inner);
+    }
+
     CompactObj(CompactObj&& cs) noexcept : CompactObj(cs.is_key_) {
         operator=(std::move(cs));
     };    
@@ -71,10 +110,14 @@ public:
             SetInt(o.u_.ival_);
             break;
         case STR_TAG:
-            SetString(o.u_.str_);
+            SetString(std::move(o.u_.str_));
             break;
         case TTL_STR_TAG:
-            SetTtlStr(o.u_.ttl_str_);
+            SetTtlStr(std::move(o.u_.ttl_str_));
+            break;
+        case ROBJ_TAG:
+            u_.r_obj_ = std::move(o.u_.r_obj_);
+            SetMeta(ROBJ_TAG);
             break;
         default:
             LOG(FATAL) << "Invalid tag: " << o.tag_; // 插入默认值会没有标签
@@ -95,6 +138,8 @@ public:
             return o.u_.str_ == u_.str_;
         case TTL_STR_TAG:
             return o.u_.ttl_str_ == u_.ttl_str_;
+        case ROBJ_TAG:
+            return o.u_.r_obj_ == u_.r_obj_;
         default:
             LOG(FATAL) << "Invalid tag: " << o.tag_;
             return false;
@@ -113,10 +158,13 @@ public:
             case INT_TAG:
                 break;
             case STR_TAG:
-                u_.str_.~string(); // 
+                u_.str_.~string(); 
                 break;
             case TTL_STR_TAG:
                 u_.ttl_str_.~TtlString();
+                break;
+            case ROBJ_TAG:
+                u_.r_obj_.~RobjWrapper();
                 break;
             default:
                 LOG(FATAL) << "Invalid tag: " << tag_;
@@ -135,9 +183,25 @@ public:
         SetMeta(INT_TAG);
     }
     void SetTtlStr(const TtlString& s) {
-        u_.ttl_str_ = std::move(s);
+        u_.ttl_str_ = s;
+        SetMeta(TTL_STR_TAG);
     }
-
+    void SetRobj(CompactObjType type, void* obj_inner) {
+        u_.r_obj_ = {type, obj_inner};
+        SetMeta(ROBJ_TAG);
+    }
+    
+    RobjWrapper& GetRobjWrapper() {
+        return u_.r_obj_;
+    }
+    
+    const RobjWrapper& GetRobjWrapper() const {
+        return u_.r_obj_;
+    }
+    
+    uint8_t GetTag() const {
+        return tag_;
+    }
 
     std::string ToString() const {
         switch (tag_)
@@ -186,9 +250,11 @@ protected:
         TtlString ttl_str_;
 
         int64_t ival_;
+        RobjWrapper r_obj_;
 
         U():str_(){}
-        ~U(){} // 需要显式析构函数
+        ~U(){
+        } // 需要显式析构函数
     }u_;
 
     const bool is_key_ : 1; 
@@ -239,6 +305,66 @@ struct CompactValue : public CompactObj {
     }
 
     explicit CompactValue(std::string_view str) : CompactObj{str, false} {
+    }
+
+    static CompactValue MakeList() {
+        CompactValue obj;
+        obj.SetRobj(OBJ_LIST, new ListObject{});
+        return obj;
+    }
+
+    ListObject* GetList() {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_LIST) {
+            return nullptr;
+        }
+        return static_cast<ListObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    const ListObject* GetList() const {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_LIST) {
+            return nullptr;
+        }
+        return static_cast<const ListObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    static CompactValue MakeHash() {
+        CompactValue obj;
+        obj.SetRobj(OBJ_HASH, new HashObject{});
+        return obj;
+    }
+
+    HashObject* GetHash() {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_HASH) {
+            return nullptr;
+        }
+        return static_cast<HashObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    const HashObject* GetHash() const {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_HASH) {
+            return nullptr;
+        }
+        return static_cast<const HashObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    static CompactValue MakeSet() {
+        CompactValue obj;
+        obj.SetRobj(OBJ_SET, new SetObject{});
+        return obj;
+    }
+
+    SetObject* GetSet() {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_SET) {
+            return nullptr;
+        }
+        return static_cast<SetObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    const SetObject* GetSet() const {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_SET) {
+            return nullptr;
+        }
+        return static_cast<const SetObject*>(GetRobjWrapper().obj_inner());
     }
 };
 
