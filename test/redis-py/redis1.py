@@ -512,7 +512,7 @@ class RedisClientWithTransaction:
                 result = self.r.hlen(key)
                 self.print_result(result)
             
-            elif cmd_name == 'HGETALL': // 不支持
+            elif cmd_name == 'HGETALL': # 不支持
                 if len(args) != 1:
                     print("错误: HGETALL 格式: HGETALL key")
                     return False
@@ -564,6 +564,96 @@ class RedisClientWithTransaction:
                 result = self.r.sismember(key, member)
                 self.print_result(result)
             
+            # ========== ZSet 命令 ==========
+            elif cmd_name == 'ZADD':
+                if len(args) < 3 or len(args) % 2 != 1:
+                    print("错误: ZADD 格式: ZADD key score member [score member ...]")
+                    return False
+                key = args[0]
+                score_member_pairs = []
+                for i in range(1, len(args), 2):
+                    try:
+                        score = float(args[i])
+                    except ValueError:
+                        print(f"错误: '{args[i]}' 不是有效的数字")
+                        return False
+                    member = args[i+1]
+                    score_member_pairs.extend([score, member])
+                result = self.r.execute_command('ZADD', key, *score_member_pairs)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZCARD':
+                if len(args) != 1:
+                    print("错误: ZCARD 格式: ZCARD key")
+                    return False
+                key = args[0]
+                result = self.r.execute_command('ZCARD', key)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZSCORE':
+                if len(args) != 2:
+                    print("错误: ZSCORE 格式: ZSCORE key member")
+                    return False
+                key = args[0]
+                member = args[1]
+                result = self.r.execute_command('ZSCORE', key, member)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZREM':
+                if len(args) < 2:
+                    print("错误: ZREM 格式: ZREM key member [member ...]")
+                    return False
+                key = args[0]
+                members = args[1:]
+                result = self.r.execute_command('ZREM', key, *members)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZRANK':
+                if len(args) != 2:
+                    print("错误: ZRANK 格式: ZRANK key member")
+                    return False
+                key = args[0]
+                member = args[1]
+                result = self.r.execute_command('ZRANK', key, member)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZREVRANK':
+                if len(args) != 2:
+                    print("错误: ZREVRANK 格式: ZREVRANK key member")
+                    return False
+                key = args[0]
+                member = args[1]
+                result = self.r.execute_command('ZREVRANK', key, member)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZRANGE':
+                if len(args) != 3:
+                    print("错误: ZRANGE 格式: ZRANGE key start end")
+                    return False
+                key = args[0]
+                try:
+                    start = int(args[1])
+                    end = int(args[2])
+                except ValueError:
+                    print("错误: start 和 end 必须是整数")
+                    return False
+                result = self.r.execute_command('ZRANGE', key, start, end)
+                self.print_result(result)
+            
+            elif cmd_name == 'ZREVRANGE':
+                if len(args) != 3:
+                    print("错误: ZREVRANGE 格式: ZREVRANGE key start end")
+                    return False
+                key = args[0]
+                try:
+                    start = int(args[1])
+                    end = int(args[2])
+                except ValueError:
+                    print("错误: start 和 end 必须是整数")
+                    return False
+                result = self.r.execute_command('ZREVRANGE', key, start, end)
+                self.print_result(result)
+            
             else:
                 print(f"错误: 未知命令 '{cmd_name}'")
                 self.show_help()
@@ -583,6 +673,7 @@ class RedisClientWithTransaction:
         print("  列表命令: LPUSH, RPUSH, LPOP, RPOP, LLEN, LINDEX, LSET, LRANGE, LREM, LINSERT")
         print("  哈希命令: HSET, HGET, HDEL, HEXISTS, HLEN, HGETALL")
         print("  集合命令: SADD, SREM, SMEMBERS, SCARD, SISMEMBER")
+        print("  有序集合命令: ZADD, ZCARD, ZSCORE, ZREM, ZRANK, ZREVRANK, ZRANGE, ZREVRANGE")
         print("  其他命令: SELECT, SHUTDOWN, QUIT, PING, ECHO")
         print("\n事务使用示例:")
         print("  > WATCH balance")

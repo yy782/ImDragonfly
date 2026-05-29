@@ -366,6 +366,26 @@ struct CompactValue : public CompactObj {
         }
         return static_cast<const SetObject*>(GetRobjWrapper().obj_inner());
     }
+
+    static CompactValue MakeZSet() {
+        CompactValue obj;
+        obj.SetRobj(OBJ_ZSET, new ZSetObject{});
+        return obj;
+    }
+
+    ZSetObject* GetZSet() {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_ZSET) {
+            return nullptr;
+        }
+        return static_cast<ZSetObject*>(GetRobjWrapper().obj_inner());
+    }
+
+    const ZSetObject* GetZSet() const {
+        if (tag_ != ROBJ_TAG || ObjType() != OBJ_ZSET) {
+            return nullptr;
+        }
+        return static_cast<const ZSetObject*>(GetRobjWrapper().obj_inner());
+    }
 };
 
 

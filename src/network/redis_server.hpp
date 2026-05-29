@@ -182,6 +182,7 @@ public:
         RegisterListFamily(CIs);
         RegisterHashFamily(CIs);
         RegisterSetFamily(CIs);
+        RegisterZSetFamily(CIs);
         ser = this;
     }
 
