@@ -3,7 +3,7 @@
 import redis
 import sys
 from typing import List, Tuple, Optional, Any
-
+# cd programs/ImDragonfly
 class RedisClientWithTransaction:
     def __init__(self):
         self.r = None
@@ -354,6 +354,216 @@ class RedisClientWithTransaction:
                 result = self.r.echo(args[0])
                 self.print_result(result)
             
+            # ========== List 命令 ==========
+            elif cmd_name == 'LPUSH':
+                if len(args) < 2:
+                    print("错误: LPUSH 格式: LPUSH key value [value ...]")
+                    return False
+                key = args[0]
+                values = args[1:]
+                result = self.r.lpush(key, *values)
+                self.print_result(result)
+            
+            elif cmd_name == 'RPUSH':
+                if len(args) < 2:
+                    print("错误: RPUSH 格式: RPUSH key value [value ...]")
+                    return False
+                key = args[0]
+                values = args[1:]
+                result = self.r.rpush(key, *values)
+                self.print_result(result)
+            
+            elif cmd_name == 'LPOP':
+                if len(args) != 1:
+                    print("错误: LPOP 格式: LPOP key")
+                    return False
+                key = args[0]
+                result = self.r.lpop(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'RPOP':
+                if len(args) != 1:
+                    print("错误: RPOP 格式: RPOP key")
+                    return False
+                key = args[0]
+                result = self.r.rpop(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'LLEN':
+                if len(args) != 1:
+                    print("错误: LLEN 格式: LLEN key")
+                    return False
+                key = args[0]
+                result = self.r.llen(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'LINDEX':
+                if len(args) != 2:
+                    print("错误: LINDEX 格式: LINDEX key index")
+                    return False
+                key = args[0]
+                try:
+                    index = int(args[1])
+                except ValueError:
+                    print("错误: index 必须是整数")
+                    return False
+                result = self.r.lindex(key, index)
+                self.print_result(result)
+            
+            elif cmd_name == 'LSET':
+                if len(args) != 3:
+                    print("错误: LSET 格式: LSET key index value")
+                    return False
+                key = args[0]
+                try:
+                    index = int(args[1])
+                except ValueError:
+                    print("错误: index 必须是整数")
+                    return False
+                value = args[2]
+                result = self.r.lset(key, index, value)
+                self.print_result(result)
+            
+            elif cmd_name == 'LRANGE':
+                if len(args) != 3:
+                    print("错误: LRANGE 格式: LRANGE key start end")
+                    return False
+                key = args[0]
+                try:
+                    start = int(args[1])
+                    end = int(args[2])
+                except ValueError:
+                    print("错误: start 和 end 必须是整数")
+                    return False
+                result = self.r.lrange(key, start, end)
+                self.print_result(result)
+            
+            elif cmd_name == 'LREM':
+                if len(args) != 3:
+                    print("错误: LREM 格式: LREM key count value")
+                    return False
+                key = args[0]
+                try:
+                    count = int(args[1])
+                except ValueError:
+                    print("错误: count 必须是整数")
+                    return False
+                value = args[2]
+                result = self.r.lrem(key, count, value)
+                self.print_result(result)
+            
+            elif cmd_name == 'LINSERT':
+                if len(args) != 4:
+                    print("错误: LINSERT 格式: LINSERT key BEFORE|AFTER pivot value")
+                    return False
+                key = args[0]
+                position = args[1].upper()
+                if position not in ['BEFORE', 'AFTER']:
+                    print("错误: 位置必须是 BEFORE 或 AFTER")
+                    return False
+                pivot = args[2]
+                value = args[3]
+                result = self.r.linsert(key, position, pivot, value)
+                self.print_result(result)
+            
+            # ========== Hash 命令 ==========
+            elif cmd_name == 'HSET':
+                if len(args) != 3:
+                    print("错误: HSET 格式: HSET key field value")
+                    return False
+                key = args[0]
+                field = args[1]
+                value = args[2]
+                result = self.r.hset(key, field, value)
+                self.print_result(result)
+            
+            elif cmd_name == 'HGET':
+                if len(args) != 2:
+                    print("错误: HGET 格式: HGET key field")
+                    return False
+                key = args[0]
+                field = args[1]
+                result = self.r.hget(key, field)
+                self.print_result(result)
+            
+            elif cmd_name == 'HDEL':
+                if len(args) < 2:
+                    print("错误: HDEL 格式: HDEL key field [field ...]")
+                    return False
+                key = args[0]
+                fields = args[1:]
+                result = self.r.hdel(key, *fields)
+                self.print_result(result)
+            
+            elif cmd_name == 'HEXISTS':
+                if len(args) != 2:
+                    print("错误: HEXISTS 格式: HEXISTS key field")
+                    return False
+                key = args[0]
+                field = args[1]
+                result = self.r.hexists(key, field)
+                self.print_result(result)
+            
+            elif cmd_name == 'HLEN':
+                if len(args) != 1:
+                    print("错误: HLEN 格式: HLEN key")
+                    return False
+                key = args[0]
+                result = self.r.hlen(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'HGETALL': // 不支持
+                if len(args) != 1:
+                    print("错误: HGETALL 格式: HGETALL key")
+                    return False
+                key = args[0]
+                result = self.r.hgetall(key)
+                self.print_result(result)
+            
+            # ========== Set 命令 ==========
+            elif cmd_name == 'SADD':
+                if len(args) < 2:
+                    print("错误: SADD 格式: SADD key member [member ...]")
+                    return False
+                key = args[0]
+                members = args[1:]
+                result = self.r.sadd(key, *members)
+                self.print_result(result)
+            
+            elif cmd_name == 'SREM':
+                if len(args) < 2:
+                    print("错误: SREM 格式: SREM key member [member ...]")
+                    return False
+                key = args[0]
+                members = args[1:]
+                result = self.r.srem(key, *members)
+                self.print_result(result)
+            
+            elif cmd_name == 'SMEMBERS':
+                if len(args) != 1:
+                    print("错误: SMEMBERS 格式: SMEMBERS key")
+                    return False
+                key = args[0]
+                result = self.r.smembers(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'SCARD':
+                if len(args) != 1:
+                    print("错误: SCARD 格式: SCARD key")
+                    return False
+                key = args[0]
+                result = self.r.scard(key)
+                self.print_result(result)
+            
+            elif cmd_name == 'SISMEMBER':
+                if len(args) != 2:
+                    print("错误: SISMEMBER 格式: SISMEMBER key member")
+                    return False
+                key = args[0]
+                member = args[1]
+                result = self.r.sismember(key, member)
+                self.print_result(result)
+            
             else:
                 print(f"错误: 未知命令 '{cmd_name}'")
                 self.show_help()
@@ -370,6 +580,9 @@ class RedisClientWithTransaction:
         print("  基本命令: SET, GET, DEL, MSET, MGET, EXISTS")
         print("  过期命令: EXPIRE, PERSIST, TTL, EXPIRETIME")
         print("  事务命令: MULTI, EXEC, DISCARD, WATCH, UNWATCH")
+        print("  列表命令: LPUSH, RPUSH, LPOP, RPOP, LLEN, LINDEX, LSET, LRANGE, LREM, LINSERT")
+        print("  哈希命令: HSET, HGET, HDEL, HEXISTS, HLEN, HGETALL")
+        print("  集合命令: SADD, SREM, SMEMBERS, SCARD, SISMEMBER")
         print("  其他命令: SELECT, SHUTDOWN, QUIT, PING, ECHO")
         print("\n事务使用示例:")
         print("  > WATCH balance")
