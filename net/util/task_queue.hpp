@@ -3,7 +3,6 @@
 #include "util/synchronization.hpp"
 #include "cppcoro/async_task.hpp"
 
-#include "util/result_mover.hpp"
 #include "util/lock_free_queue.hpp"
 #include <functional>
 #include <atomic>
