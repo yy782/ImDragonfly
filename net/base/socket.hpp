@@ -38,8 +38,6 @@ private:
     int fd_;
 };
 
-// ============== Awaitable 定义 ==============
-
 struct UringSocket::AcceptAwaitable {
     bool await_ready() const noexcept { return false; }
     void await_suspend(std::coroutine_handle<> h) noexcept;

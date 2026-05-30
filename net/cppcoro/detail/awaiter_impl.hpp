@@ -9,7 +9,6 @@
 namespace cppcoro::detail{
 
 struct void_value {};
-// 检测 await_suspend 返回值是否合法
 template<typename Return>
 concept valid_await_suspend_return = 
     std::is_void_v<Return> ||
@@ -20,17 +19,12 @@ concept valid_await_suspend_return =
 
 template<typename T>
 concept Awaiter = requires(T&& value, std::coroutine_handle<> h) {
-    // await_ready 必须返回 bool
     { value.await_ready() } -> std::convertible_to<bool>;
     
-    // await_suspend 返回值必须合法（void/bool/coroutine_handle）
     { value.await_suspend(h) } -> detail::valid_await_suspend_return;
     
-    // await_resume 存在即可
     value.await_resume();
 };
-
-// 2. 获取 Awaiter 的重载（用概念替代 SFINAE）
 
 
 template<typename T>

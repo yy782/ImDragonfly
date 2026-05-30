@@ -29,20 +29,20 @@ public:
     UringProactor(const UringProactor&) = delete;
     UringProactor& operator=(const UringProactor&) = delete;
     
-    // 核心：入队任务（可从任意线程调用）
+
     template<typename Func>
     bool DispatchBrief(Func&& f) {
-        // 将任务包装成 std::function 并入队
+
         auto task = std::make_unique<Task>(std::forward<Func>(f));
         if (!task_queue_->try_enqueue(std::move(task))) {
             return false;
         }
-        // 唤醒事件循环
+
         Wakeup();
         return true;
     }
     
-    // 协程相关接口
+
     void SubmitAccept(int fd, std::coroutine_handle<> handle, void* awaitable);
     void SubmitRead(int fd, void* buf, size_t len, off_t offset, 
                     std::coroutine_handle<> handle, void* awaitable);
@@ -50,7 +50,7 @@ public:
                      std::coroutine_handle<> handle, void* awaitable);
     void SubmitClose(int fd, std::coroutine_handle<> handle, void* awaitable);
     
-    // 启动事件循环
+
     void loop();
     void stop();
     
@@ -66,7 +66,7 @@ private:
         size_t len;
         off_t offset;
         std::coroutine_handle<> handle;
-        void* awaitable;  // 指向 Awaitable 对象，用于设置结果
+        void* awaitable; 
     };
     
     void Wakeup();
