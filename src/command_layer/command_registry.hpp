@@ -17,27 +17,7 @@ namespace dfly {
 namespace CO {
 
 enum CommandOpt : uint32_t { // 命令选项枚举
-    READONLY = 1U << 0, // 命令是只读的，不会修改数据
-    DENYOOM = 1U << 4,    // use-memory in redis. // 内存不足时拒绝执行
 
-    VARIADIC_KEYS = 1U << 6,  // arg 2 determines number of keys. Relevant for ZUNIONSTORE, EVAL etc. // 第二个参数决定键的数量（如 ZUNIONSTORE、EVAL 等）
-
-    ADMIN = 1U << 7,  // implies NOSCRIPT, // 管理命令，隐含 NOSCRIPT
-    NOSCRIPT = 1U << 8, // 非脚本命令
-    BLOCKING = 1U << 9, // 阻塞命令
-    HIDDEN = 1U << 10,  // does not show in COMMAND command output // 在 COMMAND 命令输出中不显示
-
-    STORE_LAST_KEY = 1U << 13,  // The command my have a store key as the last argument. // 命令可能有一个存储键作为最后一个参数
-
-
-
-    // Allows commands without keys to respect transaction ordering and enables journaling by default
-    NO_KEY_TRANSACTIONAL = 1U << 16, // 允许无键命令尊重事务顺序并默认启用日志
-    NO_KEY_TX_SPAN_ALL = 1U << 17,  // All shards are active for the no-key-transactional command // 无键事务命令会在所有分片上执行
-
-    // The same callback can be run multiple times without corrupting the result. Used for
-    // opportunistic optimizations where inconsistencies can only be detected afterwards.
-    IDEMPOTENT = 1U << 18, // 回调可以多次运行而不会损坏结果
 };
 
 

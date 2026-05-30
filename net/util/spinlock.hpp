@@ -4,7 +4,7 @@
 #include <thread>
 namespace util{
 
-class SpinLock { // TODO 告诉CPU在空转
+class SpinLock { 
 public:
     SpinLock() : lockword_(0) {}
     
@@ -12,13 +12,12 @@ public:
     SpinLock& operator=(const SpinLock&) = delete;
     
     void lock() {
-        // 快速尝试：如果锁空闲，直接获取
+
         uint32_t expected = 0;
         if (lockword_.compare_exchange_strong(expected, kLocked, 
                                                std::memory_order_acquire)) { 
-            return;  // 快速路径成功
+            return;  
         }
-        // 慢速路径：锁被占用，进入自旋等待
         slowLock();
     }
     
@@ -29,13 +28,12 @@ public:
     }
     
     void unlock() {
-        // 释放锁，确保写操作对其他线程可见
         lockword_.store(0, std::memory_order_release);
     }
     
 private:
     static constexpr uint32_t kLocked = 1;
-    static constexpr uint32_t kSleeper = 8;  // 有等待者标志
+    static constexpr uint32_t kSleeper = 8; 
     
     void slowLock() {
         uint32_t expected;

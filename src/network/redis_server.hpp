@@ -29,12 +29,17 @@ public:
          {
             
     }
+
+    ~RedisSession() {
+       
+    }
     
     cppcoro::AsyncTask DoRead(){
         try{
             context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
             int fd = socket_.fd();
-            LOG(INFO) << "New session created for fd: " << fd;            
+            LOG(INFO) << "New session created for fd: " << fd;
+                        
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
 
@@ -83,7 +88,7 @@ public:
                     LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
                 }            
             }
-                      
+            context_.owner().reset();         
         } catch(const std::exception& e) {
             std::cerr << "Exception in session fd:" << socket_.fd() << ": " << e.what() << std::endl;
         }
@@ -163,6 +168,7 @@ private:
 
     ConnectionContext context_;
     std::unique_ptr<Transaction> transaction_;   
+
 
     bool debug_com_deal_one_Com = true;
     bool is_multi_command = false;

@@ -21,7 +21,6 @@ cppcoro::async_mutex::~async_mutex()
 
 bool cppcoro::async_mutex::try_lock() noexcept
 {
-	// Try to atomically transition from nullptr (not-locked) -> this (locked-no-waiters).
 	auto oldState = not_locked;
 	return m_state.compare_exchange_strong(
 		oldState,
