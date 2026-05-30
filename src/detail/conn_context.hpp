@@ -32,7 +32,8 @@ public:
     }
     ~ConnectionContext();
     RedisSessionPtr owner() const { return owner_; }
-
+    RedisSessionPtr& owner() { return owner_; }
+    
     template<typename Cb>
     void AddWatchKey(std::string_view key, Cb&& cb);
 

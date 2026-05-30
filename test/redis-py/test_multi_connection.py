@@ -3,7 +3,7 @@ import redis
 import threading
 import time
 from datetime import datetime
-
+# python3 test_multi_connection.py
 running_time = 10
 
 def log(msg):
