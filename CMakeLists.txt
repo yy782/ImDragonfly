@@ -19,7 +19,21 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 include(cmake/third_party.cmake)
-
+option(USE_ASAN "Enable AddressSanitizer" ON)
+if(USE_ASAN)
+    set(ASAN_FLAGS 
+        -fsanitize=address 
+        -fno-omit-frame-pointer
+    )
+    set(ASAN_LDFLAGS -fsanitize=address)
+    add_compile_options(${ASAN_FLAGS})
+    add_link_options(${ASAN_LDFLAGS})
+    message(STATUS "AddressSanitizer is ENABLED")
+else()
+    set(ASAN_FLAGS "")
+    set(ASAN_LDFLAGS "")
+    message(STATUS "AddressSanitizer is DISABLED")
+endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CXX_WARNING_OPTIONS
@@ -36,6 +50,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         -Woverloaded-virtual
         -Wpointer-arith
         -Wwrite-strings
+        ${ASAN_FLAGS}
     )
 else()
     set(CXX_WARNING_OPTIONS

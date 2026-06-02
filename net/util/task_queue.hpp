@@ -6,6 +6,7 @@
 #include "util/lock_free_queue.hpp"
 #include <functional>
 #include <atomic>
+#include <glog/logging.h>
 namespace util{
 
 
@@ -26,7 +27,7 @@ public:
     }
 
     template <typename F> 
-    cppcoro::AsyncTask Add(F&& f) {
+    cppcoro::AsyncTask AsyncAdd(F&& f) {
         while (true) {
             auto key = push_ec_.prepareWait();
             if (TryAdd(std::forward<F>(f))) {
@@ -40,8 +41,6 @@ public:
     void Shutdown(){
         is_closed_.store(true, std::memory_order_seq_cst);
         pull_ec_.notifyAll();
-
-
     }
 
     void Run(){
@@ -57,14 +56,30 @@ public:
             try {
                 func();
             } catch (std::exception& e) {
+
             }
         }
     }
 
+    bool TryDrain() {
+        CbFunc func;
+        while (queue_.try_dequeue(func)) {
+            push_ec_.notify();
+            try {
+                func();
+            } catch (std::exception& e) {
+                LOG(INFO) << "Exception in TaskQueue::TryDrain: " << e.what();
+            }
+        }
+        return true;
+    }
+
     bool isRuning() const { return !is_closed_.load(std::memory_order_relaxed); }
- private:
-    // task index since the last preemption.
+
     using CbFunc = std::function<void()>;
+
+ private:
+
     using FuncQ = util::mpmc_bounded_queue<CbFunc>;
 
     FuncQ queue_;
