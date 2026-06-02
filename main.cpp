@@ -1,7 +1,8 @@
 // main.cpp
 // ./imdragonfly
+// valgrind ./imdragonfly , 与mimalloc, glog冲突
 #include <glog/logging.h>
-
+// cd programs/ImDragonfly
 #include "src/network/redis_server.hpp"
 #include <memory>
 #include <sys/stat.h>
@@ -11,7 +12,34 @@
 
 using namespace dfly;
 
-
+/*
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacbc020000
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacbc020000 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacbc020000
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacb8020000
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacb8020000 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacb8020000
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacb8020000 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacb8030080
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacb8030080 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacb8030080
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacb8030080 was valid after all)
+(yes, the previous pointer 0x7aacbc020000 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacbc030080
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacbc030080 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacbc030080
+(this may still be a valid very large allocation (over 64MiB))
+mimalloc: warning: (yes, the previous pointer 0x7aacbc030080 was valid after all)
+mimalloc: warning: mi_usable_size: pointer might not point to a valid heap region: 0x7aacb4020000
+(this may still be a valid very large allocation (over 64MiB)) mimalloc和ASAN冲突
+*/
 int main(int argc, char *argv[]) {
     (void)argc;
 

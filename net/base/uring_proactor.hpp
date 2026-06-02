@@ -2,6 +2,7 @@
 
 #include "util/lock_free_queue.hpp"
 #include "util/thread.hpp"
+#include "util/task_queue.hpp"
 #include "socket.hpp"
 #include <liburing.h>
 #include <sys/socket.h>
@@ -23,6 +24,7 @@ namespace base {
 
 class UringProactor {
 public:
+    using CbFunc = util::TaskQueue::CbFunc;
     explicit UringProactor(uint32_t index, size_t queue_size = 1024, size_t ring_size = 256);
     ~UringProactor();
     
@@ -32,14 +34,18 @@ public:
 
     template<typename Func>
     bool DispatchBrief(Func&& f) {
-
-        auto task = std::make_unique<Task>(std::forward<Func>(f));
-        if (!task_queue_->try_enqueue(std::move(task))) {
+        if (!task_queue_.TryAdd(std::forward<Func>(f))) {
             return false;
         }
 
         Wakeup();
         return true;
+    }
+    
+    template<typename Func>
+    cppcoro::AsyncTask AsyncAdd(Func&& f) {
+        co_await task_queue_.AsyncAdd(std::forward<Func>(f));
+        co_return;
     }
     
 
@@ -55,9 +61,8 @@ public:
     void stop();
     
     uint32_t GetPoolIndex() const { return thread_index_; }
+    util::TaskQueue& GetTaskQueue() { return task_queue_; }
 private:
-    using Task = std::function<void()>;
-    using TaskPtr = std::unique_ptr<Task>;
     
     struct PendingOp {
         int fd;
@@ -81,7 +86,7 @@ private:
     int ring_fd_;
     int event_fd_;
     
-    std::unique_ptr<base::mpmc_bounded_queue<TaskPtr>> task_queue_;
+    util::TaskQueue task_queue_;
     std::unique_ptr<base::mpmc_bounded_queue<PendingOp>> pending_ops_;
     
     std::atomic<bool> running_;
@@ -90,6 +95,8 @@ private:
     std::mutex submit_mutex_;
     
     static constexpr uint64_t WAKEUP_COOKIE = 0xFFFFFFFFFFFFFFFFULL;
+    
+
 };
 
 } // namespace base

@@ -16,7 +16,7 @@ struct UringProactor::io_uring_ring {
 
 UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size)
     : thread_index_(index)
-    , task_queue_(std::make_unique<base::mpmc_bounded_queue<TaskPtr>>(queue_size))
+    , task_queue_(queue_size)
     , pending_ops_(std::make_unique<base::mpmc_bounded_queue<PendingOp>>(queue_size))
     , running_(false)
     , stop_(false)
@@ -66,12 +66,7 @@ void UringProactor::Wakeup() {
 }
 
 void UringProactor::DrainTasks() {
-    TaskPtr task;
-    while (task_queue_->try_dequeue(task)) {
-        if (task) {
-            (*task)();
-        }
-    }
+    task_queue_.TryDrain();
 }
 
 void UringProactor::SubmitPendingOps() {
@@ -209,6 +204,7 @@ void UringProactor::loop() {
 
 void UringProactor::stop() {
     stop_ = true;
+    task_queue_.Shutdown();
     Wakeup();
     
     if (util::Thread::current_tid() != loop_thread_id_ && running_) {

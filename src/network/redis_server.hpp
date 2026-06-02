@@ -126,6 +126,7 @@ public:
     void SendNULL() {
         Send(std::string());
     }
+    base::UringSocket& socket() { return socket_; }
 private:
 
 
@@ -203,45 +204,13 @@ public:
     }
     
     void Start() {
-
         LOG(INFO) << "Starting RedisServer...";
-
         isRuning = true;
         pool_.AsyncLoop();
-
         shard_set = new EngineShardSet(&pool_);
         shard_set->Init(pool_.size());
-
-
         main_proactor_->DispatchBrief([this]{
-            auto cb = [](RedisServer* server) -> cppcoro::AsyncTask {
-                try {
-                    while(server->isRuning){
-                        auto fd = co_await server->ListenSocket_.AsyncAccept();
-
-                        if (fd > 0){
-                            std::string addr = base::AddressToString(base::Address(fd));
-                            LOG(INFO) << "Accepted new connection, addr: " << addr;
-
-                            auto p = server->NextProactor();
-                            VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
-
-                            auto session = std::make_shared<RedisSession>(fd, p);
-                            
-                            p->DispatchBrief([session](){
-                                session->DoRead();
-                            });                    
-                        } else if (fd < 0) {
-                            LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
-                        }                    
-                    }
-                }catch(const std::exception& e) {
-                    std::cerr << "Exception in accept: " << e.what() << std::endl;
-
-                }
-                co_return;
-            };
-            cb(this);
+            listen();
         });
         main_proactor_->loop();
     }
@@ -257,7 +226,36 @@ public:
     }
     
 private:
+    cppcoro::AsyncTask listen() {
+        try {
+            while(isRuning){
+                auto fd = co_await ListenSocket_.AsyncAccept();
+                if (fd > 0){
+                    std::string addr = base::AddressToString(base::Address(fd));
+                    LOG(INFO) << "Accepted new connection, addr: " << addr;
 
+                    auto p = NextProactor();
+                    VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
+
+                    auto session = std::make_shared<RedisSession>(fd, p);
+                    
+                    bool success = p->DispatchBrief([session](){
+                        session->DoRead();
+                    });
+                    if (!success) {
+                        LOG(ERROR) << "Failed to dispatch session to proactor: " << p->GetPoolIndex();
+                        session->socket().Close();
+                    }                    
+                } else if (fd < 0) {
+                    LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                }                    
+            }
+        }catch(const std::exception& e) {
+            std::cerr << "Exception in accept: " << e.what() << std::endl;
+
+        }
+        co_return;
+    }
     auto NextProactor() -> UringProactorPtr {
         NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
         return pool_[NextProIndex_];

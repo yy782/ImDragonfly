@@ -22,9 +22,9 @@ public:
     void Shutdown();
 
     template <typename F> 
-    auto Add(ShardId sid, F&& f) { // 异步执行
+    auto Add(ShardId sid, F&& f) {
         assert(sid < size_);
-        return shards_[sid]->GetQueue()->Add(std::forward<F>(f));
+        return shards_[sid]->GetQueue()->AsyncAdd(std::forward<F>(f));
     }
     template <typename U> 
     void RunBlockingInParallel(U&& func) {
