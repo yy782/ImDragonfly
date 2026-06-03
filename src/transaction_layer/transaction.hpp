@@ -46,7 +46,7 @@ public:
         }
     };
 
-    using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
+    using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>; // maybe can use ref
 
     explicit Transaction(const CommandId* cid);
     ~Transaction();
@@ -254,6 +254,9 @@ private:
 
     ConnectionContext* conn_cntx_;
 
+
+    // for debug
+    std::atomic<int> debug_cnt_ = 0;
 };
 
 

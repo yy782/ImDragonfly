@@ -45,6 +45,10 @@ mimalloc: warning: mi_usable_size: pointer might not point to a valid heap regio
 /*
 程序结束时ASAN会报内存泄漏的错误，但是这实际上不是错误，是堆内存操作没有执行完时，程序被终止时的正常情况，ASAN无法区分这种情况和真正的内存泄漏，所以会误报内存泄漏错误。
 */
+
+// export ASAN_OPTIONS="detect_leaks=1:leak_check_at_exit=0:leak_check_interval=1024:halt_on_error=0:log_path=/home/yy/programs/ImDragonfly/build/asan.log"
+// ./imdragonfly
+
 int main(int argc, char *argv[]) {
     (void)argc;
 

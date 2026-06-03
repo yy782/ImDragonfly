@@ -48,11 +48,12 @@ void Transaction::InitKeys(::cmn::CmdArgList args) {
 void Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType cb) {   
     auto done_cnt_ptr = std::make_shared<std::atomic<uint32_t>>(shard_id_cnt_);
     for (const auto& slice : Slices_) {
-        if (slice.keyIds.empty()) continue;
-        shard_set->Add(slice.unique_shard_id, [this, cb = std::move(cb), handle, &slice, done_cnt_ptr] () mutable {
+        if (slice.keyIds.empty()) continue;// can't move(cb)
+        shard_set->Add(slice.unique_shard_id, [this, cb, handle, &slice, done_cnt_ptr] () mutable {
             cb(this, GetDbSlice(slice.unique_shard_id).shard_owner());
-            --(*done_cnt_ptr);
-            if ((*done_cnt_ptr) == 0) {
+            if (done_cnt_ptr->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                ++debug_cnt_;
+                assert(debug_cnt_.load() == 1);
                 handle.resume();
             }
         });
