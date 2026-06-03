@@ -9,7 +9,13 @@
 #include <iostream>
 namespace dfly {
 
+using LockFp = uint64_t;
 
+struct KeyLockArgs {
+    uint64_t  BlockStart = 0;
+    DbIndex db_index = 0;
+    std::span<const LockFp> fps;
+};
 
 
 class DbContext {

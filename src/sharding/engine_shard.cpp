@@ -1,7 +1,7 @@
 #include "engine_shard.hpp"
 #include "detail/stateless_alloceator.hpp"
 #include <glog/logging.h>
-
+#include "db_slice.hpp"
 
 namespace dfly{
 thread_local mi_heap_t* data_heap = nullptr;
@@ -19,6 +19,8 @@ EngineShard::EngineShard(base::UringProactorPtr pb, mi_heap_t* heap) :
 proactor_(pb),
 shard_id_(pb->GetPoolIndex()),
 mi_resource_(heap) {
+
+
 }
 void EngineShard::DestroyThreadLocal() {
     if (!shard_)
@@ -34,5 +36,9 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {
 }
+
+
+
+
 
 }  // namespace dfly

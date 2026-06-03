@@ -136,11 +136,11 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key, int64_t sec) 
     if(res.status() == OpStatus::OK)    
     {
         
-        conn->SendStatus("OK");
+        conn->SendInteger(1);
     }
     else 
     {
-        conn->SendERROR();
+        conn->SendInteger(0);
     }
 
     co_return;

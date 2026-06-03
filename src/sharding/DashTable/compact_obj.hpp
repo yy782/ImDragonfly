@@ -212,6 +212,8 @@ public:
             return u_.str_;
         case TTL_STR_TAG:
             return u_.ttl_str_.str_;
+        case 0:
+            return {};
         default:
             LOG(FATAL) << "Invalid tag: " << tag_;
             return {};
@@ -229,6 +231,8 @@ public:
             return u_.str_;
         case TTL_STR_TAG:
             return u_.ttl_str_.str_;
+        case 0:
+            return {};
         default:
             LOG(FATAL) << "Invalid tag: " << tag_;
             return {};
