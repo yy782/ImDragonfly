@@ -295,7 +295,36 @@ void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vec
     }
 }
 
+bool DbSlice::Acquire(IntentLock::Mode mode, KeyLockArgs& lock_args) {
+    if (lock_args.fps.empty()) {  
+        return true;
+    }
 
+
+    auto& lt = db_arr_[lock_args.db_index]->trans_locks;
+    bool lock_acquired = true;
+    uint64_t SuccessCount = 0;
+    for (int i = lock_args.BlockStart; i < lock_args.fps.size(); ++i) {
+        lock_acquired &= lt.Acquire(lock_args.fps[i], mode);
+        if (lock_acquired) {
+            ++SuccessCount;
+        }else {
+            break;
+        }        
+    }
+    lock_args.BlockStart +=SuccessCount;
+    return lock_args.BlockStart == lock_args.fps.size();
+}
+
+void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
+    if (lock_args.fps.empty()) {
+        return;
+    }
+    auto& lt = db_arr_[lock_args.db_index]->trans_locks;
+    for (int i = 0; i < lock_args.BlockStart; ++i) { // not same
+       lt.Release(lock_args.fps[i], mode);
+    }
+}
 
 void DbSlice::AutoUpdater::Cancel() {
     fields_ = {}; 

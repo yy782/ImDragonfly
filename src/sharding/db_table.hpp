@@ -6,6 +6,8 @@
 #include "DashTable/compact_obj.hpp"
 #include "DashTable/table_policy.hpp"
 #include "detail/common.hpp"
+#include "detail/tx_base.hpp"
+#include "detail/intent_lock.hpp"
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
 #include <unordered_map>
@@ -25,6 +27,44 @@ inline bool IsValid(PrimeConstIterator it) {
 }
 using DbIndex = uint16_t;
 class ConnectionContext;
+
+class LockTable {
+public:
+    size_t Size() const {
+        return locks_.size();
+    }
+
+    bool Acquire(LockFp fp, IntentLock::Mode mode) {
+        return locks_[fp].Acquire(mode); // 这里可能哈希冲突
+    }
+
+    void Release(LockFp fp, IntentLock::Mode mode) {
+        auto it = locks_.find(fp);
+        assert(it != locks_.end());
+        it->second.Release(mode);
+        if (it->second.IsFree())
+            locks_.erase(it);
+    }
+
+    auto begin() const {
+        return locks_.cbegin();
+    }
+
+    auto end() const {
+        return locks_.cend();
+    }
+
+private:
+    // We use fingerprinting before accessing locks - no need to mix more.
+    struct Hasher {
+        size_t operator()(LockFp val) const {
+            return val;
+        }
+    };
+    std::unordered_map<LockFp, IntentLock, Hasher> locks_;
+};
+
+
 
 struct DbTable : 
     boost::intrusive_ref_counter<DbTable, boost::thread_unsafe_counter> 
@@ -53,6 +93,7 @@ struct DbTable :
     PrimeTable prime_;
     DbIndex index_;
     std::unordered_map<std::string, std::vector<WatchedKeyContext>> watched_keys_;
+    LockTable trans_locks;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
 }  // namespace dfly

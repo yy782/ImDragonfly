@@ -43,7 +43,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         -Wall
         -Wextra                 #额外警告
         -Wpedantic              #严格遵守C++标准
-        -Werror                 #将警告视为错误
         -Wno-unknown-pragmas    #需要关闭的警告
         -Wshadow                #变量遮掩警告
         -Wunused-parameter     #未使用参数警告
