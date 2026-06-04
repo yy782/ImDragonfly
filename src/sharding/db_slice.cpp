@@ -3,6 +3,7 @@
 #include "engine_shard.hpp"
 #include "util/Time.hpp"
 #include "detail/conn_context.hpp"
+#include <assert.h>
 namespace dfly{ 
 
 
@@ -96,7 +97,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddNew(const Context& cntx, std
 
 facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context& cntx, std::string_view key,
                                                            std::optional<unsigned> req_obj_type) {
-
+                                                        
     DbTable& db = *db_arr_[cntx.GetDbIndex()];
     auto res = FindInternal(cntx, key, req_obj_type, UpdateStatsMode::kMutableStats);
 
@@ -129,6 +130,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(const Context
 facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Context& cntx,
                                                              std::string_view key, PrimeValue obj,
                                                              uint64_t expire_at_ms) {
+
     auto op_result = AddOrFind(cntx, key, std::nullopt);
     
     if(op_result.status() != OpStatus::OK)
@@ -155,6 +157,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrUpdateInternal(const Conte
 
 
 void DbSlice::Del(Context cntx, Iterator it, DbTable* db_table) {
+
     DbTable* table = db_table ? db_table : db_arr_[cntx.GetDbIndex()].get();
     PerformDeletionAtomic(it, table); // 执行实际删除
 }
@@ -210,6 +213,7 @@ DbSlice::Iterator DbSlice::ExpireIfNeeded(const Context& cntx, Iterator it) cons
 }
 
 PrimeIterator DbSlice::ExpireIfNeeded(const Context& cntx, PrimeIterator it) const {
+
     if (!it->first.HasExpire()) {
         return it;
     }

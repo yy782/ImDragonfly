@@ -38,7 +38,7 @@ public:
         try{
             context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
             int fd = socket_.fd();
-            LOG(INFO) << "New session created for fd: " << fd;
+            // LOG(INFO) << "New session created for fd: " << fd;
                         
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
@@ -53,7 +53,7 @@ public:
                     if (Com_.empty()) continue;
                     args_ = ::cmn::CmdArgList(Com_);
                     
-                    VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
+                    // VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
                     
                     auto ci = CIs->Find(args_[0]);
                     if (!ci) { 
@@ -76,7 +76,7 @@ public:
                             continue;
                         }               
                     }
-                    VLOG(2) << "Executing command: " << ci->name();
+                    // VLOG(2) << "Executing command: " << ci->name();
                     ci->Invoke(&transaction_->GetCommandContext(), args_); 
                 }
                 else if (r == 0) { 

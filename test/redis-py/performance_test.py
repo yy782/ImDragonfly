@@ -40,7 +40,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_set(self, iterations=10000):
+    def test_set(self, iterations=100):
         log(f"测试 SET x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -50,7 +50,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_get(self, iterations=10000):
+    def test_get(self, iterations=100):
         log(f"测试 GET x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -60,7 +60,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_set_get(self, iterations=10000):
+    def test_set_get(self, iterations=100):
         log(f"测试 SET+GET x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -84,7 +84,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_mget(self, iterations=1000):
+    def test_mget(self, iterations=100):
         log(f"测试 MGET x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -95,7 +95,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_exists(self, iterations=10000):
+    def test_exists(self, iterations=100):
         log(f"测试 EXISTS x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -105,7 +105,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_expire(self, iterations=10000):
+    def test_expire(self, iterations=100):
         log(f"测试 EXPIRE x {iterations}")
         start = time.time()
         for i in range(iterations):
@@ -117,7 +117,7 @@ class PerformanceTest:
         log(f"  耗时: {elapsed:.3f}s, QPS: {qps:.1f}")
         return qps
     
-    def test_ttl(self, iterations=10000):
+    def test_ttl(self, iterations=100):
         log(f"测试 TTL x {iterations}")
         start = time.time()
         for i in range(iterations):

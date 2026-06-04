@@ -21,6 +21,8 @@ void EngineShardSet::Init(uint32_t sz) {
 
     namespaces = new Namespaces();
     LOG(INFO) << "EngineShardSet initialized with " << sz << " shards and namespace support";
+
+
 }
 
 

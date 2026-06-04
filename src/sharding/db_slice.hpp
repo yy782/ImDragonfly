@@ -164,6 +164,8 @@ private:
     ShardId shard_id_;
     EngineShard* owner_;
     DbTableArray db_arr_;
+
+    pid_t owner_thread_;
 };
 
 
