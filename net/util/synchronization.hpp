@@ -308,7 +308,7 @@ private:
 
 class BlockingCounter {
  public:
-  BlockingCounter(unsigned start_count) : 
+  BlockingCounter(unsigned start_count = 0) : 
       counter_{std::make_shared<EmbeddedBlockingCounter>(start_count)} {}
 
   EmbeddedBlockingCounter* operator->() {

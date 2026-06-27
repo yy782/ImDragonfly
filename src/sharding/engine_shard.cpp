@@ -2,6 +2,7 @@
 #include "detail/stateless_alloceator.hpp"
 #include <glog/logging.h>
 #include "db_slice.hpp"
+#include "transaction_layer/transaction.hpp"
 
 namespace dfly{
 thread_local mi_heap_t* data_heap = nullptr;
@@ -15,13 +16,14 @@ void EngineShard::InitThreadLocal(base::UringProactorPtr pb) {
     InitTLStatelessAllocMR(shard_->memory_resource());
     LOG(INFO) << "EngineShard thread local initialized, shard_id=" << shard_->shard_id();
 }
+
 EngineShard::EngineShard(base::UringProactorPtr pb, mi_heap_t* heap) : 
 proactor_(pb),
 shard_id_(pb->GetPoolIndex()),
-mi_resource_(heap) {
-
-
+mi_resource_(heap),
+txq_() {
 }
+
 void EngineShard::DestroyThreadLocal() {
     if (!shard_)
         return;
@@ -37,8 +39,25 @@ void EngineShard::DestroyThreadLocal() {
 void EngineShard::Shutdown() {
 }
 
+void EngineShard::PollExecution(Transaction* trans) {
+    if (txq_.Empty()) {
+        return;
+    }
+    while (!txq_.Empty()) {
+        auto tx = txq_.Front();
+        if (tx->IsActive(shard_id_)) {
+            bool concluded = tx->RunInShard(this, true);
+            if (!concluded) {
+                break;
+            }
+        }
+        txq_.PopFront();
+    }
+}
 
 
-
+DbSlice* EngineShard::GetDbSlice(ShardId sid) {
+    return nullptr;
+}
 
 }  // namespace dfly

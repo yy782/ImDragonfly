@@ -5,6 +5,8 @@ target_link_libraries(db_table_test PRIVATE
     incomplete-imdragonfly
     net
     third_party_deps
+    GTest::gtest_main
+    GTest::gtest 
 )
 target_include_directories(db_table_test PRIVATE
     ${CMAKE_SOURCE_DIR}

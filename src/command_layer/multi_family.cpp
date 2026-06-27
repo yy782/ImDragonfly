@@ -40,7 +40,7 @@ void MultiFamily::Exec(CommandContext* cmd_cntx, CmdArgList args) {
     
     if (tx->IsDirty()) {
         conn->Send(std::string(""));
-        tx->FinishOrDiscardMulti();
+        //tx->FinishOrDiscardMulti();
         return;
     }
     
@@ -54,9 +54,9 @@ void MultiFamily::Exec(CommandContext* cmd_cntx, CmdArgList args) {
     tx->SetState(Transaction::State::EXEC);
 
     for (const auto& cmd : queued) {
-        Transaction*& t = tx->CreateSubTransaction(cmd.cid);
-        t->InitByArgs(tx->GetConnectionContext(), cmd.GetCmdArgList());
-        cmd.cid->Invoke(&t->GetCommandContext(), cmd.GetCmdArgList());
+        // Transaction*& t = tx->CreateSubTransaction(cmd.cid);
+        // t->InitByArgs(tx->GetConnectionContext(), cmd.GetCmdArgList());
+        // cmd.cid->Invoke(&t->GetCommandContext(), cmd.GetCmdArgList());
     }
 }
 
@@ -70,7 +70,7 @@ void MultiFamily::Discard(CommandContext* cmd_cntx, CmdArgList args) {
         return;
     }
     
-    tx->FinishOrDiscardMulti();
+    //tx->FinishOrDiscardMulti();
     conn->SendStatus("OK");
 }
 

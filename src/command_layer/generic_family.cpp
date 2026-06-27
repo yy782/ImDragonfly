@@ -247,16 +247,12 @@ void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
 
 void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
 
-    std::vector<std::string_view> cli = {"CLIENT", "SETINFO", "LIB-NAME", "redis-py"};
-    std::span<const std::string_view> cl(cli);
     auto conn = cmd_cntx->conn_cntx()->owner(); 
-    if (cl.size() != args.size() || 
-        !std::equal(cl.begin(), cl.end(), args.begin())) {
-        conn->SendERROR();
-    }else {
-        conn->SendStatus("OK");
-    }
+
+    conn->SendStatus("OK");
+    
 }
+
 
 void GenericFamily::ShutDown(CommandContext*, CmdArgList) {
     ser->Stop();
@@ -279,6 +275,7 @@ void GenericFamily::Register(CommandRegistry* registry) {
       << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::ExpireTime)
       << CI{"TTL", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ttl)
       << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
       << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)
       ;
 }

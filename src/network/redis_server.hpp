@@ -31,7 +31,7 @@ public:
     }
 
     ~RedisSession() {
-       
+       (void)1;
     }
     
     cppcoro::AsyncTask DoRead(){
@@ -45,10 +45,6 @@ public:
 
                 if (r > 0) {
                     RecvBuf_.hasWritten(r);
-
-                    assert(debug_com_deal_one_Com);
-                    debug_com_deal_one_Com = false;
-
                     Com_ = RecvBuf_.ParseRESP();
                     if (Com_.empty()) continue;
                     args_ = ::cmn::CmdArgList(Com_);
@@ -76,7 +72,7 @@ public:
                             continue;
                         }               
                     }
-                    // VLOG(2) << "Executing command: " << ci->name();
+
                     ci->Invoke(&transaction_->GetCommandContext(), args_); 
                 }
                 else if (r == 0) { 
@@ -130,11 +126,10 @@ public:
 private:
 
 
-    void SendImp(std::string&& s) {
+    cppcoro::AsyncTask SendImp(std::string&& s) {
         auto p = socket_.Proactor(); 
-                
         if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
-            if (!transaction_->collectMultiRes(s)) return; // 可能多线程操作同一个容器
+            if (!transaction_->collectMultiRes(s)) co_return; // 可能多线程操作同一个容器
             s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
             transaction_->FinishOrDiscardMulti();
         }
@@ -142,8 +137,9 @@ private:
         p->DispatchBrief([this, s = std::move(s)](){
             SendBuf_.append(s);
             DoWrite();     
-            debug_com_deal_one_Com = true;
-        });         
+        });
+        co_await transaction_->Finish();
+        co_return;         
     }
 
     cppcoro::AsyncTask DoWrite() {
@@ -169,9 +165,6 @@ private:
 
     ConnectionContext context_;
     std::unique_ptr<Transaction> transaction_;   
-
-
-    bool debug_com_deal_one_Com = true;
     bool is_multi_command = false;
 };
 
