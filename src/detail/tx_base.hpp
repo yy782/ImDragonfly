@@ -12,9 +12,24 @@ namespace dfly {
 using LockFp = uint64_t;
 
 struct KeyLockArgs {
-    uint64_t  BlockStart = 0;
     DbIndex db_index = 0;
     std::span<const LockFp> fps;
+};
+
+class LockTag {
+  std::string_view str_;
+
+ public:
+  using is_stackonly = void;
+
+  LockTag() = default;
+  explicit LockTag(std::string_view key);
+
+  explicit operator std::string_view() const {
+    return str_;
+  }
+
+  LockFp Fingerprint() const;
 };
 
 
