@@ -24,7 +24,8 @@
 #include "sharding/op_status.hpp"
 #include "detail/intent_lock.hpp"
 #include "detail/tx_queue.hpp"
-
+#include "cppcoro/async_task.hpp"
+#include "cppcoro/task.hpp"
 namespace dfly{
 using ::cmn::CmdArgList;
 
@@ -85,19 +86,9 @@ public:
 
   void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
 
-  void Execute(RunnableType cb, bool conclude);
-
-  OpStatus ScheduleSingleHop(RunnableType cb);
-
-  void Conclude();
-
-  bool RunInShard(EngineShard* shard, bool allow_q_removal);
-
-
-  void Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
-
-
   KeyLockArgs GetLockArgs(ShardId sid) const;
+
+
 
   bool IsActive(ShardId sid) const;
 
@@ -113,9 +104,7 @@ public:
     return multi_ ? multi_->mode : MultiMode::NOT_DETERMINED;
   }
 
-  bool IsAtomicMulti() const {
-    return multi_ && (multi_->mode == LOCK_AHEAD || multi_->mode == GLOBAL);
-  }
+  cppcoro::task<void> Finish();
 
 
   const DbContext& GetDbContext() const {
@@ -143,22 +132,8 @@ public:
     Transaction* tx;
     std::vector<uint32_t> keyIds;
     CmdArgList lists;
-
     uint16_t local_mask = 0;
-    bool is_armed = false;
-
-    uint32_t slice_start = 0;
-    uint32_t slice_count = 0;
-
-    uint32_t fp_start = 0;
-    uint32_t fp_count = 0;
-
     TxQueue::Iterator pq_pos = TxQueue::kEnd;
-
-    struct Stats {
-      unsigned total_runs = 0;
-    } stats;
-
     DbSlice& GetDbSlice() {
       return tx->GetDbSlice(unique_shard_id);
     }
@@ -297,7 +272,6 @@ public:
     return vec;
   }
   bool MultiReady() {
-    EXPECT_TRUE(MultiRes_.size() <= queued_commands_.size());
     return MultiRes_.size() == queued_commands_.size();
   }
 
@@ -310,39 +284,25 @@ public:
     ClearWatchKeys();
     ClearMultiRes();
   }
-
-  void setFatherTransaction(Transaction* fa) {
-    fa_ = fa;
-  }
-
-  template<typename... Args>
-  Transaction*& CreateSubTransaction(Args&&... args) {
-    SubTransactions_.emplace_back(new Transaction(std::forward<Args>(args)...));
-    SubTransactions_.back()->setFatherTransaction(this);
-    return SubTransactions_.back();
-  }
-  void ClearSubTransaction() {
-    for (auto& t : SubTransactions_) {
-      delete t;
-    }
-    SubTransactions_.clear();
-  }
-
   ConnectionContext* GetConnectionContext() {
     return conn_cntx_;
   }
 
+  bool RunInShard(EngineShard* shard, bool allow_q_removal);
+  cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+
 private:
+
+  cppcoro::task<void> ScheduleInternal();
+  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
+  void FinishHop();
+  void RunCallback(EngineShard* shard);
 
   struct MultiData {
     MultiRole role = MultiRole::DEFAULT;
     MultiMode mode = MultiMode::NOT_DETERMINED;
     std::optional<IntentLock::Mode> lock_mode;
-
-    std::set<std::pair<ShardId, LockFp>> tag_fps;
-
     bool concluding = false;
-
     unsigned cmd_seq_num = 0;
   };
 
@@ -356,20 +316,9 @@ private:
 
   void EnableAllShards();
 
-  void PrepareMultiFps(CmdArgList keys);
 
-  void ScheduleInternal();
-
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
-
-  void DispatchHop();
-
-  void FinishHop();
-
-  void RunCallback(EngineShard* shard);
-
-  bool LockMultiShardCb(std::span<const LockFp> fps, EngineShard* shard);
-  void UnlockMultiShardCb(std::span<const LockFp> fps, EngineShard* shard);
+  bool LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
+  void UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
 
 
   bool IsActiveMulti() const {
@@ -380,25 +329,34 @@ private:
     return sid < Slices_.size() ? sid : 0;
   }
 
-  template <typename F> void IterateShards(F&& f) {
+  template<typename F>
+  cppcoro::task<void> IterateActiveShards(F&& f) {
+    util::BlockingCounter counter(unique_shard_cnt_);
+    auto cb = [counter, f](auto& sd, auto i) mutable {
+      f(sd, i);
+      counter->Dec();
+    };
     if (unique_shard_cnt_ == 1) {
-      f(Slices_[SidToId(unique_shard_id_)], unique_shard_id_);
+      shard_set->Add(unique_shard_id_, [this, cb]() mutable {
+        cb(Slices_[SidToId(unique_shard_id_)], unique_shard_id_);
+      });
     } else {
       for (ShardId i = 0; i < Slices_.size(); ++i) {
-        f(Slices_[i], i);
+        auto shard_id = Slices_[i].unique_shard_id;
+        if (!(Slices_[i].local_mask & ACTIVE)) {
+          continue;
+        }
+        shard_set->Add(shard_id, [this, cb, shard_id]() mutable {
+          cb(Slices_[SidToId(shard_id)], shard_id);
+        });
       }
     }
+    co_await counter->Wait();
+    co_return;
   }
 
-  template <typename F> void IterateActiveShards(F&& f) {
-    IterateShards([&f](auto& sd, auto i) {
-      if (sd.local_mask & ACTIVE)
-        f(sd, i);
-    });
-  }
   std::atomic_uint32_t run_barrier_{0};
   std::vector<Slice> Slices_;
-  std::vector<LockFp> kv_fp_;
   CmdArgList full_args_;
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
@@ -407,23 +365,16 @@ private:
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
   std::atomic_uint32_t use_count_{0};
-  std::vector<Transaction*> SubTransactions_;
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
-  OpStatus block_cancel_result_ = OpStatus::OK;
   uint8_t coordinator_state_ = 0;
-  uint32_t key_num_ = 0;
   State state_ = State::IDLE;
+  uint32_t key_num_ = 0;
   std::vector<QueuedCommand> queued_commands_;
   std::vector<std::string> MultiRes_;
-  Transaction* fa_;
-
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
-
-
-  util::BlockingCounter block_counter_;
 };
 
 }
