@@ -74,6 +74,7 @@ void Transaction::InitSlice() {
     auto& slice = Slices_[sid];
     slice.local_mask = ACTIVE;
     slice.keyIds.push_back(i);
+    ++key_num_;
   }
 
   unique_shard_cnt_ = 0;
@@ -86,8 +87,7 @@ void Transaction::InitSlice() {
   for (ShardId sid = 0; sid < Slices_.size(); ++sid) {
     auto& slice = Slices_[sid];
     if (slice.keyIds.empty()) continue;
-    slice.lists = CmdArgList(full_args_.begin() + slice.keyIds[0], 
-                            full_args_.begin() + slice.keyIds.back() + 1);
+    slice.lists = CmdArgList(full_args_.begin(), full_args_.end());
   }
 }
 
@@ -212,11 +212,6 @@ void Transaction::UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* 
 
 
 cppcoro::task<void> Transaction::Finish() {
-
-// for debug 
-std::cout<<"AAA"<<std::endl;
-
-
 co_await IterateActiveShards([this](auto& sd, ShardId sid) {
     auto e = EngineShard::tlocal();
     UnlockMultiShardCb(GetLockArgs(sid), e);

@@ -20,10 +20,9 @@ class TxQueue {
   // 在尾部插入
   Iterator PushBack(Transaction* t);
   
-  // 在指定位置之前插入
+
   Iterator InsertBefore(Iterator it, Transaction* t);
   
-  // 在指定位置之后插入
   Iterator InsertAfter(Iterator it, Transaction* t);
   
   void Remove(Iterator it);

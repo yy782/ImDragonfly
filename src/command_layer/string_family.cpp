@@ -162,8 +162,7 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
             if (it_res.status() !=  facade::OpStatus::OK) {
                 // TODO 
             }            
-        }
-
+        }            
         return {};       
     };
     co_await cmd::SingleHopT(cb);
@@ -207,6 +206,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
 
 CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
+ 
     std::vector<std::string> vec(cmd_cntx->tx()->GetKeyNum());
     auto cb = [&vec](Transaction* tx, EngineShard* es) -> OpResult<void> {
         auto& slice = tx->GetSlice(es->shard_id());
@@ -220,9 +220,11 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
         }
         return {};        
     };
-    co_await cmd::SingleHopT(cb); // 这里不需要b.Wait()吗
+    co_await cmd::SingleHopT(cb); 
     auto conn = cmd_cntx->conn_cntx()->owner();
-    conn->SendVec(std::move(vec));
+    conn->SendVec(std::move(vec));        
+
+
     co_return;
 
 
