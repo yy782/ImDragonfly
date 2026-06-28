@@ -13,7 +13,7 @@ using LockFp = uint64_t;
 
 struct KeyLockArgs {
     DbIndex db_index = 0;
-    std::span<const LockFp> fps;
+    std::vector<LockFp> fps;
 };
 
 class LockTag {
