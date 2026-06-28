@@ -148,10 +148,11 @@ function(add_cxx_test NAME)
 
     set(TEST_TARGET "${NAME}")
     add_executable(${TEST_TARGET} "${NAME}.cc")
-    target_link_libraries(${TEST_TARGET} PRIVATE
+    target_link_libraries(${TEST_TARGET} PRIVATE 
+        pthread
+        ${ARG_UNPARSED_ARGUMENTS}
         GTest::gtest
         GTest::gtest_main
-        ${ARG_UNPARSED_ARGUMENTS}
     )
     if(ARG_LABELS)
         gtest_discover_tests(${TEST_TARGET} LABELS ${ARG_LABELS})
