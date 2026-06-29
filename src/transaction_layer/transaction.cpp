@@ -117,7 +117,7 @@ cppcoro::task<void> Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
   txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
   co_await IterateActiveShards([this](auto& sd, ShardId sid) {
-    EngineShard* shard = EngineShard::tlocal(); // 可能重复调度
+    EngineShard* shard = EngineShard::tlocal(); 
     ScheduleInShard(shard, true);
   });
   co_return;
