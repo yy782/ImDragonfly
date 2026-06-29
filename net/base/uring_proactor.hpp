@@ -61,6 +61,7 @@ public:
     void stop();
     
     uint32_t GetPoolIndex() const { return thread_index_; }
+    pthread_t GetLoopThreadId() const { return loop_thread_id_; }
     util::TaskQueue& GetTaskQueue() { return task_queue_; }
 private:
     

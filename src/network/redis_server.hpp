@@ -36,13 +36,14 @@ public:
     
     cppcoro::AsyncTask DoRead(){
         try{
+            pId_ = socket_.Proactor()->GetLoopThreadId();
             context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
             int fd = socket_.fd();
             // LOG(INFO) << "New session created for fd: " << fd;
                         
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
-
+                assert(util::Thread::current_tid() == pId_);
                 if (r > 0) {
                     RecvBuf_.hasWritten(r);
                     Com_ = RecvBuf_.ParseRESP();
@@ -124,25 +125,23 @@ public:
     }
     base::UringSocket& socket() { return socket_; }
 private:
-
-
     cppcoro::AsyncTask SendImp(std::string&& s) {
         auto p = socket_.Proactor(); 
-        if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
-            if (!transaction_->collectMultiRes(s)) co_return; // 可能多线程操作同一个容器
-            s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
-            transaction_->FinishOrDiscardMulti();
-        }
-
+        // if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
+        //     if (!transaction_->collectMultiRes(s)) co_return; // 可能多线程操作同一个容器
+        //     s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
+        //     transaction_->FinishOrDiscardMulti();
+        // }
         p->DispatchBrief([this, s = std::move(s)](){
+            LOG(INFO) << "CI:" << args_[0] << " Send: " << s;
             SendBuf_.append(s);
             DoWrite();     
         });
-        co_await transaction_->Finish();
         co_return;         
     }
-
     cppcoro::AsyncTask DoWrite() {
+        assert(util::Thread::current_tid() == pId_);
+        co_await transaction_->Finish();
         while (SendBuf_.readable_size()) {
             auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
             if (wr>0) {
@@ -166,6 +165,8 @@ private:
     ConnectionContext context_;
     std::unique_ptr<Transaction> transaction_;   
     bool is_multi_command = false;
+
+    pthread_t pId_;
 };
 
 class RedisServer {
