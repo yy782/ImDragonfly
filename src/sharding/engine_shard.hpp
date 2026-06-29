@@ -35,7 +35,7 @@ public:
     PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
     util::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }    
 
-    cppcoro::task<void> PollExecution(Transaction* trans);
+    void PollExecution(Transaction* trans);
 
     TxQueue* txq() { return &txq_; }
     const TxQueue* txq() const { return &txq_; }

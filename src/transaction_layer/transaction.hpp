@@ -258,7 +258,7 @@ public:
     return conn_cntx_;
   }
 
-  cppcoro::task<bool> RunInShard(EngineShard* shard);
+  bool RunInShard(EngineShard* shard);
   cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
   // 协调器状态
@@ -271,7 +271,7 @@ public:
 private:
 
   cppcoro::task<void> ScheduleInternal();
-  cppcoro::task<bool> ScheduleInShard(EngineShard* shard, bool execute_optimistic);
+  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop();
   cppcoro::AsyncTask Finish();
   void RunCallback(EngineShard* shard);

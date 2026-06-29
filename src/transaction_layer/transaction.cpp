@@ -120,20 +120,20 @@ cppcoro::task<void> Transaction::ScheduleInternal() {
   co_await IterateActiveShards([this](auto& sd, ShardId sid) -> cppcoro::task<void> {
     EngineShard* shard = EngineShard::tlocal();
     bool execute_optimistic = unique_shard_cnt_ == 1;
-    co_await ScheduleInShard(shard, execute_optimistic);
+    ScheduleInShard(shard, execute_optimistic);
     co_return;
   });
   co_return;
 }
 
-cppcoro::task<bool> Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
+bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   auto& sd = Slices_[SidToId(shard->shard_id())];
 
   
   KeyLockArgs lock_args = GetLockArgs(shard->shard_id());
   if (!LockMultiShardCb(lock_args, shard)) {
     UnlockMultiShardCb(lock_args, shard);
-    co_return false;
+    return false;
   }
   sd.local_mask |= KEYLOCK_ACQUIRED;
   
@@ -143,17 +143,17 @@ cppcoro::task<bool> Transaction::ScheduleInShard(EngineShard* shard, bool execut
   }
   sd.pq_pos = InsertQueue(this);
   bool can_execute = sd.local_mask & (OPTIMISTIC_EXECUTION | KEYLOCK_ACQUIRED);
-  if (can_execute) co_await RunInShard(shard);
+  if (can_execute) RunInShard(shard);
 
-  co_return true;
+  return true;
 }
 
-cppcoro::task<bool> Transaction::RunInShard(EngineShard* shard) {
+bool Transaction::RunInShard(EngineShard* shard) {
   ShardId sid = shard->shard_id();
   auto& sd = Slices_[SidToId(sid)];
   RunCallback(shard);
   FinishHop();
-  co_return true;
+  return true;
 }
 
 void Transaction::RunCallback(EngineShard* shard) {
