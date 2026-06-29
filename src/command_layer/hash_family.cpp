@@ -98,7 +98,7 @@ CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
     if (result.status() == OpStatus::OK) {
         conn->Send(result.value());
     } else {
-        conn->SendERROR();
+        conn->Send(std::string());
     }
 
     co_return;
