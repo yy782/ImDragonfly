@@ -269,13 +269,13 @@ void GenericFamily::Register(CommandRegistry* registry) {
   registry->StartFamily();
   *registry
       << CI{"DEL", /*keys_start*/ 1, /*keys_nums*/ kInvalidKeysNum, /*keys_offset*/ 1}.SetHandler(&GenericFamily::Delex)
-      << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", 1, kInvalidKeysNum, 1}.SetHandler(&GenericFamily::Exists)
+      << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Ping)
+      << CI{"EXISTS", 1, kInvalidKeysNum, 1, CO::READABLE}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Expire)
-      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::ExpireTime)
-      << CI{"TTL", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
-      << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::ExpireTime)
+      << CI{"TTL", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Ttl)
+      << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)
+      << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)
       << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)
       ;
 }

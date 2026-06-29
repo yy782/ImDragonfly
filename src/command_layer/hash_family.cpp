@@ -98,7 +98,7 @@ CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
     if (result.status() == OpStatus::OK) {
         conn->Send(result.value());
     } else {
-        conn->SendERROR();
+        conn->Send(std::string());
     }
 
     co_return;
@@ -235,10 +235,10 @@ void RegisterHashFamily(CommandRegistry* registry) {
     registry->StartFamily();
     *registry
         << CI{"HSET", 1, 1, kInvalidKeysOffset}.SetHandler(HSet)
-        << CI{"HGET", 1, 1, kInvalidKeysOffset}.SetHandler(HGet)
+        << CI{"HGET", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(HGet)
         << CI{"HDEL", 1, 1, kInvalidKeysOffset}.SetHandler(HDel)
-        << CI{"HEXISTS", 1, 1, kInvalidKeysOffset}.SetHandler(HExists)
-        << CI{"HLEN", 1, 1, kInvalidKeysOffset}.SetHandler(HLen)
+        << CI{"HEXISTS", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(HExists)
+        << CI{"HLEN", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(HLen)
         ;
 }
 
