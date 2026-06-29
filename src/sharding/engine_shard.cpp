@@ -39,14 +39,11 @@ void EngineShard::DestroyThreadLocal() {
 void EngineShard::Shutdown() {
 }
 
-void EngineShard::PollExecution(Transaction* trans) {
-    if (txq_.Empty()) {
-        return;
-    }
+cppcoro::task<void> EngineShard::PollExecution(Transaction* trans) {
     while (!txq_.Empty()) {
         auto tx = txq_.Front();
         if (tx->IsActive(shard_id_)) {
-            bool concluded = tx->RunInShard(this, true);
+            bool concluded = co_await tx->RunInShard(this);
             if (!concluded) {
                 break;
             }

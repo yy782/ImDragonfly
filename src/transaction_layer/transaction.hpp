@@ -59,26 +59,13 @@ public:
   }
   using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
 
-  enum MultiMode : uint8_t {
-    NOT_DETERMINED = 0,
-    GLOBAL = 1,
-    LOCK_AHEAD = 2,
-    NON_ATOMIC = 3,
-  };
-
-  enum MultiRole {
-    DEFAULT = 0,
-    SQUASHER = 1,
-    SQUASHED_STUB = 2,
-  };
-
   enum LocalMask : uint16_t {
     ACTIVE = 1,
-    OPTIMISTIC_EXECUTION = 1 << 1,
-    OUT_OF_ORDER = 1 << 2,
-    KEYLOCK_ACQUIRED = 1 << 3,
-    WAS_SUSPENDED = 1 << 4,
-    AWAKED_Q = 1 << 5,
+    OPTIMISTIC_EXECUTION = 1 << 1, // 乐观执行
+    OUT_OF_ORDER = 1 << 2,  // 顺序执行
+    KEYLOCK_ACQUIRED = 1 << 3, // 锁已获取
+    WAS_SUSPENDED = 1 << 4, // 已挂起
+    AWAKED_Q = 1 << 5, // 已唤醒队列
   };
 
 
@@ -88,23 +75,11 @@ public:
 
   KeyLockArgs GetLockArgs(ShardId sid) const;
 
-
-
   bool IsActive(ShardId sid) const;
-
-  bool IsMulti() const {
-    return bool(multi_);
-  }
 
   bool IsScheduled() const {
     return coordinator_state_ & COORD_SCHED;
   }
-
-  MultiMode GetMultiMode() const {
-    return multi_ ? multi_->mode : MultiMode::NOT_DETERMINED;
-  }
-
-  cppcoro::task<void> Finish();
 
 
   const DbContext& GetDbContext() const {
@@ -225,15 +200,11 @@ public:
 
   std::string_view Name() const;
 
-  uint32_t GetUniqueShardCnt() const {
-    return unique_shard_cnt_;
-  }
 
-  ShardId GetUniqueShard() const;
 
-  const std::set<std::pair<ShardId, LockFp>>& GetMultiFps() const;
 
   State GetState() const { return state_; }
+  uint8_t GetCoordinatorState() const { return coordinator_state_; }
   void SetState(State new_state) { state_ = new_state; }
 
   struct QueuedCommand {
@@ -274,7 +245,6 @@ public:
   bool MultiReady() {
     return MultiRes_.size() == queued_commands_.size();
   }
-
   void startMulti() {
     SetState(Transaction::State::MULTI);
   }
@@ -288,29 +258,26 @@ public:
     return conn_cntx_;
   }
 
-  bool RunInShard(EngineShard* shard, bool allow_q_removal);
+  cppcoro::task<bool> RunInShard(EngineShard* shard);
   cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+
+  // 协调器状态
+  enum CoordinatorState : uint8_t {
+    COORD_SCHED = 1, // 协调器已调度
+    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
+    COORD_CANCELLED = 1 << 2, // 协调器已取消
+  };
 
 private:
 
   cppcoro::task<void> ScheduleInternal();
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
+  cppcoro::task<bool> ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop();
+  cppcoro::AsyncTask Finish();
   void RunCallback(EngineShard* shard);
 
-  struct MultiData {
-    MultiRole role = MultiRole::DEFAULT;
-    MultiMode mode = MultiMode::NOT_DETERMINED;
-    std::optional<IntentLock::Mode> lock_mode;
-    bool concluding = false;
-    unsigned cmd_seq_num = 0;
-  };
 
-  enum CoordinatorState : uint8_t {
-    COORD_SCHED = 1,
-    COORD_CONCLUDING = 1 << 1,
-    COORD_CANCELLED = 1 << 2,
-  };
+
 
   void InitSlice();
 
@@ -320,11 +287,6 @@ private:
   bool LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
   void UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
 
-
-  bool IsActiveMulti() const {
-    return multi_ && multi_->role != SQUASHED_STUB;
-  }
-
   unsigned SidToId(ShardId sid) const {
     return sid < Slices_.size() ? sid : 0;
   }
@@ -332,9 +294,11 @@ private:
   template<typename F>
   cppcoro::task<void> IterateActiveShards(F&& f) {
     util::BlockingCounter counter(unique_shard_cnt_);
-    auto cb = [counter, f](auto& sd, auto i) mutable {
-      f(sd, i);
+    auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
+      
+      co_await f(sd, i);
       counter->Dec();
+      co_return;
     };
     if (unique_shard_cnt_ == 1) {
       shard_set->Add(unique_shard_id_, [this, cb]() mutable {
@@ -354,6 +318,10 @@ private:
     co_await counter->Wait();
     co_return;
   }
+
+  struct MultiData {
+
+  };
 
   std::atomic_uint32_t run_barrier_{0};
   std::vector<Slice> Slices_;
@@ -375,6 +343,9 @@ private:
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
+
+public:
+  std::atomic_int debug_re = 0;
 };
 
 }

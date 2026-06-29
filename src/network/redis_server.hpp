@@ -34,6 +34,8 @@ public:
        (void)1;
     }
     
+    UringProactorPtr GetProactor() { return socket_.Proactor(); }
+
     cppcoro::AsyncTask DoRead(){
         try{
             pId_ = socket_.Proactor()->GetLoopThreadId();
@@ -78,14 +80,14 @@ public:
                 }
                 else if (r == 0) { 
                     LOG(INFO) << "Connection closed by client, fd: " << fd;
-                    socket_.Close();
+                    socket_.Close(); 
+                    context_.owner().reset();
                     break;
                 }
                 else {
                     LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
                 }            
             }
-            context_.owner().reset();         
         } catch(const std::exception& e) {
             std::cerr << "Exception in session fd:" << socket_.fd() << ": " << e.what() << std::endl;
         }
@@ -125,7 +127,7 @@ public:
     }
     base::UringSocket& socket() { return socket_; }
 private:
-    cppcoro::AsyncTask SendImp(std::string&& s) {
+    void SendImp(std::string&& s) {
         auto p = socket_.Proactor(); 
         // if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
         //     if (!transaction_->collectMultiRes(s)) co_return; // 可能多线程操作同一个容器
@@ -137,11 +139,10 @@ private:
             SendBuf_.append(s);
             DoWrite();     
         });
-        co_return;         
+        return;         
     }
     cppcoro::AsyncTask DoWrite() {
         assert(util::Thread::current_tid() == pId_);
-        co_await transaction_->Finish();
         while (SendBuf_.readable_size()) {
             auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
             if (wr>0) {
