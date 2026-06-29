@@ -196,8 +196,8 @@ DbSlice& Transaction::GetDbSlice(ShardId sid) const {
   return namespace_->GetDbSlice(sid);
 }
 
-IntentLock::Mode Transaction::LockMode() const { // 仅支持独占锁
-  return IntentLock::EXCLUSIVE;
+IntentLock::Mode Transaction::LockMode() const { 
+  return (cid_->opt_mask() & CO::READABLE) ? IntentLock::Mode::SHARED : IntentLock::Mode::EXCLUSIVE;
 }
 
 void Transaction::QueueCommand(const CommandId* cid, CmdArgList args) {

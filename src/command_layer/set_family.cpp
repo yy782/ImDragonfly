@@ -236,9 +236,9 @@ void RegisterSetFamily(CommandRegistry* registry) {
     *registry
         << CI{"SADD", 1, 1, kInvalidKeysOffset}.SetHandler(SAdd)
         << CI{"SREM", 1, 1, kInvalidKeysOffset}.SetHandler(SRem)
-        << CI{"SMEMBERS", 1, 1, kInvalidKeysOffset}.SetHandler(SMembers)
-        << CI{"SCARD", 1, 1, kInvalidKeysOffset}.SetHandler(SCard)
-        << CI{"SISMEMBER", 1, 1, kInvalidKeysOffset}.SetHandler(SIsMember)
+        << CI{"SMEMBERS", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(SMembers)
+        << CI{"SCARD", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(SCard)
+        << CI{"SISMEMBER", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(SIsMember)
         ;
 }
 

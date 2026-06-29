@@ -391,13 +391,13 @@ void RegisterZSetFamily(CommandRegistry* registry) {
     registry->StartFamily();
     *registry
         << CI{"ZADD", 1, 1, kInvalidKeysOffset}.SetHandler(ZAdd)
-        << CI{"ZCARD", 1, 1, kInvalidKeysOffset}.SetHandler(ZCard)
-        << CI{"ZSCORE", 1, 1, kInvalidKeysOffset}.SetHandler(ZScore)
+        << CI{"ZCARD", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZCard)
+        << CI{"ZSCORE", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZScore)
         << CI{"ZREM", 1, 1, kInvalidKeysOffset}.SetHandler(ZRem)
-        << CI{"ZRANK", 1, 1, kInvalidKeysOffset}.SetHandler(ZRank)
-        << CI{"ZREVRANK", 1, 1, kInvalidKeysOffset}.SetHandler(ZRevRank)
-        << CI{"ZRANGE", 1, 1, kInvalidKeysOffset}.SetHandler(ZRange)
-        << CI{"ZREVRANGE", 1, 1, kInvalidKeysOffset}.SetHandler(ZRevRange)
+        << CI{"ZRANK", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZRank)
+        << CI{"ZREVRANK", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZRevRank)
+        << CI{"ZRANGE", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZRange)
+        << CI{"ZREVRANGE", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(ZRevRange)
         ;
 }
 

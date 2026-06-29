@@ -14,7 +14,7 @@ const size_t kInvalidKeysNum = std::numeric_limits<size_t>::max() - 1;
 const size_t kInvalidKeysOffset = std::numeric_limits<size_t>::max() - 1;
 class CommandId {
 public:
-    CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset);
+    CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset, uint32_t opt_mask = 0);
 
     std::string_view name() const {
         return name_;
@@ -38,17 +38,14 @@ public:
     }
 
 
-    void SetFamily(size_t fam) {
+    CommandId& SetFamily(size_t fam) {
         family_ = fam;
+        return *this;
     }
 
 
     size_t GetFamily() const {
         return family_;
-    }
-
-    void SetFlag(uint32_t flag) {
-        opt_mask_ |= flag;
     }
 
 protected:

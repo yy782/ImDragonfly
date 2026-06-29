@@ -17,7 +17,8 @@ namespace dfly {
 namespace CO {
 
 enum CommandOpt : uint32_t { // 命令选项枚举
-
+  READABLE = 1 << 0,  // 命令只读，不修改数据
+  
 };
 
 
@@ -33,7 +34,7 @@ class CommandId : public facade::CommandId {
 public:
     using CmdArgList = ::cmn::CmdArgList;
 
-    CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset);
+    CommandId(const char* name, size_t keys_start, size_t keys_nums, size_t keys_offset, uint32_t opt_mask_ = 0);
 
     CommandId(CommandId&& o) = default;
 
@@ -47,7 +48,6 @@ public:
     void Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
         handler_(cmd_cntx, args);
     }
-
 
     CommandId&& SetHandler(Handler f) && {
         handler_ = std::move(f);

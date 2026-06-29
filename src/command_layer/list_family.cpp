@@ -468,10 +468,10 @@ void RegisterListFamily(CommandRegistry* registry) {
         << CI{"RPUSH", 1, 1, kInvalidKeysOffset}.SetHandler(RPush)
         << CI{"LPOP", 1, 1, kInvalidKeysOffset}.SetHandler(LPop)
         << CI{"RPOP", 1, 1, kInvalidKeysOffset}.SetHandler(RPop)
-        << CI{"LLEN", 1, 1, kInvalidKeysOffset}.SetHandler(LLen)
-        << CI{"LINDEX", 1, 1, kInvalidKeysOffset}.SetHandler(LIndex)
+        << CI{"LLEN", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LLen)
+        << CI{"LINDEX", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LIndex)
         << CI{"LSET", 1, 1, kInvalidKeysOffset}.SetHandler(LSet)
-        << CI{"LRANGE", 1, 1, kInvalidKeysOffset}.SetHandler(LRange)
+        << CI{"LRANGE", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LRange)
         << CI{"LREM", 1, 1, kInvalidKeysOffset}.SetHandler(LRem)
         << CI{"LINSERT", 1, 1, kInvalidKeysOffset}.SetHandler(LInsert)
         ;

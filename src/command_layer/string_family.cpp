@@ -278,8 +278,8 @@ void RegisterStringFamily(CommandRegistry* registry) {
     registry->StartFamily();
     *registry
         << CI{"SET", /*keys_start*/ 1, /*keys_nums*/ 1, /*keys_offset*/ kInvalidKeysOffset}.SetHandler(Set)
-        << CI{"GET", 1, 1, kInvalidKeysOffset}.SetHandler(Get)
-        << CI{"MGET", 1, kInvalidKeysNum, 1}.SetHandler(MGET)
+        << CI{"GET", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(Get)
+        << CI{"MGET", 1, kInvalidKeysNum, 1, CO::READABLE}.SetHandler(MGET)
         << CI{"MSET", 1, kInvalidKeysNum, 2}.SetHandler(MSET)
         ;
 }
