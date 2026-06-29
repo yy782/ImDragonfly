@@ -17,6 +17,7 @@ class RedisCommandTester:
             self.r = redis.Redis(
                 host='localhost',
                 port=6379,
+                protocol=2,
                 db=0,
                 decode_responses=True,
                 socket_connect_timeout=5,
@@ -100,16 +101,18 @@ class RedisCommandTester:
         self.test("SET", True, self.r.set(key, "hello"))
         self.test("GET", "hello", self.r.get(key))
         
+        key1 = "test:basic:key1"
         key2 = "test:basic:key2"
+        self.add_test_key(key1)
         self.add_test_key(key2)
         
-        self.test("MSET", True, self.r.mset({key: "value1", key2: "value2"}))
-        self.test("MGET", ["value1", "value2"], self.r.mget([key, key2]))
+        self.test("MSET", True, self.r.mset({key1: "value1", key2: "value2"}))
+        self.test("MGET", ["value1", "value2"], self.r.mget([key1, key2]))
         
-        self.test("EXISTS", 2, self.r.exists(key, key2))
-        self.test("DEL", 2, self.r.delete(key, key2))
-        self.test("EXISTS after DEL", 0, self.r.exists(key, key2))
-        self.test("GET after DEL", None, self.r.get(key))
+        self.test("EXISTS", 2, self.r.exists(key1, key2))
+        self.test("DEL", 2, self.r.delete(key1, key2))
+        self.test("EXISTS after DEL", 0, self.r.exists(key1, key2))
+        self.test("GET after DEL", None, self.r.get(key1))
     
     def test_expire_commands(self):
         key = "test:expire:key"
