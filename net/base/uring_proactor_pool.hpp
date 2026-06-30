@@ -16,28 +16,21 @@ class UringProactorPool{
 public:
     UringProactorPool(uint32_t size) : proactors_(size) {
         for(std::size_t i = 0;i < proactors_.size(); ++i){
-            proactors_[i] = std::make_shared<UringProactor>(i, 4096);
-        }
-
-
-        for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_.emplace_back();
         }
     }
 
     void AsyncLoop() {
-
         std::string base_name = "proactor_thread_";
         for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_[i] = std::make_unique<util::Thread>((base_name + std::to_string(i)).c_str(), [this, i]{
+                proactors_[i] = std::make_shared<UringProactor>(i, 4096);
                 proactors_[i]->loop();
             });            
         }
     }
 
     void stop() {
-
-
         DispatchBrief([this](UringProactorPtr p){
             p->stop();
         });

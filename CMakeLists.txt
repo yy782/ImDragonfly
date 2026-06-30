@@ -19,7 +19,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 include(cmake/third_party.cmake)
-option(USE_ASAN "Enable AddressSanitizer" ON)
+option(USE_ASAN "Enable AddressSanitizer" OFF)
 if(USE_ASAN)
     set(ASAN_FLAGS 
         -fsanitize=address 

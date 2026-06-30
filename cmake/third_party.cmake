@@ -102,6 +102,54 @@ else()
     endif()
 endif()
 
+find_package(absl QUIET)
+if(absl_FOUND)
+    message(STATUS "[third_party] 使用系统 abseil-cpp: ${absl_DIR}")
+    target_link_libraries(third_party_deps INTERFACE 
+        absl::flat_hash_map
+        absl::flat_hash_set
+        absl::hash
+    )
+else()
+    find_path(ABSL_INCLUDE_DIR NAMES absl/container/flat_hash_map.h)
+    if(ABSL_INCLUDE_DIR)
+        message(STATUS "[third_party] 使用系统 abseil-cpp (手动查找): ${ABSL_INCLUDE_DIR}")
+        target_include_directories(third_party_deps INTERFACE ${ABSL_INCLUDE_DIR}/..)
+        find_library(ABSL_HASH_LIB NAMES absl_hash)
+        find_library(ABSL_RAW_HASH_SET_LIB NAMES absl_raw_hash_set)
+        find_library(ABSL_CITY_LIB NAMES absl_city)
+        if(ABSL_HASH_LIB AND ABSL_RAW_HASH_SET_LIB)
+            add_library(absl_imported INTERFACE)
+            target_include_directories(absl_imported INTERFACE ${ABSL_INCLUDE_DIR}/..)
+            target_link_libraries(absl_imported INTERFACE ${ABSL_HASH_LIB} ${ABSL_RAW_HASH_SET_LIB})
+            if(ABSL_CITY_LIB)
+                target_link_libraries(absl_imported INTERFACE ${ABSL_CITY_LIB})
+            endif()
+            target_link_libraries(third_party_deps INTERFACE absl_imported)
+        else()
+            message(WARNING "[third_party] 找到abseil头文件但未找到库文件，仅使用header路径")
+            target_include_directories(third_party_deps INTERFACE ${ABSL_INCLUDE_DIR}/..)
+        endif()
+    else()
+        message(STATUS "[third_party] 系统未找到 abseil-cpp，下载到 build/_deps ...")
+        FetchContent_Declare(
+            abseil
+            GIT_REPOSITORY  https://github.com/abseil/abseil-cpp.git
+            GIT_TAG         20240722.0
+            GIT_SHALLOW     TRUE
+        )
+        set(ABSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+        set(ABSL_USE_GOOGLETEST_HEAD OFF CACHE BOOL "" FORCE)
+        set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(abseil)
+        target_link_libraries(third_party_deps INTERFACE 
+            absl::flat_hash_map
+            absl::flat_hash_set
+            absl::hash
+        )
+    endif()
+endif()
+
 if(BUILD_TESTS)
     # 先尝试 find_package（某些发行版预编译了 GTest）
     find_package(GTest QUIET)

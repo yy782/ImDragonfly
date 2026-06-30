@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include <shared_mutex>
-#include <unordered_map>
+#include <absl/container/flat_hash_map.h>
 #include "detail/common_types.hpp"
 
 namespace dfly {
@@ -46,7 +46,7 @@ public:
 
 private:
     std::shared_mutex rw_mutex_;
-    std::unordered_map<std::string, Namespace> namespaces_ ;
+    absl::flat_hash_map<std::string, Namespace> namespaces_ ;
     Namespace* default_namespace_ = nullptr;
 };
 

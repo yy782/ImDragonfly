@@ -22,6 +22,12 @@ inline int ListenFd(){
         return -1;
     }
 
+    // 减小 TIME_WAIT 状态下端口占用时间
+    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) == -1) {
+        perror("setsockopt SO_REUSEPORT");
+        // 非致命错误，继续
+    }
+
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -33,7 +39,7 @@ inline int ListenFd(){
         close(listen_fd);
         return -1;
     }
-    int backlog = 128;  
+    int backlog = 4096;  // 从 128 增加到 4096，避免高并发时丢连接
     if (listen(listen_fd, backlog) == -1) {
         perror("listen");
         close(listen_fd);

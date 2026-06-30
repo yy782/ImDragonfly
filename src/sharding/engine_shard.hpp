@@ -22,11 +22,6 @@ class EngineShard
 public:
     friend class EngineShardSet;
 
-    struct Stats {
-        uint64_t tx_optimistic_total = 0;
-        uint64_t tx_ooo_total = 0;
-    };
-
     static void InitThreadLocal(base::UringProactorPtr pb);
     static void DestroyThreadLocal();
     static EngineShard* tlocal() { return shard_; }
@@ -40,14 +35,7 @@ public:
     TxQueue* txq() { return &txq_; }
     const TxQueue* txq() const { return &txq_; }
 
-    TxId committed_txid() const { return committed_txid_; }
-
-    IntentLock* shard_lock() { return &shard_lock_; }
-
     DbSlice* GetDbSlice(ShardId sid);
-
-    const Stats& stats() const { return stats_; }
-    Stats& stats() { return stats_; }
 
 private:
     EngineShard(base::UringProactorPtr pb, mi_heap_t* heap);
@@ -56,11 +44,8 @@ private:
     ShardId shard_id_;
     MiMemoryResource mi_resource_;
     static thread_local EngineShard* shard_;      
-
     TxQueue txq_;
-    TxId committed_txid_ = 0;
-    IntentLock shard_lock_;
-    Stats stats_;
 };
+
 
 }  // namespace dfly

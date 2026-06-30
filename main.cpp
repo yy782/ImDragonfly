@@ -50,7 +50,6 @@ mimalloc: warning: mi_usable_size: pointer might not point to a valid heap regio
 // ./imdragonfly
 
 int main(int argc, char *argv[]) {
-    (void)argc;
 
     int ret = mkdir("./logs", 0755);
     if (ret != 0 && errno != EEXIST) {
@@ -74,8 +73,13 @@ int main(int argc, char *argv[]) {
     int listen_fd = base::ListenFd();
     LOG(INFO) << "Listening on fd: " << listen_fd;
 
-    RedisServer server(listen_fd, 4);
-    LOG(INFO) << "RedisServer initialized with 4 shards";
+    int num = 4;
+    if (argc > 1) {
+        num = std::atoi(argv[1]);
+    }
+    RedisServer server(listen_fd, num);
+    std::string str = "RedisServer initialized with  " + std::to_string(num) + "shards";
+    LOG(INFO) << str;
 
     server.Start();
     

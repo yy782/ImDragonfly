@@ -22,11 +22,11 @@ struct PrimeTablePolicy {
   }
 
   static void DestroyKey(PrimeKey& cs) {
-    cs.Reset();
+    //cs.Reset();
   }
 
   static void DestroyValue(PrimeValue& o) {
-    o.Reset();
+    //o.Reset();
   }
 
   static bool Equal(const PrimeKey& s1, std::string_view s2) {

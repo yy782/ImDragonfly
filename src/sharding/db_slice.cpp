@@ -4,6 +4,7 @@
 #include "util/Time.hpp"
 #include "detail/conn_context.hpp"
 #include <assert.h>
+#include <exception>
 namespace dfly{ 
 
 
@@ -18,6 +19,7 @@ DbSlice::DbSlice(uint32_t index, bool cache_mode, EngineShard* owner)
 }
 
 DbSlice::~DbSlice() {
+    assert(std::uncaught_exceptions() == 0);
     for (auto& db : db_arr_) {
         if (!db)
             continue;
@@ -59,6 +61,7 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
     auto& db = *db_arr_[cntx.GetDbIndex()];
     PrimeIterator it = db.prime_.Find(key);
 
+    
     if (!IsValid(it)) {
         return OpStatus::KEY_NOTFOUND;
     }
@@ -72,6 +75,7 @@ auto DbSlice::FindInternal(const Context& cntx, std::string_view key, std::optio
     if (!IsValid(it)) {
         return OpStatus::KEY_NOTFOUND;
     }
+
     return it;
 }
 
@@ -261,22 +265,22 @@ void DbSlice::RegisterWatchedKey(std::string_view key,
 }
 
 void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
-    auto& db = *db_arr_[db_ind];
-    auto& watched_keys = db.watched_keys_;
-    if (!watched_keys.empty()) {
-        if (auto wit = watched_keys.find(std::string(key)); wit != watched_keys.end()) {
-            for (auto& key_cntx : wit->second)
-            {
-                if (key_cntx.isExpired()) {
-                    continue;
-                }
-                if (!key_cntx.conn_context->SetDirty(key_cntx.key_version)) {
-                    // 这里开启了新的一轮事务，清除key_cntx的所有数据 TODO,
-                }
-            }
-            watched_keys.erase(wit);
-        }
-    }
+    // auto& db = *db_arr_[db_ind];
+    // auto& watched_keys = db.watched_keys_;
+    // if (!watched_keys.empty()) {
+    //     if (auto wit = watched_keys.find(std::string(key)); wit != watched_keys.end()) {
+    //         for (auto& key_cntx : wit->second)
+    //         {
+    //             if (key_cntx.isExpired()) {
+    //                 continue;
+    //             }
+    //             if (!key_cntx.conn_context->SetDirty(key_cntx.key_version)) {
+    //                 // 这里开启了新的一轮事务，清除key_cntx的所有数据 TODO,
+    //             }
+    //         }
+    //         watched_keys.erase(wit);
+    //     }
+    // }
 }
 
 void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys) {

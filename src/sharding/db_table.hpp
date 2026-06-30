@@ -10,7 +10,7 @@
 #include "detail/intent_lock.hpp"
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
-#include <unordered_map>
+#include <absl/container/flat_hash_map.h>
 namespace dfly{
 using PrimeKey = detail::PrimeKey;
 using PrimeValue = detail::PrimeValue;
@@ -55,13 +55,7 @@ public:
     }
 
 private:
-    // We use fingerprinting before accessing locks - no need to mix more.
-    struct Hasher {
-        size_t operator()(LockFp val) const {
-            return val;
-        }
-    };
-    std::unordered_map<LockFp, IntentLock, Hasher> locks_;
+    absl::flat_hash_map<LockFp, IntentLock> locks_;
 };
 
 
@@ -92,7 +86,7 @@ struct DbTable :
     };
     PrimeTable prime_;
     DbIndex index_;
-    std::unordered_map<std::string, std::vector<WatchedKeyContext>> watched_keys_;
+    absl::flat_hash_map<std::string, std::vector<WatchedKeyContext>> watched_keys_;
     LockTable trans_locks;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;

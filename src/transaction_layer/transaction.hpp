@@ -1,8 +1,6 @@
 #pragma once
 #include <cstdint>
 #include <shared_mutex>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <string>
 #include <span> 
@@ -45,18 +43,9 @@ public:
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
+
   ~Transaction();
 
-  friend void intrusive_ptr_add_ref(Transaction* trans) noexcept {
-    trans->use_count_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  friend void intrusive_ptr_release(Transaction* trans) noexcept {
-    if (1 == trans->use_count_.fetch_sub(1, std::memory_order_release)) {
-      std::atomic_thread_fence(std::memory_order_acquire);
-      delete trans;
-    }
-  }
   using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
@@ -66,7 +55,7 @@ public:
   };
 
 
-  explicit Transaction(const CommandId* cid);
+  Transaction(const CommandId* cid = nullptr);
 
   void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
 
@@ -219,7 +208,7 @@ public:
 
   auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
 
-  const std::unordered_set<std::string_view>& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
+  const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
   bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
   
   bool IsDirty() const { return conn_cntx_->IsDirty(); }
@@ -252,18 +241,19 @@ public:
   }
 
   bool RunInShard(EngineShard* shard);
-  cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
   // 协调器状态
   enum CoordinatorState : uint8_t {
     COORD_SCHED = 1, // 协调器已调度
     COORD_CONCLUDING = 1 << 1, // 协调器正在结束
     COORD_CANCELLED = 1 << 2, // 协调器已取消
+    COORD_INLINE = 1 << 3, // 内联
   };
 
 private:
 
-  cppcoro::task<void> ScheduleInternal();
+  cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop();
   cppcoro::AsyncTask Finish();
@@ -287,7 +277,6 @@ private:
   cppcoro::task<void> IterateActiveShards(F&& f) {
     util::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
-      
       co_await f(sd, i);
       counter->Dec();
       co_return;

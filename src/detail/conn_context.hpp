@@ -3,7 +3,7 @@
 //
 
 #pragma once
-#include <unordered_set>
+#include <absl/container/flat_hash_set.h>
 #include "detail/common.hpp"
 #include "cppcoro/task.hpp"
 #include <atomic>
@@ -45,7 +45,7 @@ public:
     uint64_t GetWatchedDirtyVer() const {
         return watched_dirty_ver_.load(std::memory_order_relaxed);
     }
-    const std::unordered_set<std::string_view>& GetWatchKeys() const { return watch_keys_; }
+    const absl::flat_hash_set<std::string_view>& GetWatchKeys() const { return watch_keys_; }
     bool HasWatchKeys() const { return !watch_keys_.empty(); }
     bool IsDirty() const { return watched_dirty_.load(std::memory_order_relaxed); }
     bool SetDirty(uint64_t watched_dirty_ver) {
@@ -63,7 +63,7 @@ private:
     RedisSessionPtr owner_;
     Namespace* ns_; 
     DbIndex index_;
-    std::unordered_set<std::string_view> watch_keys_;
+    absl::flat_hash_set<std::string_view> watch_keys_;
     std::atomic<uint64_t> watched_dirty_ver_ = 0;
     std::atomic<bool> watched_dirty_ = false;
 
