@@ -12,7 +12,7 @@ def log(msg):
 def worker_with_continuous_commands(worker_id, stop_event, cmd_interval):
     """工作线程：持续发送命令"""
     try:
-        client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        client = redis.Redis(host='localhost', port=6379,protocol=2, decode_responses=True)
         client.ping()
         log(f"Worker {worker_id}: 连接成功")
         
