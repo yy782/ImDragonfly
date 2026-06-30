@@ -82,12 +82,8 @@ private:
 
 
 facade::OpResult<void> SetCmd::Set(const SetParams& params, std::string_view key, std::string_view value) {
-
-
-
     DbSlice& db_slice = slice_.GetDbSlice();
     auto op_res = db_slice.AddOrFind(slice_.GetDbContext(), key, std::nullopt);
-
 
     if (!op_res->is_new) {
         return SetExisting(params, value, &(*op_res));
@@ -125,8 +121,11 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it, std::s
     (void)key;                    
 
   auto& db_slice = slice_.GetDbSlice();
-  it->second = PrimeValue{value};
 
+  
+
+  it->second = PrimeValue{value};
+   
   if (params.expire_after_ms_) {
       db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it,
                         params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
@@ -186,13 +185,25 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     auto cb = [key, 
            value, 
            sparams](Transaction* t, EngineShard* shard)-> OpResult<void> {
+            assert(EngineShard::tlocal()->shard_id() == shard->shard_id());
         return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
     };
 
     auto result = co_await cmd::SingleHopT(cb);
 
-
     auto conn = cmd_cntx->conn_cntx()->owner();
+
+#ifndef DEBUG
+        auto transaction = conn->GetTransaction();
+        if (transaction) {
+            if (transaction->GetState() == Transaction::State::IDLE && 
+            transaction->GetCoordinatorState() != Transaction::COORD_CANCELLED) {
+                std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
+                          << static_cast<int>(transaction->GetCoordinatorState()) << std::endl;
+                assert(false && "Transaction should be cancelled before reading new commands");
+            }
+        }        
+#endif
 
     if (result.status() == OpStatus::OK) {
         conn->SendStatus("OK"); 
@@ -230,9 +241,8 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
 
 }
 CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
-
-
     auto cb = [key = args[1]](Transaction* tx, EngineShard* es) -> OpResult<StringResult> {
+        assert(EngineShard::tlocal()->shard_id() == es->shard_id());
         auto it_res = tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
         if (it_res.GetInnerIt().owner() == nullptr) { // 没找到

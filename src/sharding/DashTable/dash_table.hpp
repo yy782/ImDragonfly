@@ -22,7 +22,7 @@
 #include <mutex>
 #include <ranges>
 #include "dash_internal.hpp"
-
+#include <exception>
 namespace dfly{
 
 
@@ -31,6 +31,7 @@ template<typename _Key, typename _Value, typename Policy>
 class DashTable : public detail::DashTableBase{
 public:
     DashTable(const DashTable&) = delete;
+
     DashTable& operator=(const DashTable&) = delete;
     using Base = detail::DashTableBase;
     using SegmentType = detail::Segment<_Key, _Value, Policy>;
@@ -350,6 +351,7 @@ DashTable<_Key, _Value, Policy>::DashTable(size_t capacity_log, const Policy& po
 
 template <typename _Key, typename _Value, typename Policy>
 DashTable<_Key, _Value, Policy>::~DashTable() {
+    assert(std::uncaught_exceptions() == 0);
     Clear();
     auto* resource = segment_.get_allocator().resource();
     PMR_NS::polymorphic_allocator<SegmentType> pa(resource);

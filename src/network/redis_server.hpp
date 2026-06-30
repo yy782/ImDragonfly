@@ -35,6 +35,7 @@ public:
     }
     
     UringProactorPtr GetProactor() { return socket_.Proactor(); }
+    Transaction* GetTransaction() { return transaction_.get(); }
 
     cppcoro::AsyncTask DoRead(){
         try{
@@ -50,8 +51,10 @@ public:
 
 #ifndef DEBUG
         if (transaction_) {
-            if (transaction_->GetState() == Transaction::State::IDLE && 
-            transaction_->GetCoordinatorState() != Transaction::COORD_CANCELLED) {
+            if (transaction_->GetState() == Transaction::State::IDLE && (
+            transaction_->GetCoordinatorState() != Transaction::COORD_CANCELLED && 
+            transaction_->GetCoordinatorState() != 0 )
+        ) {
                 std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
                           << static_cast<int>(transaction_->GetCoordinatorState()) << std::endl;
                 assert(false && "Transaction should be cancelled before reading new commands");
@@ -74,6 +77,7 @@ public:
                     }
 
                     std::string cmd_name(args_[0]);
+                    
                     is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
                                             cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
 
