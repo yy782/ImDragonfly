@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <cstring>
 #include <glog/logging.h>
+#include <mimalloc.h>
 
 namespace base {
 
@@ -98,7 +99,8 @@ void UringProactor::SubmitPendingOps() {
         }
         
         // 存储协程句柄和 awaitable 指针
-        auto* data = new PendingOp{op};
+        auto* data = static_cast<PendingOp*>(mi_malloc(sizeof(PendingOp)));
+        new (data) PendingOp{op};
         io_uring_sqe_set_data(sqe, data);
 
 
@@ -159,7 +161,7 @@ void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
         op->handle.resume();
     }
     
-    delete op;
+    mi_free(op);
 }
 
 void UringProactor::loop() {

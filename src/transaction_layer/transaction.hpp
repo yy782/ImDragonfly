@@ -1,8 +1,6 @@
 #pragma once
 #include <cstdint>
 #include <shared_mutex>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <string>
 #include <span> 
@@ -219,7 +217,7 @@ public:
 
   auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
 
-  const std::unordered_set<std::string_view>& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
+  const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
   bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
   
   bool IsDirty() const { return conn_cntx_->IsDirty(); }
@@ -287,7 +285,6 @@ private:
   cppcoro::task<void> IterateActiveShards(F&& f) {
     util::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
-      
       co_await f(sd, i);
       counter->Dec();
       co_return;

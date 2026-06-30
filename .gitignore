@@ -42,6 +42,7 @@
 
 # CMake 构建产物
 build/
+build-release/
 CMakeCache.txt
 CMakeFiles/
 CMakeScripts/
@@ -51,7 +52,6 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 tmp/
-
 
 
 

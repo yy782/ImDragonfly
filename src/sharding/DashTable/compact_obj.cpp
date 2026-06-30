@@ -2,6 +2,7 @@
 
 #include "compact_obj.hpp"
 #include "redis/redis_aux.hpp"
+#include <mimalloc.h>
 
 namespace dfly{
 
@@ -10,16 +11,20 @@ RobjWrapper::~RobjWrapper() {
         return;
     switch (type_){
         case OBJ_LIST:
-            delete static_cast<ListObject*>(obj_inner_);
+            static_cast<ListObject*>(obj_inner_)->~ListObject();
+            mi_free(obj_inner_);
             break;
         case OBJ_HASH:
-            delete static_cast<HashObject*>(obj_inner_);
+            static_cast<HashObject*>(obj_inner_)->~HashObject();
+            mi_free(obj_inner_);
             break;
         case OBJ_SET:
-            delete static_cast<SetObject*>(obj_inner_);
+            static_cast<SetObject*>(obj_inner_)->~SetObject();
+            mi_free(obj_inner_);
             break;
         case OBJ_ZSET:
-            delete static_cast<ZSetObject*>(obj_inner_);
+            static_cast<ZSetObject*>(obj_inner_)->~ZSetObject();
+            mi_free(obj_inner_);
             break;
         default:
             LOG(WARNING) << "Unknown type in RobjWrapper destructor: " << type_;

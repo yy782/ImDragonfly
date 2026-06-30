@@ -8,8 +8,8 @@
 
 #include <deque>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
+#include <absl/container/flat_hash_map.h>
+#include <absl/container/flat_hash_set.h>
 #include <vector>
 #include <optional>
 #include <cstdlib>
@@ -193,16 +193,16 @@ public:
         return data_.empty();
     }
 
-    std::unordered_map<std::string, std::string>& Data() {
+    absl::flat_hash_map<std::string, std::string>& Data() {
         return data_;
     }
 
-    const std::unordered_map<std::string, std::string>& Data() const {
+    const absl::flat_hash_map<std::string, std::string>& Data() const {
         return data_;
     }
 
 private:
-    std::unordered_map<std::string, std::string> data_;
+    absl::flat_hash_map<std::string, std::string> data_;
 };
 
 class SetObject {
@@ -231,16 +231,16 @@ public:
         return data_.empty();
     }
 
-    std::unordered_set<std::string>& Data() {
+    absl::flat_hash_set<std::string>& Data() {
         return data_;
     }
 
-    const std::unordered_set<std::string>& Data() const {
+    const absl::flat_hash_set<std::string>& Data() const {
         return data_;
     }
 
 private:
-    std::unordered_set<std::string> data_;
+    absl::flat_hash_set<std::string> data_;
 };
 
 struct ZSetEntry {
@@ -373,7 +373,7 @@ public:
 
 private:
     SkipList<ZSetEntry, ZSetCompare> skip_list_;
-    std::unordered_map<std::string, double> score_map_;
+    absl::flat_hash_map<std::string, double> score_map_;
 };
 
 }  // namespace dfly

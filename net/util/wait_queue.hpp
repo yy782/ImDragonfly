@@ -58,7 +58,7 @@ public:
     }
 
     // Return true if any waiter was notified
-    bool NotifyAll(){
+    bool NotifyAll() {
         bool notified = false;
         auto it = wait_list_.begin();
 

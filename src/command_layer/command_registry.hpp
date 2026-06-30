@@ -5,6 +5,7 @@
 #pragma once
 #include <functional>
 #include <optional>
+#include <absl/container/flat_hash_map.h>
 
 
 #include "command_layer/command_id.hpp"
@@ -95,7 +96,7 @@ public:
     FamiliesVec GetFamilies();
 
  private:
-    std::unordered_map<std::string, CommandId> cmd_map_;
+    absl::flat_hash_map<std::string, CommandId> cmd_map_;
 
     FamiliesVec family_of_commands_;
     size_t bit_index_;

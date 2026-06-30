@@ -1,5 +1,4 @@
 #include <set>
-#include <unordered_set>
 #include <iostream>
 #include <span>
 
@@ -137,7 +136,7 @@ bool Transaction::isInline() {
 cppcoro::task<void> Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
   txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
-  co_await IterateActiveShards([this](auto& sd, ShardId sid) -> cppcoro::task<void> {
+  co_await IterateActiveShards([this](auto& sd, ShardId sid) -> cppcoro::task<void> { // 注意IterateActiveShards的逻辑，这里事务是被别的线程完后后面部分的
     EngineShard* shard = EngineShard::tlocal();
     bool execute_optimistic = unique_shard_cnt_ == 1;
     ScheduleInShard(shard, execute_optimistic);

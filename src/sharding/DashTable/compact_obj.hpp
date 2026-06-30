@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <glog/logging.h>
+#include <mimalloc.h>
 #include "redis/redis_aux.hpp"
 namespace dfly{
 
@@ -313,7 +314,7 @@ struct CompactValue : public CompactObj {
 
     static CompactValue MakeList() {
         CompactValue obj;
-        obj.SetRobj(OBJ_LIST, new ListObject{});
+        obj.SetRobj(OBJ_LIST, new (mi_malloc(sizeof(ListObject))) ListObject{});
         return obj;
     }
 
@@ -333,7 +334,7 @@ struct CompactValue : public CompactObj {
 
     static CompactValue MakeHash() {
         CompactValue obj;
-        obj.SetRobj(OBJ_HASH, new HashObject{});
+        obj.SetRobj(OBJ_HASH, new (mi_malloc(sizeof(HashObject))) HashObject{});
         return obj;
     }
 
@@ -353,7 +354,7 @@ struct CompactValue : public CompactObj {
 
     static CompactValue MakeSet() {
         CompactValue obj;
-        obj.SetRobj(OBJ_SET, new SetObject{});
+        obj.SetRobj(OBJ_SET, new (mi_malloc(sizeof(SetObject))) SetObject{});
         return obj;
     }
 
@@ -373,7 +374,7 @@ struct CompactValue : public CompactObj {
 
     static CompactValue MakeZSet() {
         CompactValue obj;
-        obj.SetRobj(OBJ_ZSET, new ZSetObject{});
+        obj.SetRobj(OBJ_ZSET, new (mi_malloc(sizeof(ZSetObject))) ZSetObject{});
         return obj;
     }
 
