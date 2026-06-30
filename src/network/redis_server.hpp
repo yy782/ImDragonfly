@@ -14,7 +14,7 @@
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
 #include <cstring>
-
+#include <exception>
 namespace dfly{
 using base::UringProactorPtr;
 inline CommandRegistry* CIs = nullptr;
@@ -31,7 +31,7 @@ public:
     }
 
     ~RedisSession() {
-       (void)1;
+       assert(std::uncaught_exceptions() == 0);
     }
     
     UringProactorPtr GetProactor() { return socket_.Proactor(); }
@@ -42,11 +42,23 @@ public:
             context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
             int fd = socket_.fd();
             // LOG(INFO) << "New session created for fd: " << fd;
-                        
             while (true) {
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
                 assert(util::Thread::current_tid() == pId_);
                 if (r > 0) {
+
+
+#ifndef DEBUG
+        if (transaction_) {
+            if (transaction_->GetState() == Transaction::State::IDLE && 
+            transaction_->GetCoordinatorState() != Transaction::COORD_CANCELLED) {
+                std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
+                          << static_cast<int>(transaction_->GetCoordinatorState()) << std::endl;
+                assert(false && "Transaction should be cancelled before reading new commands");
+            }
+        }        
+#endif
+                    
                     RecvBuf_.hasWritten(r);
                     Com_ = RecvBuf_.ParseRESP();
                     if (Com_.empty()) continue;

@@ -47,7 +47,7 @@ Transaction::Transaction(const CommandId* cid) : cid_(cid) {
 }
 
 Transaction::~Transaction() {
-  (void)1;
+  assert(std::uncaught_exceptions() == 0);
 }
 
 
@@ -110,8 +110,28 @@ cppcoro::AsyncTask Transaction::Scheduling(std::coroutine_handle<> handle, Runna
   cb_ = std::move(cb);
   run_barrier_.store(unique_shard_cnt_, std::memory_order_release);
   coordinator_state_ |= COORD_CONCLUDING;
+
+  if (isInline()) {
+    ScheduleInShard(EngineShard::tlocal(), true);
+    co_return;
+  }
+
   co_await ScheduleInternal();
   co_return;
+}
+
+bool Transaction::isInline() {
+  if (unique_shard_cnt_ == 1) {
+    ShardId sid = unique_shard_id_;
+    auto& sd = Slices_[SidToId(sid)];
+    if (sd.local_mask & ACTIVE) {
+      EngineShard* shard = EngineShard::tlocal();
+      if (shard->shard_id() == sid) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 cppcoro::task<void> Transaction::ScheduleInternal() {
@@ -136,21 +156,26 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
     return false;
   }
   sd.local_mask |= KEYLOCK_ACQUIRED;
-  
-  
-  if (shard->txq()->Empty() || (execute_optimistic && shard->txq()->Front() == this)) {
-    sd.local_mask |= OPTIMISTIC_EXECUTION;
+  if (execute_optimistic) {
+    sd.local_mask |= OUT_OF_ORDER;
   }
-  sd.pq_pos = InsertQueue(this);
-  bool can_execute = sd.local_mask & (OPTIMISTIC_EXECUTION | KEYLOCK_ACQUIRED);
+  bool can_execute = (sd.local_mask & (OUT_OF_ORDER | KEYLOCK_ACQUIRED)) || shard->txq()->Empty();
   if (can_execute) RunInShard(shard);
-
+  else 
+    sd.pq_pos = InsertQueue(this);
   return true;
 }
 
 bool Transaction::RunInShard(EngineShard* shard) {
+  auto& sd = Slices_[SidToId(shard->shard_id())];
+  if (!(sd.local_mask & KEYLOCK_ACQUIRED)) {
+    if (!LockMultiShardCb(GetLockArgs(shard->shard_id()), shard)) {
+      UnlockMultiShardCb(GetLockArgs(shard->shard_id()), shard);
+      return false;
+    }
+    sd.local_mask |= KEYLOCK_ACQUIRED;    
+  }
   ShardId sid = shard->shard_id();
-  auto& sd = Slices_[SidToId(sid)];
   RunCallback(shard);
   FinishHop();
   return true;
@@ -221,8 +246,9 @@ cppcoro::AsyncTask Transaction::Finish() {
       auto e = EngineShard::tlocal();
       UnlockMultiShardCb(GetLockArgs(sid), e);
       sd.local_mask &= ~KEYLOCK_ACQUIRED;
-      sd.local_mask &= ~OPTIMISTIC_EXECUTION;
-      e->txq()->Remove(sd.pq_pos);
+      sd.local_mask &= ~OUT_OF_ORDER;
+      if (sd.pq_pos != TxQueue::kEnd)
+        e->txq()->Remove(sd.pq_pos);
       co_return;
     });
   coordinator_state_ = COORD_CANCELLED;

@@ -61,11 +61,8 @@ public:
 
   enum LocalMask : uint16_t {
     ACTIVE = 1,
-    OPTIMISTIC_EXECUTION = 1 << 1, // 乐观执行
-    OUT_OF_ORDER = 1 << 2,  // 顺序执行
+    OUT_OF_ORDER = 1 << 2,  // 乱序执行
     KEYLOCK_ACQUIRED = 1 << 3, // 锁已获取
-    WAS_SUSPENDED = 1 << 4, // 已挂起
-    AWAKED_Q = 1 << 5, // 已唤醒队列
   };
 
 
@@ -199,10 +196,6 @@ public:
   IntentLock::Mode LockMode() const;
 
   std::string_view Name() const;
-
-
-
-
   State GetState() const { return state_; }
   uint8_t GetCoordinatorState() const { return coordinator_state_; }
   void SetState(State new_state) { state_ = new_state; }
@@ -276,8 +269,7 @@ private:
   cppcoro::AsyncTask Finish();
   void RunCallback(EngineShard* shard);
 
-
-
+  bool isInline();
 
   void InitSlice();
 

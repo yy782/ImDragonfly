@@ -40,13 +40,12 @@ void EngineShard::Shutdown() {
 }
 
 void EngineShard::PollExecution(Transaction* trans) {
+    (void)trans;
     while (!txq_.Empty()) {
         auto tx = txq_.Front();
-        if (tx->IsActive(shard_id_)) {
-            bool concluded = tx->RunInShard(this);
-            if (!concluded) {
-                break;
-            }
+        bool concluded = tx->RunInShard(this);
+        if (!concluded) {
+            break;
         }
         txq_.PopFront();
     }
