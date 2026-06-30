@@ -60,9 +60,9 @@ public:
 #endif
                     
                     RecvBuf_.hasWritten(r);
-                    Com_ = RecvBuf_.ParseRESP();
-                    if (Com_.empty()) continue;
-                    args_ = ::cmn::CmdArgList(Com_);
+                    auto& com = RecvBuf_.ParseRESP();
+                    if (com.empty()) continue;
+                    args_ = ::cmn::CmdArgList(com);
                     
                     // VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
                     
@@ -172,9 +172,7 @@ private:
     base::UringSocket socket_; 
     RESP_Buf RecvBuf_;
     RESP_Buf SendBuf_;
-    std::vector<std::string_view> Com_;
     ::cmn::CmdArgList args_;
-
     ConnectionContext context_;
     std::unique_ptr<Transaction> transaction_;   
     bool is_multi_command = false;
