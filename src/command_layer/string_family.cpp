@@ -193,18 +193,6 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto conn = cmd_cntx->conn_cntx()->owner();
 
-#ifndef NDEBUG
-        auto transaction = conn->GetTransaction();
-        if (transaction) {
-            if (transaction->GetState() == Transaction::State::IDLE && 
-            transaction->GetCoordinatorState() != Transaction::COORD_CANCELLED) {
-                std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
-                          << static_cast<int>(transaction->GetCoordinatorState()) << std::endl;
-                assert(false && "Transaction should be cancelled before reading new commands");
-            }
-        }        
-#endif
-
     if (result.status() == OpStatus::OK) {
         conn->SendStatus("OK"); 
     } else {

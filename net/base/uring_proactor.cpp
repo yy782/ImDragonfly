@@ -4,55 +4,97 @@
 #include <cstring>
 #include <glog/logging.h>
 #include <mimalloc.h>
+#include <sys/syscall.h>
+#include <bitset>
+
+#define VPRO(verbosity) VLOG(verbosity) << "PRO[" << GetPoolIndex() << "] "
 
 namespace base {
 
-struct UringProactor::io_uring_ring {
-    struct io_uring ring;
-    io_uring_ring() { memset(&ring, 0, sizeof(ring)); }
-    ~io_uring_ring() { io_uring_queue_exit(&ring); }
-};
+namespace {
 
+void wait_for_cqe(io_uring* ring, unsigned wait_nr, __kernel_timespec* ts) {
+    struct io_uring_cqe* cqe_ptr = nullptr;
+    int res = io_uring_wait_cqes(ring, &cqe_ptr, wait_nr, ts, nullptr);
+    if (res < 0) {
+        res = -res;
+        LOG_IF(ERROR, res != EAGAIN && res != EINTR && res != ETIME) 
+            << "wait_for_cqe error: " << strerror(res);
+    }
+}
+
+constexpr uint16_t kCqeBatchLen = 128;
+constexpr size_t kAlign = 4096;
+
+} // namespace
 
 
 UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size)
     : thread_index_(index)
     , task_queue_(queue_size)
-    , pending_ops_(std::make_unique<base::mpmc_bounded_queue<PendingOp>>(queue_size))
     , running_(false)
     , stop_(false)
+    , msgring_supported_f_(0)
+    , poll_first_(0)
+    , taskrun_flag_f_(0)
 { 
     LOG(INFO) << "Initializing UringProactor index=" << index 
               << ", queue_size=" << queue_size 
               << ", ring_size=" << ring_size;
-    
-    // 初始化 io_uring
+
     ring_ = std::make_unique<io_uring_ring>();
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags |= IORING_SETUP_SINGLE_ISSUER;  // 单线程提交，消除内部锁 (kernel 6.0+)
-    params.flags |= IORING_SETUP_COOP_TASKRUN;    // 协作式 task_work，减少不必要唤醒 (kernel 5.19+)
-    
-    int ret = io_uring_queue_init_params(ring_size, &ring_->ring, &params);
-    if (ret < 0) {
-        LOG(FATAL) << "io_uring_init failed: " << strerror(-ret);
+
+    msgring_supported_f_ = 0;
+    poll_first_ = 0;
+    taskrun_flag_f_ = 0;
+
+    params.flags |= IORING_SETUP_SUBMIT_ALL;
+    poll_first_ = 1;
+
+    params.flags |= (IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_COOP_TASKRUN |
+                     IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_SINGLE_ISSUER);
+    taskrun_flag_f_ = 1;
+
+    int init_res = io_uring_queue_init_params(ring_size, &ring_->ring, &params);
+    if (init_res < 0) {
+        init_res = -init_res;
+        if (init_res == ENOMEM) {
+            LOG(ERROR) << "io_uring does not have enough memory. Increase max locked memory limit.";
+            exit(1);
+        }
+        LOG(FATAL) << "Error initializing io_uring: (" << init_res << ") " << strerror(init_res);
     }
+
+    io_uring_probe* uring_probe = io_uring_get_probe_ring(&ring_->ring);
+    msgring_supported_f_ = io_uring_opcode_supported(uring_probe, IORING_OP_MSG_RING);
+    io_uring_free_probe(uring_probe);
+    VLOG_IF(1, msgring_supported_f_) << "msgring supported!";
+
+    unsigned req_feats = IORING_FEAT_SINGLE_MMAP | IORING_FEAT_FAST_POLL | IORING_FEAT_NODROP;
+    CHECK_EQ(req_feats, params.features & req_feats)
+        << "Required io_uring feature is not present in the kernel";
+
     ring_fd_ = ring_->ring.ring_fd;
     VLOG(1) << "io_uring initialized, ring_fd=" << ring_fd_;
-    
-    // 创建 eventfd
-    event_fd_ = eventfd(0, EFD_NONBLOCK);
+
+    event_fd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     if (event_fd_ < 0) {
         LOG(FATAL) << "eventfd failed: " << strerror(errno);
     }
     VLOG(1) << "eventfd created, fd=" << event_fd_;
-    
-    // 注册 eventfd 到 io_uring
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
-    io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
-    io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(WAKEUP_COOKIE));
-    io_uring_submit(&ring_->ring);
-    
+
+    size_t sz = ring_->ring.sq.ring_sz + params.sq_entries * sizeof(struct io_uring_sqe);
+    LOG_FIRST_N(INFO, 1) << "IORing with " << params.sq_entries << " entries, allocated " << sz
+                         << " bytes, cq_entries is " << *ring_->ring.cq.kring_entries;
+
+    centries_.resize(params.sq_entries);
+    next_free_ce_ = 0;
+    for (size_t i = 0; i < centries_.size() - 1; ++i) {
+        centries_[i].index = i + 1;
+    }
+
     LOG(INFO) << "UringProactor index=" << index << " initialized successfully";
 }
 
@@ -63,156 +105,227 @@ UringProactor::~UringProactor() {
     }
 }
 
-void UringProactor::Wakeup() {
-    uint64_t val = 1;
-    write(event_fd_, &val, sizeof(val));
+void UringProactor::WakeupIfNeeded() {
+    auto current = tq_seq_.fetch_add(2, std::memory_order_acq_rel);
+    if (current == WAIT_SECTION_STATE) {
+        WakeRing();
+    } else {
+        tq_wakeup_skipped_ev_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
-void UringProactor::DrainTasks() {
-    task_queue_.TryDrain();
+void UringProactor::WakeRing() {
+    tq_wakeup_ev_.fetch_add(1, std::memory_order_relaxed);
+
+    static const uint64_t wake_val = 1;
+    CHECK_EQ(8, write(event_fd_, &wake_val, sizeof(wake_val)));
 }
 
-void UringProactor::SubmitPendingOps() {
-    PendingOp op;
-    while (pending_ops_->try_dequeue(op)) {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
-        if (!sqe) {
-            io_uring_submit(&ring_->ring);
-            sqe = io_uring_get_sqe(&ring_->ring);
-            if (!sqe) {
-                pending_ops_->try_enqueue(std::move(op));
-                continue;
+void UringProactor::ArmWakeupEvent() {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
+    CHECK_NOTNULL(sqe);
+
+    io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
+    sqe->user_data = kIgnoreIndex;
+    sqe->flags |= IOSQE_IO_LINK;
+
+    sqe = io_uring_get_sqe(&ring_->ring);
+    CHECK_NOTNULL(sqe);
+
+    static thread_local uint64_t donot_care;
+    io_uring_prep_read(sqe, event_fd_, &donot_care, 8, 0);
+    sqe->user_data = kWakeIndex;
+}
+
+bool UringProactor::DrainTasks() {
+    return task_queue_.TryDrain();
+}
+
+void UringProactor::RegrowCentries() {
+    size_t prev = centries_.size();
+    VLOG(1) << "RegrowCentries from " << prev << " to " << prev * 2
+            << " pending cb-cnt: " << pending_cb_cnt_;
+
+    centries_.resize(prev * 2);
+    next_free_ce_ = prev;
+    for (; prev < centries_.size() - 1; ++prev)
+        centries_[prev].index = prev + 1;
+}
+
+UringProactor::SubmitEntry UringProactor::GetSubmitEntry(CbType cb, uint32_t submit_tag) {
+    io_uring_sqe* res = io_uring_get_sqe(&ring_->ring);
+    if (res == NULL) {
+        int submitted = io_uring_submit(&ring_->ring);
+        if (submitted > 0) {
+            res = io_uring_get_sqe(&ring_->ring);
+        } else {
+            LOG(FATAL) << "Fatal error submitting to iouring: " << -submitted;
+        }
+    }
+
+    memset(res, 0, sizeof(io_uring_sqe));
+
+    if (cb) {
+        if (next_free_ce_ < 0) {
+            RegrowCentries();
+            DCHECK_GT(next_free_ce_, 0);
+        }
+        res->user_data = (next_free_ce_ + kUserDataCbIndex) | (uint64_t(submit_tag) << 32);
+        DCHECK_LT(unsigned(next_free_ce_), centries_.size());
+
+        auto& e = centries_[next_free_ce_];
+        DCHECK(!e.cb);
+        DVLOG(3) << "GetSubmitEntry: index: " << next_free_ce_;
+
+        next_free_ce_ = e.index;
+        e.cb = std::move(cb);
+        ++pending_cb_cnt_;
+    } else {
+        res->user_data = kIgnoreIndex | (uint64_t(submit_tag) << 32);
+    }
+
+    return SubmitEntry{res};
+}
+
+void UringProactor::ProcessCqeBatch(unsigned count, io_uring_cqe** cqes) {
+    for (unsigned i = 0; i < count; ++i) {
+        io_uring_cqe cqe = *cqes[i];
+
+        uint32_t user_data = cqe.user_data & 0xFFFFFFFF;
+        uint32_t user_tag = cqe.user_data >> 32;
+
+        if (user_data >= kUserDataCbIndex) {
+            if (cqe.user_data == UINT64_MAX) {
+                LOG(ERROR) << "Fatal error: cqe.user_data is UINT64_MAX, likely a kernel bug.";
+                exit(1);
             }
+
+            size_t index = user_data - kUserDataCbIndex;
+            DCHECK_LT(index, centries_.size());
+            auto& e = centries_[index];
+
+            DCHECK(e.cb) << index;
+
+            CbType func = std::move(e.cb);
+            e.index = next_free_ce_;
+            next_free_ce_ = index;
+            --pending_cb_cnt_;
+            func(cqe.res, cqe.flags);
+            continue;
         }
-        
-        switch (op.op_type) {
-        case 0: // accept
-            io_uring_prep_accept(sqe, op.fd, nullptr, nullptr, 0);
-            break;
-        case 1: // read
-            io_uring_prep_read(sqe, op.fd, op.buf, op.len, op.offset);
-            break;
-        case 2: // write
-            io_uring_prep_write(sqe, op.fd, op.buf, op.len, op.offset);
-            break;
-        case 3: // close
-            io_uring_prep_close(sqe, op.fd);
-            break;
+
+        if (cqe.res < 0 && cqe.res != -ECANCELED && cqe.res != -ETIME) {
+            LOG(WARNING) << "CQE error: " << -cqe.res << " cqe_type=" << user_tag;
         }
-        
-        // 存储协程句柄和 awaitable 指针
-        auto* data = static_cast<PendingOp*>(mi_malloc(sizeof(PendingOp)));
-        new (data) PendingOp{op};
-        io_uring_sqe_set_data(sqe, data);
 
+        if (user_data == kIgnoreIndex)
+            continue;
 
+        if (user_data == kWakeIndex) {
+            DCHECK_EQ(cqe.res, 8);
+            DVLOG(2) << "PRO[" << thread_index_ << "] Wakeup " << cqe.res << "/" << cqe.flags;
+            ArmWakeupEvent();
+            continue;
+        }
+
+        LOG(ERROR) << "Unrecognized user_data " << cqe.user_data;
     }
-    
-    int ret = io_uring_submit(&ring_->ring); 
-
-    if ( ret != 0 ) {
-        // TODO
-    }
-
 }
 
-void UringProactor::HandleCqe(struct io_uring_cqe* cqe) {
-    void* data = io_uring_cqe_get_data(cqe);
-    int res = cqe->res;
-    
-    
+void UringProactor::ReapCompletions(unsigned init_count, io_uring_cqe** cqes) {
+    DCHECK_GT(init_count, 0U);
+    unsigned batch_count = init_count;
+    do {
+        ProcessCqeBatch(batch_count, cqes);
+        io_uring_cq_advance(&ring_->ring, batch_count);
 
-    if (data == reinterpret_cast<void*>(WAKEUP_COOKIE)) {
-        // eventfd 唤醒事件，消耗掉它
-        uint64_t val;
-        read(event_fd_, &val, sizeof(val));
-        // 重新注册 poll
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_->ring);
-        io_uring_prep_poll_add(sqe, event_fd_, POLLIN);
-        io_uring_sqe_set_data(sqe, reinterpret_cast<void*>(WAKEUP_COOKIE));
-        io_uring_submit(&ring_->ring);
-        return;
-    }
-    
-
-    auto* op = static_cast<PendingOp*>(data);
-    if (!op) return;
-    
-    // 将结果设置到 Awaitable 对象中
-    if (op->awaitable) {
-        switch (op->op_type) {
-        case 0: { // accept
-            auto* awaitable = static_cast<UringSocket::AcceptAwaitable*>(op->awaitable);
-            awaitable->fd_ = res;
-            break;
-        }
-        case 1: { // read
-            auto* awaitable = static_cast<UringSocket::ReadAwaitable*>(op->awaitable);
-            awaitable->result_ = res;
-            break;
-        }
-        case 2: { // write
-            auto* awaitable = static_cast<UringSocket::WriteAwaitable*>(op->awaitable);
-            awaitable->result_ = res;
-            break;
-        }
-        }
-    }
-    
-    if (op->handle) {
-        op->handle.resume();
-    }
-    
-    mi_free(op);
+        batch_count = io_uring_peek_batch_cqe(&ring_->ring, cqes, kCqeBatchLen);
+    } while (batch_count > 0);
 }
 
 void UringProactor::loop() {
     loop_thread_id_ = util::Thread::current_tid();
     running_ = true;
     stop_ = false;
-    
+
     LOG(INFO) << "UringProactor index=" << thread_index_ << " event loop starting";
-    
-    struct __kernel_timespec idle_timeout;
-    idle_timeout.tv_sec = 0;
-    idle_timeout.tv_nsec = 50000000; // 50ms 空闲超时
-    
-    while (!stop_) {
-        // 1. 处理任务队列（优先级最高）
-        DrainTasks();
-        
-        // 2. 提交待处理的 I/O 操作
-        SubmitPendingOps();
-        
-        // 3. 根据是否有待处理事件选择超时策略
-        struct __kernel_timespec* ts;
-        struct __kernel_timespec zero_ts = {0, 0};
-        if (needs_wakeup_.test(std::memory_order_acquire)) {
-            // 有其他线程刚提交了新任务，快速轮询
-            needs_wakeup_.clear(std::memory_order_release);
-            ts = &zero_ts;
-        } else {
-            // 无新任务，用较长超时降低 CPU 使用
-            ts = &idle_timeout;
+
+    ArmWakeupEvent();
+
+    struct io_uring_cqe* cqes[kCqeBatchLen];
+    uint32_t tq_seq = 0;
+
+    while (true) {
+        int num_submitted = 0;
+        bool call_submit = true;
+
+        if (taskrun_flag_f_) {
+            unsigned sq_ready = io_uring_sq_ready(&ring_->ring);
+            bool taskrun_pending = IO_URING_READ_ONCE(*ring_->ring.sq.kflags) & IORING_SQ_TASKRUN;
+            call_submit = (sq_ready > 0) || taskrun_pending;
         }
-        
-        // 4. 等待完成事件并批量处理
-        struct io_uring_cqe* cqe = nullptr;
-        int ret = io_uring_wait_cqe_timeout(&ring_->ring, &cqe, ts);
-        
-        if (ret == 0 && cqe) {
-            HandleCqe(cqe);
-            io_uring_cqe_seen(&ring_->ring, cqe);
-            
-            struct io_uring_cqe* cqes[32];
-            unsigned int count = io_uring_peek_batch_cqe(&ring_->ring, cqes, 32);
-            for (unsigned int i = 0; i < count; ++i) {
-                HandleCqe(cqes[i]);
-                io_uring_cqe_seen(&ring_->ring, cqes[i]);
+
+        if (call_submit) {
+            num_submitted = io_uring_submit_and_get_events(&ring_->ring);
+        }
+
+        if (num_submitted == -EBUSY) {
+            VLOG(1) << "EBUSY " << io_uring_sq_ready(&ring_->ring);
+            num_submitted = 0;
+        } else if (num_submitted < 0 && num_submitted != -ETIME) {
+            LOG(DFATAL) << "Error submitting to iouring: " << -num_submitted;
+            continue;
+        }
+
+        tq_seq = tq_seq_.load(std::memory_order_acquire);
+
+        DrainTasks();
+
+        uint32_t cqe_count = io_uring_peek_batch_cqe(&ring_->ring, cqes, kCqeBatchLen);
+        if (cqe_count) {
+            ReapCompletions(cqe_count, cqes);
+            continue;
+        }
+
+        if (io_uring_sq_ready(&ring_->ring) > 0) {
+            continue;
+        }
+
+        if (stop_) {
+            break;
+        }
+
+        if (task_queue_.TryDrain()) {
+            continue;
+        }
+
+        if (io_uring_sq_ready(&ring_->ring) > 0) {
+            continue;
+        }
+
+        cqe_count = io_uring_peek_batch_cqe(&ring_->ring, cqes, kCqeBatchLen);
+        if (cqe_count) {
+            ReapCompletions(cqe_count, cqes);
+            continue;
+        }
+
+        if (stop_) {
+            break;
+        }
+
+        if (tq_seq_.compare_exchange_weak(tq_seq, WAIT_SECTION_STATE, std::memory_order_acq_rel,
+                                          std::memory_order_relaxed)) {
+            if (stop_) {
+                tq_seq_.store(0, std::memory_order_release);
+                break;
             }
+            wait_for_cqe(&ring_->ring, 1, nullptr);
+
+            tq_seq = 0;
+            tq_seq_.store(0, std::memory_order_release);
         }
     }
-    
+
     running_ = false;
     LOG(INFO) << "UringProactor index=" << thread_index_ << " event loop stopped";
 }
@@ -220,7 +333,7 @@ void UringProactor::loop() {
 void UringProactor::stop() {
     stop_ = true;
     task_queue_.Shutdown();
-    Wakeup();
+    WakeRing();
     
     if (util::Thread::current_tid() != loop_thread_id_ && running_) {
         while (running_) {
@@ -230,83 +343,56 @@ void UringProactor::stop() {
 }
 
 void UringProactor::SubmitAccept(int fd, std::coroutine_handle<> handle, void* awaitable) {
-    PendingOp op;
-    op.fd = fd;
-    op.op_type = 0;
-    op.handle = handle;
-    op.awaitable = awaitable;
-    
-    if (!pending_ops_->try_enqueue(std::move(op))) {
+    auto cb = [handle, awaitable](IoResult res, uint32_t) {
         if (awaitable) {
             auto* a = static_cast<UringSocket::AcceptAwaitable*>(awaitable);
-            a->fd_ = -EBUSY;
+            a->fd_ = res;
         }
-        handle.resume();
-        return;
-    }
-    
-    // 仅在跨线程提交时才需要写 eventfd 唤醒 loop
-    if (util::Thread::current_tid() != loop_thread_id_) {
-        Wakeup();
-    } else {
-        needs_wakeup_.test_and_set(std::memory_order_release);
-    }
+        if (handle) {
+            handle.resume();
+        }
+    };
+
+    SubmitEntry se = GetSubmitEntry(std::move(cb), 0);
+    se.PrepAccept(fd);
+
+    WakeupIfNeeded();
 }
 
 void UringProactor::SubmitRead(int fd, void* buf, size_t len, off_t offset,
-                                std::coroutine_handle<> handle, void* awaitable) {
-    PendingOp op;
-    op.fd = fd;
-    op.op_type = 1;
-    op.buf = buf;
-    op.len = len;
-    op.offset = offset;
-    op.handle = handle;
-    op.awaitable = awaitable;
-    
-    if (!pending_ops_->try_enqueue(std::move(op))) {
+                               std::coroutine_handle<> handle, void* awaitable) {
+    auto cb = [handle, awaitable](IoResult res, uint32_t) {
         if (awaitable) {
             auto* a = static_cast<UringSocket::ReadAwaitable*>(awaitable);
-            a->result_ = -EBUSY;
+            a->result_ = res;
         }
-        handle.resume();
-        return;
-    }
-    
-    if (util::Thread::current_tid() != loop_thread_id_) {
-        Wakeup();
-    } else {
-        needs_wakeup_.test_and_set(std::memory_order_release);
-    }
+        if (handle) {
+            handle.resume();
+        }
+    };
+
+    SubmitEntry se = GetSubmitEntry(std::move(cb), 1);
+    se.PrepRead(fd, buf, len, offset);
+
+    WakeupIfNeeded();
 }
 
 void UringProactor::SubmitWrite(int fd, const void* buf, size_t len, off_t offset,
-                                 std::coroutine_handle<> handle, void* awaitable) {
-    PendingOp op;
-    op.fd = fd;
-    op.op_type = 2;
-    op.buf = const_cast<void*>(buf);
-    op.len = len;
-    op.offset = offset;
-    op.handle = handle;
-    op.awaitable = awaitable;
-    
-    if (!pending_ops_->try_enqueue(std::move(op))) {
+                                std::coroutine_handle<> handle, void* awaitable) {
+    auto cb = [handle, awaitable](IoResult res, uint32_t) {
         if (awaitable) {
             auto* a = static_cast<UringSocket::WriteAwaitable*>(awaitable);
-            a->result_ = -EBUSY;
+            a->result_ = res;
         }
-        handle.resume();
-        return;
-    }
-    
-    if (util::Thread::current_tid() != loop_thread_id_) {
-        Wakeup();
-    } else {
-        needs_wakeup_.test_and_set(std::memory_order_release);
-    }
+        if (handle) {
+            handle.resume();
+        }
+    };
+
+    SubmitEntry se = GetSubmitEntry(std::move(cb), 2);
+    se.PrepWrite(fd, buf, len, offset);
+
+    WakeupIfNeeded();
 }
-
-
 
 } // namespace base
