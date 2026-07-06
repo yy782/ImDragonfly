@@ -37,7 +37,12 @@ public:
             return false;
         }
 
-        Wakeup();
+        // 跨线程才需要写 eventfd，同线程设置 flag 即可
+        if (util::Thread::current_tid() != loop_thread_id_) {
+            Wakeup();
+        } else {
+            needs_wakeup_.test_and_set(std::memory_order_release);
+        }
         return true;
     }
     
@@ -91,6 +96,7 @@ private:
     
     std::atomic<bool> running_;
     std::atomic<bool> stop_;
+    std::atomic_flag needs_wakeup_ = ATOMIC_FLAG_INIT;
     pthread_t loop_thread_id_;
     std::mutex submit_mutex_;
     

@@ -1,6 +1,7 @@
 // network/redis_server.h
 #pragma once // redis_server.hpp  
 #include <glog/logging.h>
+#include <netinet/tcp.h>
 #include "sharding/engine_shard_set.hpp"
 #include "redis/facade/resp_buf.hpp"
 #include "redis/facade/reply_builder.hpp"
@@ -13,6 +14,7 @@
 #include "base/uring_proactor_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
+#include <memory>
 #include <cstring>
 #include <exception>
 namespace dfly{
@@ -35,7 +37,7 @@ public:
     }
     
     UringProactorPtr GetProactor() { return socket_.Proactor(); }
-    Transaction* GetTransaction() { return transaction_.get(); }
+    Transaction* GetTransaction() { return &transaction_; }
 
     cppcoro::AsyncTask DoRead(){
         try{
@@ -47,21 +49,18 @@ public:
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
                 assert(util::Thread::current_tid() == pId_);
                 if (r > 0) {
+#ifndef NDEBUG
 
-
-#ifndef DEBUG
-        if (transaction_) {
-            if (transaction_->GetState() == Transaction::State::IDLE && (
-            transaction_->GetCoordinatorState() != Transaction::COORD_CANCELLED && 
-            transaction_->GetCoordinatorState() != 0 )
+        if (transaction_.GetState() == Transaction::State::IDLE && (
+        transaction_.GetCoordinatorState() != Transaction::COORD_CANCELLED && 
+        transaction_.GetCoordinatorState() != 0 )
         ) {
-                std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
-                          << static_cast<int>(transaction_->GetCoordinatorState()) << std::endl;
-                assert(false && "Transaction should be cancelled before reading new commands");
-            }
-        }        
-#endif
-                    
+            std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
+                        << static_cast<int>(transaction_.GetCoordinatorState()) << std::endl;
+            assert(false && "Transaction should be cancelled before reading new commands");
+        }
+              
+#endif            
                     RecvBuf_.hasWritten(r);
                     auto& com = RecvBuf_.ParseRESP();
                     if (com.empty()) continue;
@@ -81,18 +80,19 @@ public:
                     is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
                                             cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
 
-                    if (!transaction_ || transaction_->GetState() == Transaction::State::IDLE) {
-                        transaction_.reset(new Transaction(ci));
-                        transaction_->InitByArgs(&context_, args_);
+                    if (transaction_.GetState() == Transaction::State::IDLE) {
+                        std::destroy_at(&transaction_);                
+                        std::construct_at(&transaction_, ci);         
+                        transaction_.InitByArgs(&context_, args_);
                     }else {
-                        if (transaction_->GetState() == Transaction::State::MULTI && !is_multi_command) {
-                            transaction_->QueueCommand(ci, args_);
+                        if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
+                            transaction_.QueueCommand(ci, args_);
                             SendStatus("QUEUED");
                             continue;
                         }               
                     }
 
-                    ci->Invoke(&transaction_->GetCommandContext(), args_); 
+                    ci->Invoke(&transaction_.GetCommandContext(), args_); 
                 }
                 else if (r == 0) { 
                     LOG(INFO) << "Connection closed by client, fd: " << fd;
@@ -101,7 +101,7 @@ public:
                     break;
                 }
                 else {
-                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
+                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno) << " r:" << r;
                 }            
             }
         } catch(const std::exception& e) {
@@ -151,7 +151,6 @@ private:
         //     transaction_->FinishOrDiscardMulti();
         // }
         p->DispatchBrief([this, s = std::move(s)](){
-            LOG(INFO) << "CI:" << args_[0] << " Send: " << s;
             SendBuf_.append(s);
             DoWrite();     
         });
@@ -178,7 +177,7 @@ private:
     RESP_Buf SendBuf_;
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
-    std::unique_ptr<Transaction> transaction_;   
+    Transaction transaction_;   
     bool is_multi_command = false;
 
     pthread_t pId_;
@@ -240,6 +239,13 @@ private:
             while(isRuning){
                 auto fd = co_await ListenSocket_.AsyncAccept();
                 if (fd > 0){
+                    // 禁用 Nagle 算法，Redis 响应多为小包，避免 40ms+ 延迟
+                    int nodelay = 1;
+                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                    // 启用 Quick ACK，进一步降低延迟
+                    int quickack = 1;
+                    setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
+
                     std::string addr = base::AddressToString(base::Address(fd));
                     LOG(INFO) << "Accepted new connection, addr: " << addr;
 

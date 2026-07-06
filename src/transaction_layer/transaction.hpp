@@ -43,6 +43,7 @@ public:
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
+
   ~Transaction();
 
   friend void intrusive_ptr_add_ref(Transaction* trans) noexcept {
@@ -64,7 +65,7 @@ public:
   };
 
 
-  explicit Transaction(const CommandId* cid);
+  Transaction(const CommandId* cid = nullptr);
 
   void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
 
@@ -257,6 +258,7 @@ public:
     COORD_SCHED = 1, // 协调器已调度
     COORD_CONCLUDING = 1 << 1, // 协调器正在结束
     COORD_CANCELLED = 1 << 2, // 协调器已取消
+    COORD_INLINE = 1 << 3, // 内联
   };
 
 private:

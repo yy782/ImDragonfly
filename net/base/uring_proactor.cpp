@@ -30,6 +30,8 @@ UringProactor::UringProactor(uint32_t index, size_t queue_size, size_t ring_size
     ring_ = std::make_unique<io_uring_ring>();
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
+    params.flags |= IORING_SETUP_SINGLE_ISSUER;  // 单线程提交，消除内部锁 (kernel 6.0+)
+    params.flags |= IORING_SETUP_COOP_TASKRUN;    // 协作式 task_work，减少不必要唤醒 (kernel 5.19+)
     
     int ret = io_uring_queue_init_params(ring_size, &ring_->ring, &params);
     if (ret < 0) {
@@ -171,9 +173,9 @@ void UringProactor::loop() {
     
     LOG(INFO) << "UringProactor index=" << thread_index_ << " event loop starting";
     
-    struct __kernel_timespec timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_nsec = 1000000; // 1ms
+    struct __kernel_timespec idle_timeout;
+    idle_timeout.tv_sec = 0;
+    idle_timeout.tv_nsec = 50000000; // 50ms 空闲超时
     
     while (!stop_) {
         // 1. 处理任务队列（优先级最高）
@@ -182,9 +184,21 @@ void UringProactor::loop() {
         // 2. 提交待处理的 I/O 操作
         SubmitPendingOps();
         
-        // 3. 等待完成事件并批量处理
+        // 3. 根据是否有待处理事件选择超时策略
+        struct __kernel_timespec* ts;
+        struct __kernel_timespec zero_ts = {0, 0};
+        if (needs_wakeup_.test(std::memory_order_acquire)) {
+            // 有其他线程刚提交了新任务，快速轮询
+            needs_wakeup_.clear(std::memory_order_release);
+            ts = &zero_ts;
+        } else {
+            // 无新任务，用较长超时降低 CPU 使用
+            ts = &idle_timeout;
+        }
+        
+        // 4. 等待完成事件并批量处理
         struct io_uring_cqe* cqe = nullptr;
-        int ret = io_uring_wait_cqe_timeout(&ring_->ring, &cqe, &timeout);
+        int ret = io_uring_wait_cqe_timeout(&ring_->ring, &cqe, ts);
         
         if (ret == 0 && cqe) {
             HandleCqe(cqe);
@@ -197,7 +211,6 @@ void UringProactor::loop() {
                 io_uring_cqe_seen(&ring_->ring, cqes[i]);
             }
         }
-        // 超时或错误则继续循环，再次处理任务队列
     }
     
     running_ = false;
@@ -224,7 +237,6 @@ void UringProactor::SubmitAccept(int fd, std::coroutine_handle<> handle, void* a
     op.awaitable = awaitable;
     
     if (!pending_ops_->try_enqueue(std::move(op))) {
-        // 队列满，直接恢复协程并返回错误
         if (awaitable) {
             auto* a = static_cast<UringSocket::AcceptAwaitable*>(awaitable);
             a->fd_ = -EBUSY;
@@ -233,7 +245,12 @@ void UringProactor::SubmitAccept(int fd, std::coroutine_handle<> handle, void* a
         return;
     }
     
-    Wakeup();
+    // 仅在跨线程提交时才需要写 eventfd 唤醒 loop
+    if (util::Thread::current_tid() != loop_thread_id_) {
+        Wakeup();
+    } else {
+        needs_wakeup_.test_and_set(std::memory_order_release);
+    }
 }
 
 void UringProactor::SubmitRead(int fd, void* buf, size_t len, off_t offset,
@@ -256,7 +273,11 @@ void UringProactor::SubmitRead(int fd, void* buf, size_t len, off_t offset,
         return;
     }
     
-    Wakeup();
+    if (util::Thread::current_tid() != loop_thread_id_) {
+        Wakeup();
+    } else {
+        needs_wakeup_.test_and_set(std::memory_order_release);
+    }
 }
 
 void UringProactor::SubmitWrite(int fd, const void* buf, size_t len, off_t offset,
@@ -279,7 +300,11 @@ void UringProactor::SubmitWrite(int fd, const void* buf, size_t len, off_t offse
         return;
     }
     
-    Wakeup();
+    if (util::Thread::current_tid() != loop_thread_id_) {
+        Wakeup();
+    } else {
+        needs_wakeup_.test_and_set(std::memory_order_release);
+    }
 }
 
 

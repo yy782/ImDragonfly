@@ -193,7 +193,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto conn = cmd_cntx->conn_cntx()->owner();
 
-#ifndef DEBUG
+#ifndef NDEBUG
         auto transaction = conn->GetTransaction();
         if (transaction) {
             if (transaction->GetState() == Transaction::State::IDLE && 
