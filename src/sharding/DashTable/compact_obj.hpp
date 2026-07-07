@@ -150,29 +150,7 @@ public:
     uint64_t HashCode() const;
     static uint64_t HashCode(std::string_view str);
 
-    void Reset() {
-        switch (tag_)
-        {
-            using std::string;
-            case 0:
-                break;
-            case INT_TAG:
-                break;
-            case STR_TAG:
-                u_.str_.~string(); 
-                break;
-            case TTL_STR_TAG:
-                u_.ttl_str_.~TtlString();
-                break;
-            case ROBJ_TAG:
-                u_.r_obj_.~RobjWrapper();
-                break;
-            default:
-                LOG(FATAL) << "Invalid tag: " << tag_;
-                break;
-        }
-        tag_ = 0;
-    }
+
 
 
     void SetString(std::string_view str) {
@@ -247,7 +225,29 @@ protected:
         tag_ = tag;
     }
 
-
+    void Reset() {
+        switch (tag_)
+        {
+            using std::string;
+            case 0:
+                break;
+            case INT_TAG:
+                break;
+            case STR_TAG:
+                u_.str_.~string(); 
+                break;
+            case TTL_STR_TAG:
+                u_.ttl_str_.~TtlString();
+                break;
+            case ROBJ_TAG:
+                u_.r_obj_.~RobjWrapper();
+                break;
+            default:
+                LOG(FATAL) << "Invalid tag: " << tag_;
+                break;
+        }
+        tag_ = 0;
+    }
 
     union U {
         std::string str_; // string不是POD类型，不能强制对齐， 如果使用ssd字符串会好些
