@@ -2,9 +2,8 @@
 #pragma once // redis_server.hpp  
 #include <glog/logging.h>
 #include "sharding/engine_shard_set.hpp"
-#include "redis/facade/resp_buf.hpp"
 #include "redis/facade/reply_builder.hpp"
-
+#include "redis/facade/ParseRESP.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
 
@@ -46,11 +45,10 @@ public:
         int fd = socket_.fd();
         // LOG(INFO) << "New session created for fd: " << fd;
         while (true) {
-            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+            res_ = co_await socket_.AsyncRead();
             assert(util::Thread::current_tid() == pId_);
-            if (r > 0) {            
-                RecvBuf_.hasWritten(r);
-                auto& com = RecvBuf_.ParseRESP();
+            if (res_.bytes > 0) {            
+                auto& com = p.Parse(res_.data, res_.bytes);
                 if (com.empty()) continue;
                 args_ = ::cmn::CmdArgList(com);
                 
@@ -81,15 +79,17 @@ public:
 
                 ci->Invoke(&transaction_->GetCommandContext(), args_); 
             }
-            else if (r == 0) { 
+            else if (res_.bytes == 0) { 
                 LOG(INFO) << "Connection closed by client, fd: " << fd;
                 break;
             }
             else {
-                LOG(ERROR) << "Read error on fd: " << fd << ", error" << r;
+                LOG(ERROR) << "Read error on fd: " << fd << ", error" << res_.bytes;
                 break;
             }            
         }
+        auto t = transaction_.get();
+        assert(t && t->GetCoordinatorState() == Transaction::COORD_CANCELLED);
         socket_.Close();
         context_.owner().reset();
         co_return;  
@@ -135,23 +135,16 @@ private:
         //     s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
         //     transaction_->FinishOrDiscardMulti();
         // }
-        p->DispatchBrief([this, s = std::move(s)](){
-            LOG(INFO) << "CI:" << args_[0] << " Send: " << s;
-            SendBuf_.append(s);
+        multi_res_ = std::move(s);
+        p->DispatchBrief([this] () mutable {
             DoWrite();     
         });
         return;         
     }
-    cppcoro::AsyncTask DoWrite() {
+    cppcoro::AsyncTask DoWrite() { 
         assert(util::Thread::current_tid() == pId_);
-        while (SendBuf_.readable_size()) {
-            auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
-            if (wr>0) {
-                SendBuf_.retrieve(wr);
-            }else {
-                // TODO
-            }
-        }
+        auto wr = co_await socket_.AsyncWrite(multi_res_.data(), multi_res_.size(), -1);
+        assert(wr == multi_res_.size());
         co_return;
     }
 
@@ -159,13 +152,13 @@ private:
     friend class ConnectionContext;
     
     base::UringSocket socket_; 
-    RESP_Buf RecvBuf_;
-    RESP_Buf SendBuf_;
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
-    std::unique_ptr<Transaction> transaction_;   
+    std::unique_ptr<Transaction> transaction_;  
+    ParseRESP p; 
     bool is_multi_command = false;
-
+    base::RecvResult res_;
+    std::string multi_res_;
     pthread_t pId_;
 };
 
@@ -196,7 +189,7 @@ public:
         config.use_sqpoll = false;            // 禁用SQPOLL：Redis需要低延迟响应，而非纯吞吐量
         config.use_registered_bufs = true;    // 启用注册缓冲区：零拷贝接收
         config.registered_buf_count = 1024;   // 更多缓冲区：支持高并发连接
-        config.registered_buf_size = 16384;   // 16KB缓冲区：适合Redis命令大小（通常小于16KB）
+        config.registered_buf_size = 100;   
         config.cqe_batch_size = 128;          // 大批次处理：提高吞吐量
         
         return config;
@@ -247,14 +240,15 @@ private:
                 auto p = NextProactor();
                 VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
 
-                auto session = std::make_shared<RedisSession>(fd, p);
                 
-                bool success = p->DispatchBrief([session](){
+                
+                bool success = p->DispatchBrief([fd, p] () {
+                    auto session = std::make_shared<RedisSession>(fd, p);
                     session->DoRead();
                 });
                 if (!success) {
                     LOG(ERROR) << "Failed to dispatch session to proactor: " << p->GetPoolIndex();
-                    session->socket().Close();
+                    close(fd);
                 }                    
             } else if (fd < 0) {
                 LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);

@@ -20,6 +20,7 @@ UringProactorPool::UringProactorPool(int num_threads,
 }
 
 UringProactorPool::~UringProactorPool() {
+    assert(std::uncaught_exceptions() == 0);
     Shutdown();
 }
 
@@ -58,7 +59,7 @@ void UringProactorPool::Shutdown() {
 
     // Signal all proactors to stop
     for (auto& p : proactors_) {
-        p->Shutdown();
+        p->stop();
     }
 
     // Join all threads
@@ -80,7 +81,7 @@ void UringProactorPool::ThreadLoop(int index) {
     LOG(INFO) << "Proactor thread " << index << " started";
     proactors_[index] = std::make_shared<UringProactor>(config_, index);
     // Enter the proactor's event loop — blocks until Shutdown()
-    proactors_[index]->Run();
+    proactors_[index]->loop();
 
     LOG(INFO) << "Proactor thread " << index << " exited";
 }

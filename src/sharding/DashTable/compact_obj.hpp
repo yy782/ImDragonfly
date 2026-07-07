@@ -149,13 +149,10 @@ public:
 
     uint64_t HashCode() const;
     static uint64_t HashCode(std::string_view str);
-
-
-
-
     void SetString(std::string_view str) {
-        u_.str_ = str;
-        SetMeta(STR_TAG);
+            u_.str_ = str;
+            SetMeta(STR_TAG);
+        
     }
     void SetInt(int64_t val) {
         u_.ival_ = val;
@@ -234,7 +231,7 @@ protected:
             case INT_TAG:
                 break;
             case STR_TAG:
-                u_.str_.~string(); 
+                u_.str_ = ""; 
                 break;
             case TTL_STR_TAG:
                 u_.ttl_str_.~TtlString();

@@ -35,11 +35,7 @@ inline TxQueue::Iterator InsertQueue(Transaction* tx) {
   }
 }
 
-uint64_t LockTag::Fingerprint() const {
-  return ::dfly::Fingerprint(str_);
-}
 
-LockTag::LockTag(std::string_view key) : str_(key) {}
 
 
 Transaction::Transaction(const CommandId* cid) : cid_(cid) {
@@ -250,10 +246,11 @@ cppcoro::AsyncTask Transaction::Finish() {
         e->txq()->Remove(sd.pq_pos);
       co_return;
     });
-  coordinator_state_ = COORD_CANCELLED;
+  coordinator_state_ = COORD_CANCELLED;  
   if (coro_handle_) {
     coro_handle_.resume();
   }
+  
   co_return;
 }
 

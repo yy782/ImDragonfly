@@ -12,51 +12,31 @@ namespace base {
 class UringSocket {
 public:
     UringSocket(UringProactorPtr proactor, int fd)
-        : proactor_(std::move(proactor)), fd_(fd) {}
-    
-    // Move constructor
-    UringSocket(UringSocket&& other) noexcept
-        : proactor_(std::move(other.proactor_)), fd_(other.fd_) {
-        other.fd_ = -1;
-    }
-    
-    // Move assignment
-    UringSocket& operator=(UringSocket&& other) noexcept {
-        if (this != &other) {
-            Close();
-            proactor_ = std::move(other.proactor_);
-            fd_ = other.fd_;
-            other.fd_ = -1;
+        : proactor_(std::move(proactor)), fd_(fd), buf_idx_(proactor_->AcquireRegBuf()) {
+            assert(buf_idx_ >= 0 && buf_idx_ < static_cast<int>(proactor_->reg_buf_count()));
         }
-        return *this;
-    }
-    
-    // Non-copyable
-    UringSocket(const UringSocket&) = delete;
-    UringSocket& operator=(const UringSocket&) = delete;
     
     ~UringSocket() {
+        assert(std::uncaught_exceptions() == 0);
         if (fd_ >= 0) {
             Close();
         }
+        proactor_->ReleaseRegBuf(buf_idx_);
     }
     
     // Socket operations using the proactor
-    AcceptAwaitable AsyncAccept() {
+    IoAwaitable AsyncAccept() {
         return proactor_->AsyncAccept(fd_);
     }
     
-    IoAwaitable AsyncRead(void* buf, size_t len, int flags = 0) {
-        return proactor_->AsyncRecvRaw(fd_, buf, len);
+    RecvAwaitable AsyncRead() {
+        return proactor_->AsyncRecvFixed(fd_, buf_idx_);
     }
     
     IoAwaitable AsyncWrite(const void* buf, size_t len, int flags = 0) {
         return proactor_->AsyncSend(fd_, buf, len);
     }
     
-    IoAwaitable AsyncClose() {
-        return proactor_->AsyncClose(fd_);
-    }
     
     // Utility methods
     int fd() const { return fd_; }
@@ -64,9 +44,7 @@ public:
     
     void Close() {
         if (fd_ >= 0) {
-            auto close_awaitable = AsyncClose();
-            // We can't wait for the close to complete here, but we can
-            // at least initiate it and mark the fd as closed
+            close(fd_);
             fd_ = -1;
         }
     }
@@ -74,6 +52,7 @@ public:
 private:
     UringProactorPtr proactor_;
     int fd_ = -1;
+    int buf_idx_ = -1;  // Index of the registered buffer used for zero-copy receive
 };
 
 } // namespace base

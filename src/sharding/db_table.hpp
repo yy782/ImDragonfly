@@ -40,7 +40,9 @@ public:
 
     void Release(LockFp fp, IntentLock::Mode mode) {
         auto it = locks_.find(fp);
-        assert(it != locks_.end());
+        if (it == locks_.end()) {
+            return;
+        }
         it->second.Release(mode);
         if (it->second.IsFree())
             locks_.erase(it);
