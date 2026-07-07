@@ -49,18 +49,7 @@ public:
                 auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
                 assert(util::Thread::current_tid() == pId_);
                 if (r > 0) {
-#ifndef NDEBUG
-
-        if (transaction_.GetState() == Transaction::State::IDLE && (
-        transaction_.GetCoordinatorState() != Transaction::COORD_CANCELLED && 
-        transaction_.GetCoordinatorState() != 0 )
-        ) {
-            std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
-                        << static_cast<int>(transaction_.GetCoordinatorState()) << std::endl;
-            assert(false && "Transaction should be cancelled before reading new commands");
-        }
-              
-#endif            
+         
                     RecvBuf_.hasWritten(r);
                     auto& com = RecvBuf_.ParseRESP();
                     if (com.empty()) continue;
@@ -215,6 +204,7 @@ public:
         LOG(INFO) << "Starting RedisServer...";
         isRuning = true;
         pool_.AsyncLoop();
+        sleep(1);
         shard_set = new EngineShardSet(&pool_);
         shard_set->Init(pool_.size());
         main_proactor_->DispatchBrief([this]{

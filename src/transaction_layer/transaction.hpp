@@ -46,16 +46,6 @@ public:
 
   ~Transaction();
 
-  friend void intrusive_ptr_add_ref(Transaction* trans) noexcept {
-    trans->use_count_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  friend void intrusive_ptr_release(Transaction* trans) noexcept {
-    if (1 == trans->use_count_.fetch_sub(1, std::memory_order_release)) {
-      std::atomic_thread_fence(std::memory_order_acquire);
-      delete trans;
-    }
-  }
   using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
@@ -251,7 +241,7 @@ public:
   }
 
   bool RunInShard(EngineShard* shard);
-  cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
   // 协调器状态
   enum CoordinatorState : uint8_t {
@@ -263,7 +253,7 @@ public:
 
 private:
 
-  cppcoro::task<void> ScheduleInternal();
+  cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop();
   cppcoro::AsyncTask Finish();

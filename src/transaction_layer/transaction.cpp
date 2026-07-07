@@ -109,26 +109,25 @@ void Transaction::EnableAllShards() {
 }
 
 
-cppcoro::AsyncTask Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) {
+bool Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) {
   coro_handle_ = handle;
   cb_ = std::move(cb);
   run_barrier_.store(unique_shard_cnt_, std::memory_order_release);
   coordinator_state_ |= COORD_CONCLUDING;
 
   if (isInline()) {
-    ScheduleInShard(EngineShard::tlocal(), true);
-    co_return;
+    return !RunInShard(EngineShard::tlocal());
   }
 
-  co_await ScheduleInternal();
-  co_return;
+  ScheduleInternal();
+  return true;
 }
 
 bool Transaction::isInline() {
   return coordinator_state_ & COORD_INLINE;
 }
 
-cppcoro::task<void> Transaction::ScheduleInternal() {
+cppcoro::AsyncTask Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
   txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
   co_await IterateActiveShards([this](auto& sd, ShardId sid) -> cppcoro::task<void> { // 注意IterateActiveShards的逻辑，这里事务是被别的线程完后后面部分的
