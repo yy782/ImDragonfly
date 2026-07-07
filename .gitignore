@@ -53,5 +53,6 @@ compile_commands.json
 CTestTestfile.cmake
 tmp/
 
+test/redis-py/__pycache__/
 
 

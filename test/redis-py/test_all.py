@@ -1,7 +1,7 @@
 """ImDragonfly 全部测试 —— 一个文件，通过命令行选择运行哪些测试.
 
 一键运行全部:
-    python3 -m pytest test/redis-py/test_all.py -v
+    python3 -m pytest test_all.py -v
 
 按类别运行:
     python3 -m pytest test/redis-py/test_all.py -v -m basic

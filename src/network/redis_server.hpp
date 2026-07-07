@@ -11,8 +11,10 @@
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
+#include "base/uring_socket.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
+#include "util/thread.hpp"
 #include <cstring>
 #include <exception>
 namespace dfly{
@@ -170,8 +172,8 @@ private:
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        :   main_proactor_(new base::UringProactor(0, 4096)),
-            pool_(size),
+        :   main_proactor_(new base::UringProactor()),
+            pool_(size, CreateOptimizedRedisConfig()),
             ListenSocket_(main_proactor_, listenFd)
     {
         CIs = new CommandRegistry();
@@ -183,6 +185,21 @@ public:
         RegisterSetFamily(CIs);
         RegisterZSetFamily(CIs);
         ser = this;
+    }
+    static base::UringConfig CreateOptimizedRedisConfig() {
+        base::UringConfig config;
+        
+        // 针对Redis服务器的高性能优化配置
+        config.queue_depth = 4096;            // 大队列深度：支持更多并发操作
+        config.use_defer_taskrun = true;      // 必须启用：确保协程正确性
+        config.use_single_issuer = true;      // 单发布者：更好性能
+        config.use_sqpoll = false;            // 禁用SQPOLL：Redis需要低延迟响应，而非纯吞吐量
+        config.use_registered_bufs = true;    // 启用注册缓冲区：零拷贝接收
+        config.registered_buf_count = 1024;   // 更多缓冲区：支持高并发连接
+        config.registered_buf_size = 16384;   // 16KB缓冲区：适合Redis命令大小（通常小于16KB）
+        config.cqe_batch_size = 128;          // 大批次处理：提高吞吐量
+        
+        return config;
     }
 
     ~RedisServer() {
@@ -199,6 +216,7 @@ public:
         LOG(INFO) << "Starting RedisServer...";
         isRuning = true;
         pool_.AsyncLoop();
+        sleep(1);
         shard_set = new EngineShardSet(&pool_);
         shard_set->Init(pool_.size());
         main_proactor_->DispatchBrief([this]{
