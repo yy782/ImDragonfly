@@ -38,75 +38,58 @@ public:
     Transaction* GetTransaction() { return transaction_.get(); }
 
     cppcoro::AsyncTask DoRead(){
-        try{
-            pId_ = socket_.Proactor()->GetLoopThreadId();
-            context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
-            int fd = socket_.fd();
-            // LOG(INFO) << "New session created for fd: " << fd;
-            while (true) {
-                auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
-                assert(util::Thread::current_tid() == pId_);
-                if (r > 0) {
+        
+        pId_ = socket_.Proactor()->GetLoopThreadId();
+        context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
+        int fd = socket_.fd();
+        // LOG(INFO) << "New session created for fd: " << fd;
+        while (true) {
+            auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
+            assert(util::Thread::current_tid() == pId_);
+            if (r > 0) {            
+                RecvBuf_.hasWritten(r);
+                auto& com = RecvBuf_.ParseRESP();
+                if (com.empty()) continue;
+                args_ = ::cmn::CmdArgList(com);
+                
+                // VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
+                
+                auto ci = CIs->Find(args_[0]);
+                if (!ci) { 
+                    LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << fd;
+                    SendERROR("unknown command:" + std::string(args_[0]));
+                    continue;
+                }
 
+                std::string cmd_name(args_[0]);
+                
+                is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
+                                        cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
 
-#ifndef DEBUG
-        if (transaction_) {
-            if (transaction_->GetState() == Transaction::State::IDLE && (
-            transaction_->GetCoordinatorState() != Transaction::COORD_CANCELLED && 
-            transaction_->GetCoordinatorState() != 0 )
-        ) {
-                std::cerr << "Error: Transaction should be cancelled before reading new commands. Current state: " 
-                          << static_cast<int>(transaction_->GetCoordinatorState()) << std::endl;
-                assert(false && "Transaction should be cancelled before reading new commands");
-            }
-        }        
-#endif
-                    
-                    RecvBuf_.hasWritten(r);
-                    auto& com = RecvBuf_.ParseRESP();
-                    if (com.empty()) continue;
-                    args_ = ::cmn::CmdArgList(com);
-                    
-                    // VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
-                    
-                    auto ci = CIs->Find(args_[0]);
-                    if (!ci) { 
-                        LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << fd;
-                        SendERROR("unknown command:" + std::string(args_[0]));
+                if (!transaction_ || transaction_->GetState() == Transaction::State::IDLE) {
+                    transaction_.reset(new Transaction(ci));
+                    transaction_->InitByArgs(&context_, args_);
+                }else {
+                    if (transaction_->GetState() == Transaction::State::MULTI && !is_multi_command) {
+                        transaction_->QueueCommand(ci, args_);
+                        SendStatus("QUEUED");
                         continue;
-                    }
-
-                    std::string cmd_name(args_[0]);
-                    
-                    is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
-                                            cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
-
-                    if (!transaction_ || transaction_->GetState() == Transaction::State::IDLE) {
-                        transaction_.reset(new Transaction(ci));
-                        transaction_->InitByArgs(&context_, args_);
-                    }else {
-                        if (transaction_->GetState() == Transaction::State::MULTI && !is_multi_command) {
-                            transaction_->QueueCommand(ci, args_);
-                            SendStatus("QUEUED");
-                            continue;
-                        }               
-                    }
-
-                    ci->Invoke(&transaction_->GetCommandContext(), args_); 
+                    }               
                 }
-                else if (r == 0) { 
-                    LOG(INFO) << "Connection closed by client, fd: " << fd;
-                    socket_.Close(); 
-                    context_.owner().reset();
-                    break;
-                }
-                else {
-                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno);
-                }            
+
+                ci->Invoke(&transaction_->GetCommandContext(), args_); 
             }
-        } catch(const std::exception& e) {
-            std::cerr << "Exception in session fd:" << socket_.fd() << ": " << e.what() << std::endl;
+            else if (r == 0) { 
+                LOG(INFO) << "Connection closed by client, fd: " << fd;
+                break;
+            }
+            else {
+                LOG(ERROR) << "Read error on fd: " << fd << ", error" << r;
+                break;
+            }            
         }
+        socket_.Close();
+        context_.owner().reset();
         co_return;  
     }    
 
@@ -236,33 +219,30 @@ public:
     
 private:
     cppcoro::AsyncTask listen() {
-        try {
-            while(isRuning){
-                auto fd = co_await ListenSocket_.AsyncAccept();
-                if (fd > 0){
-                    std::string addr = base::AddressToString(base::Address(fd));
-                    LOG(INFO) << "Accepted new connection, addr: " << addr;
+        
+        while(isRuning){
+            auto fd = co_await ListenSocket_.AsyncAccept();
+            if (fd > 0){
+                std::string addr = base::AddressToString(base::Address(fd));
+                LOG(INFO) << "Accepted new connection, addr: " << addr;
 
-                    auto p = NextProactor();
-                    VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
+                auto p = NextProactor();
+                VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
 
-                    auto session = std::make_shared<RedisSession>(fd, p);
-                    
-                    bool success = p->DispatchBrief([session](){
-                        session->DoRead();
-                    });
-                    if (!success) {
-                        LOG(ERROR) << "Failed to dispatch session to proactor: " << p->GetPoolIndex();
-                        session->socket().Close();
-                    }                    
-                } else if (fd < 0) {
-                    LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+                auto session = std::make_shared<RedisSession>(fd, p);
+                
+                bool success = p->DispatchBrief([session](){
+                    session->DoRead();
+                });
+                if (!success) {
+                    LOG(ERROR) << "Failed to dispatch session to proactor: " << p->GetPoolIndex();
+                    session->socket().Close();
                 }                    
-            }
-        }catch(const std::exception& e) {
-            std::cerr << "Exception in accept: " << e.what() << std::endl;
-
+            } else if (fd < 0) {
+                LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
+            }                    
         }
+
         co_return;
     }
     auto NextProactor() -> UringProactorPtr {
