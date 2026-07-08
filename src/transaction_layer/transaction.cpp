@@ -59,31 +59,32 @@ void Transaction::InitByArgs(ConnectionContext* conn_cntx, CmdArgList args) {
 
 void Transaction::InitSlice() {
   Slices_.resize(shard_set->size());
-  for (ShardId i = 0; i < Slices_.size(); ++i) {
-    Slices_[i].unique_shard_id = i;
-    Slices_[i].tx = this;
-  }
   for (size_t i = cid_->keys_start(); 
   i < full_args_.size() && i < cid_->keys_start() + cid_->keys_nums() * cid_->keys_offset(); i += cid_->keys_offset()) {
     std::string_view key = full_args_[i];
     ShardId sid = Shard(key, shard_set->size());
     auto& slice = Slices_[sid];
+    if (slice.keyIds.empty()) {
+      ++unique_shard_cnt_;
+      unique_shard_id_ = sid;
+      slice.lists = CmdArgList(full_args_.begin(), full_args_.end());
+      Slices_[sid].unique_shard_id = sid;
+      Slices_[sid].tx = this;
+    }
     slice.local_mask = ACTIVE;
     slice.keyIds.push_back(i);
     ++key_num_;
   }
 
-  unique_shard_cnt_ = 0;
-  for (ShardId sid = 0; sid < Slices_.size(); ++sid) {
-    if (!Slices_[sid].keyIds.empty()) {
-      ++unique_shard_cnt_;
-      unique_shard_id_ = sid;
+  if (unique_shard_cnt_ != 1) {
+    unique_shard_id_ = kInvalidSid;
+  }else {
+    auto& slice = Slices_[unique_shard_id_];
+    slice.local_mask |= OUT_OF_ORDER;
+    EngineShard* shard = EngineShard::tlocal();
+    if (shard->shard_id() == unique_shard_id_) {
+      coordinator_state_ |= COORD_INLINE;
     }
-  }
-  for (ShardId sid = 0; sid < Slices_.size(); ++sid) {
-    auto& slice = Slices_[sid];
-    if (slice.keyIds.empty()) continue;
-    slice.lists = CmdArgList(full_args_.begin(), full_args_.end());
   }
 }
 
@@ -100,36 +101,25 @@ void Transaction::EnableAllShards() {
 }
 
 
-cppcoro::AsyncTask Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) {
+bool Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) {
   coro_handle_ = handle;
   cb_ = std::move(cb);
   run_barrier_.store(unique_shard_cnt_, std::memory_order_release);
   coordinator_state_ |= COORD_CONCLUDING;
-
   if (isInline()) {
-    ScheduleInShard(EngineShard::tlocal(), true);
-    co_return;
+    bool executed = RunInShard(EngineShard::tlocal());
+    return executed;
   }
 
-  co_await ScheduleInternal();
-  co_return;
-}
-
-bool Transaction::isInline() {
-  if (unique_shard_cnt_ == 1) {
-    ShardId sid = unique_shard_id_;
-    auto& sd = Slices_[SidToId(sid)];
-    if (sd.local_mask & ACTIVE) {
-      EngineShard* shard = EngineShard::tlocal();
-      if (shard->shard_id() == sid) {
-        return true;
-      }
-    }
-  }
+  ScheduleInternal();
   return false;
 }
 
-cppcoro::task<void> Transaction::ScheduleInternal() {
+bool Transaction::isInline() {
+  return (coordinator_state_ & COORD_INLINE);
+}
+
+cppcoro::AsyncTask Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
   txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
   co_await IterateActiveShards([this](auto& sd, ShardId sid) -> cppcoro::task<void> { // 注意IterateActiveShards的逻辑，这里事务是被别的线程完后后面部分的
@@ -186,6 +176,17 @@ void Transaction::RunCallback(EngineShard* shard) {
 void Transaction::FinishHop() {
 
   uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
+
+  if (isInline()) {
+      auto e = EngineShard::tlocal();
+      ShardId sid = e->shard_id();
+      auto& sd = Slices_[SidToId(sid)];
+      UnlockMultiShardCb(GetLockArgs(sid), e);
+      if (sd.pq_pos != TxQueue::kEnd)
+        e->txq()->Remove(sd.pq_pos);
+    return;
+  }
+
   if (prev == 1) { 
     coordinator_state_ |= COORD_CONCLUDING;
     conn_cntx_->owner()->GetProactor()->DispatchBrief([this]() mutable {
@@ -240,8 +241,6 @@ cppcoro::AsyncTask Transaction::Finish() {
   co_await IterateActiveShards([this](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
       auto e = EngineShard::tlocal();
       UnlockMultiShardCb(GetLockArgs(sid), e);
-      sd.local_mask &= ~KEYLOCK_ACQUIRED;
-      sd.local_mask &= ~OUT_OF_ORDER;
       if (sd.pq_pos != TxQueue::kEnd)
         e->txq()->Remove(sd.pq_pos);
       co_return;

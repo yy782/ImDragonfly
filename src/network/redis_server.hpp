@@ -10,7 +10,7 @@
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
-#include "base/uring_socket.hpp"
+#include "base/socket.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "base/fd_wrapper.hpp"
 #include "util/thread.hpp"
@@ -36,10 +36,9 @@ public:
     }
     
     UringProactorPtr GetProactor() { return socket_.Proactor(); }
-    Transaction* GetTransaction() { return transaction_.get(); }
+    Transaction* GetTransaction() { return &transaction_; }
 
-    cppcoro::AsyncTask DoRead(){
-        
+    cppcoro::AsyncTask DoRead(){        
         pId_ = socket_.Proactor()->GetLoopThreadId();
         context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
         int fd = socket_.fd();
@@ -66,18 +65,20 @@ public:
                 is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
                                         cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
 
-                if (!transaction_ || transaction_->GetState() == Transaction::State::IDLE) {
-                    transaction_.reset(new Transaction(ci));
-                    transaction_->InitByArgs(&context_, args_);
+                if (transaction_.GetState() == Transaction::State::IDLE) {
+                    // C++20原地构建
+                    std::destroy_at(&transaction_);
+                    std::construct_at(&transaction_, ci);
+                    transaction_.InitByArgs(&context_, args_);
                 }else {
-                    if (transaction_->GetState() == Transaction::State::MULTI && !is_multi_command) {
-                        transaction_->QueueCommand(ci, args_);
+                    if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
+                        transaction_.QueueCommand(ci, args_);
                         SendStatus("QUEUED");
                         continue;
                     }               
                 }
 
-                ci->Invoke(&transaction_->GetCommandContext(), args_); 
+                ci->Invoke(&transaction_.GetCommandContext(), args_); 
             }
             else if (res_.bytes == 0) { 
                 LOG(INFO) << "Connection closed by client, fd: " << fd;
@@ -88,8 +89,8 @@ public:
                 break;
             }            
         }
-        auto t = transaction_.get();
-        assert(t && t->GetCoordinatorState() == Transaction::COORD_CANCELLED);
+        auto t = &transaction_;
+        assert(t && (t->GetCoordinatorState() == Transaction::COORD_CANCELLED));
         socket_.Close();
         context_.owner().reset();
         co_return;  
@@ -154,7 +155,7 @@ private:
     base::UringSocket socket_; 
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
-    std::unique_ptr<Transaction> transaction_;  
+    Transaction transaction_;  
     ParseRESP p; 
     bool is_multi_command = false;
     base::RecvResult res_;
@@ -165,8 +166,8 @@ private:
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        :   main_proactor_(new base::UringProactor()),
-            pool_(size, CreateOptimizedRedisConfig()),
+        :   main_proactor_(new base::UringProactor(0)),
+            pool_(size),
             ListenSocket_(main_proactor_, listenFd)
     {
         CIs = new CommandRegistry();

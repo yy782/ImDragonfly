@@ -45,26 +45,16 @@ public:
 
   ~Transaction();
 
-  friend void intrusive_ptr_add_ref(Transaction* trans) noexcept {
-    trans->use_count_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  friend void intrusive_ptr_release(Transaction* trans) noexcept {
-    if (1 == trans->use_count_.fetch_sub(1, std::memory_order_release)) {
-      std::atomic_thread_fence(std::memory_order_acquire);
-      delete trans;
-    }
-  }
   using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
-    ACTIVE = 1,
-    OUT_OF_ORDER = 1 << 2,  // 乱序执行
-    KEYLOCK_ACQUIRED = 1 << 3, // 锁已获取
+    ACTIVE = 1 << 0, // shard上有活跃的slice
+    OUT_OF_ORDER = 1 << 1,  // 乱序执行
+    KEYLOCK_ACQUIRED = 1 << 2, // 锁已获取
   };
 
 
-  explicit Transaction(const CommandId* cid);
+  Transaction(const CommandId* cid = nullptr);
 
   void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
 
@@ -250,18 +240,19 @@ public:
   }
 
   bool RunInShard(EngineShard* shard);
-  cppcoro::AsyncTask Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
   // 协调器状态
   enum CoordinatorState : uint8_t {
     COORD_SCHED = 1, // 协调器已调度
     COORD_CONCLUDING = 1 << 1, // 协调器正在结束
     COORD_CANCELLED = 1 << 2, // 协调器已取消
+    COORD_INLINE = 1 << 3, // 协调器在本地执行
   };
 
 private:
 
-  cppcoro::task<void> ScheduleInternal();
+  cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop();
   cppcoro::AsyncTask Finish();
@@ -324,7 +315,7 @@ private:
   std::atomic_uint32_t use_count_{0};
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
-  uint8_t coordinator_state_ = 0;
+  uint8_t coordinator_state_ = COORD_CANCELLED;
   State state_ = State::IDLE;
   uint32_t key_num_ = 0;
   std::vector<QueuedCommand> queued_commands_;
@@ -332,9 +323,6 @@ private:
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
-
-public:
-  std::atomic_int debug_re = 0;
 };
 
 }
