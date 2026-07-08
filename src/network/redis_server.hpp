@@ -6,7 +6,7 @@
 #include "redis/facade/ParseRESP.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/command_families.hpp"
-
+#include <netinet/tcp.h>
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
 #include "base/uring_proactor_pool.hpp"
@@ -47,7 +47,7 @@ public:
         while (true) {
             res_ = co_await socket_.AsyncRead();
             assert(util::Thread::current_tid() == pId_);
-            if (res_.bytes > 0) {            
+            if (res_.bytes > 0) {                            
                 auto& com = p.Parse(res_.data, res_.bytes);
                 if (com.empty()) continue;
                 args_ = ::cmn::CmdArgList(com);
@@ -191,7 +191,7 @@ public:
         config.registered_buf_count = 1024;   // 更多缓冲区：支持高并发连接
         config.registered_buf_size = 100;   
         config.cqe_batch_size = 128;          // 大批次处理：提高吞吐量
-        
+        config.kSqeBatchSize = 10;
         return config;
     }
 
@@ -234,6 +234,14 @@ private:
         while(isRuning){
             auto fd = co_await ListenSocket_.AsyncAccept();
             if (fd > 0){
+                // 禁用 Nagle 算法，Redis 响应多为小包，避免 40ms+ 延迟
+                int nodelay = 1;
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                // 启用 Quick ACK，进一步降低延迟
+                int quickack = 1;
+                setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
+
+
                 std::string addr = base::AddressToString(base::Address(fd));
                 LOG(INFO) << "Accepted new connection, addr: " << addr;
 

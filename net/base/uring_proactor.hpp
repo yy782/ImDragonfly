@@ -37,11 +37,12 @@ struct UringConfig {
     bool use_defer_taskrun = true;     // 启用 DEFER_TASKRUN：必须为 true，确保协程正确性
     bool use_single_issuer = true;     // 单发布者优化，每个 Proactor 单线程运行时使用
     bool use_sqpoll = false;           // 内核侧轮询（SQPOLL），高吞吐但增加延迟
-    uint32_t sqpoll_idle_ms = 1000;    // SQPOLL 空闲超时（毫秒），0=永不睡眠
+    uint32_t sqpoll_idle_ms = 10;    // SQPOLL 空闲超时（毫秒），0=永不睡眠
     bool use_registered_bufs = true;   // 使用注册缓冲区进行零拷贝接收
     int registered_buf_count = 256;    // 注册缓冲区数量，影响并发接收操作数
     int registered_buf_size = 65536;   // 每个注册缓冲区大小（字节），默认 64KB
     int cqe_batch_size = 32;           // 每次 PollOnce 处理的最大 CQE 数量
+    uint32_t kSqeBatchSize = 32;
 };
 
 class UringProactor;
@@ -221,7 +222,7 @@ private:
 
     uint32_t pending_sqes_{0};
 
-    static constexpr uint32_t kSqeBatchSize = 32;
+    uint32_t kSqeBatchSize;
 
     
     uint32_t reg_buf_count_ = 0;

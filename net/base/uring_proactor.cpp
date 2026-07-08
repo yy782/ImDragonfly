@@ -60,6 +60,7 @@ UringProactor::UringProactor(UringConfig cfg, int pool_index) : config_(cfg), po
 
     pending_slots_.resize(slots);
 
+    kSqeBatchSize = config_.kSqeBatchSize;
 
     InitRing();
 
@@ -190,11 +191,11 @@ struct io_uring_sqe* UringProactor::GetSqeOrFlush() {
 }
 
 void UringProactor::SubmitIfNeeded() {
-    // uint32_t prev = pending_sqes_.fetch_add(1, std::memory_order_relaxed);
-    // if (prev + 1 >= kSqeBatchSize) {
-    //     io_uring_submit(&ring_);
-    //     pending_sqes_.store(0, std::memory_order_relaxed);
-    // }
+    uint32_t prev = (++pending_sqes_);
+    if (prev + 1 >= kSqeBatchSize) {
+        assert(io_uring_submit(&ring_) > 0);
+        pending_sqes_ = 0;
+    }
 }
 
 int UringProactor::Flush() {
@@ -217,34 +218,10 @@ IoAwaitable UringProactor::AsyncAccept(int listen_fd) {
     io_uring_prep_accept(sqe, listen_fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
     sqe->user_data = slot_idx;
 
+    
+
     return IoAwaitable(this, slot_idx);
 }
-
-// IoAwaitable UringProactor::AsyncRecv(int fd, IoBuf& buf, size_t max_len) {
-//     uint32_t slot_idx = AllocSlot();
-
-//     buf.ensureWritableBytes(max_len);
-//     void* dest = buf.BeginWrite();
-
-//     struct io_uring_sqe* sqe = GetSqeOrFlush();
-//     io_uring_prep_recv(sqe, fd, dest, max_len, 0);
-//     sqe->user_data = slot_idx;
-
-//     // NOTE: The caller must call buf.hasWritten(n) after co_await returns n > 0.
-//     // We don't track the IoBuf pointer — the coroutine handles it via the result.
-
-//     return IoAwaitable(this, slot_idx);
-// }
-
-// IoAwaitable UringProactor::AsyncRecvRaw(int fd, void* buf, size_t len) {
-//     uint32_t slot_idx = AllocSlot();
-
-//     struct io_uring_sqe* sqe = GetSqeOrFlush();
-//     io_uring_prep_recv(sqe, fd, buf, len, 0);
-//     sqe->user_data = slot_idx;
-
-//     return IoAwaitable(this, slot_idx);
-// }
 
 RecvAwaitable UringProactor::AsyncRecvFixed(int fd, int buf_idx) {
     assert(buf_idx >= 0 && buf_idx < static_cast<int>(reg_buf_count_));
@@ -260,6 +237,8 @@ RecvAwaitable UringProactor::AsyncRecvFixed(int fd, int buf_idx) {
         slot.flags = buf_idx;  
     }
 
+    
+
     return RecvAwaitable(this, slot_idx);
 }
 
@@ -269,6 +248,8 @@ IoAwaitable UringProactor::AsyncSend(int fd, const void* buf, size_t len) {
     struct io_uring_sqe* sqe = GetSqeOrFlush();
     io_uring_prep_send(sqe, fd, buf, len, MSG_NOSIGNAL);
     sqe->user_data = slot_idx;
+
+    
 
     return IoAwaitable(this, slot_idx);
 }
@@ -313,7 +294,7 @@ void UringProactor::ProcessCqe(struct io_uring_cqe* cqe) {
 //   timeout_ms: 超时时间（毫秒），0=无限等待
 // 返回值：处理的 CQE 数量（>=0），或负的错误码
 int UringProactor::PollOnce(unsigned min_cqe, unsigned timeout_ms) {
-    // 在等待前刷新待处理的 SQEs
+    // // 在等待前刷新待处理的 SQEs
     unsigned pending = pending_sqes_;
     pending_sqes_ = 0;
 
@@ -344,27 +325,9 @@ int UringProactor::PollOnce(unsigned min_cqe, unsigned timeout_ms) {
         submitted = 0;
     }
 
-    // 批量处理 CQEs
-    struct io_uring_cqe* cqe = nullptr;
-    unsigned head;
-    unsigned processed = 0;
-    unsigned batch_count = 0;
 
-    io_uring_for_each_cqe(&ring_, head, cqe) {
-        ProcessCqe(cqe);
-        ++processed;
-        ++batch_count;
 
-        if (batch_count >= config_.cqe_batch_size) {
-            io_uring_cq_advance(&ring_, batch_count);
-            batch_count = 0;
-        }
-    }
-    if (batch_count > 0) {
-        io_uring_cq_advance(&ring_, batch_count);
-    }
-
-    return static_cast<int>(processed);
+    return 1;
 }
 
 void UringProactor::loop() {
@@ -375,10 +338,44 @@ void UringProactor::loop() {
 
         task_queue_.TryDrain();
 
-        // 轮询至少1个完成事件，使用10ms超时避免忙等待
-        // 关键优化：等待至少1个CQE，避免空转循环
-        // 之前的实现使用 PollOnce(0, 1) 导致忙等待和高CPU使用率
-        int processed = PollOnce(1, 10);
+
+        
+
+
+        // 批量处理 CQEs
+        struct io_uring_cqe* cqe = nullptr;
+        unsigned head;
+        unsigned kprocessed = 0;
+        unsigned batch_count = 0;
+
+        io_uring_for_each_cqe(&ring_, head, cqe) {
+            ProcessCqe(cqe);
+            ++kprocessed;
+            ++batch_count;
+
+            if (batch_count >= config_.cqe_batch_size) {
+                io_uring_cq_advance(&ring_, batch_count);
+                batch_count = 0;
+            }
+        }
+        if (batch_count > 0) {
+            io_uring_cq_advance(&ring_, batch_count);
+        }
+
+        int ret = io_uring_submit(&ring_);
+        if (ret < 0) {
+            LOG(FATAL) << "Proactor submit error: " << -ret;
+            break;  
+        }else if (ret > 0){
+            continue;
+        }
+
+        if (!task_queue_.Empty()) {
+            continue;
+        }    
+
+        int processed = PollOnce(1, 1);
+
 
         if (processed < 0) {
             LOG(FATAL) << "Proactor poll error: " << -processed;

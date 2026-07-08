@@ -65,17 +65,16 @@ public:
         CbFunc func;
         while (queue_.try_dequeue(func)) {
             push_ec_.notify();
-            try {
-                func();
-            } catch (std::exception& e) {
-                LOG(INFO) << "Exception in TaskQueue::TryDrain: " << e.what();
-            }
+
+            func();
         }
         return true;
     }
 
     bool isRuning() const { return !is_closed_.load(std::memory_order_relaxed); }
 
+    bool Empty() const { return queue_.empty(); }
+    
     using CbFunc = std::function<void()>;
 
  private:
