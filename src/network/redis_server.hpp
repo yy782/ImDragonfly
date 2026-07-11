@@ -121,7 +121,7 @@ public:
     int fd() const noexcept { return fd_; }
 private:
     void SendImp(std::string&& s) {
-        send(std::move(s));
+        yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
     }
 
     friend class ConnectionContext;
