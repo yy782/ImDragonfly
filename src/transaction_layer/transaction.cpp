@@ -103,7 +103,7 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) 
   }
 
   ScheduleInternal();
-  
+  DispatchHop();
   return false;
 
 }
@@ -132,11 +132,15 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
       break;
     }
   }
-  DispatchHop();
   co_return;
 }
 
 void Transaction::DispatchHop() {
+    if (isInline()) {
+       auto* e = EngineShard::tlocal();
+       e->PollExecution(this);      
+      return;
+    }
     auto cb = [this] () {
        auto* e = EngineShard::tlocal();
        e->PollExecution(this);
