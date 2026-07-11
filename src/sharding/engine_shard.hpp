@@ -37,6 +37,8 @@ public:
 
     DbSlice* GetDbSlice(ShardId sid);
 
+    size_t committed_txid() const { return committed_txid_; }
+    void AddCommittedTxid(Transaction* trans) { committed_txid_++; }
 private:
     EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap);
     void Shutdown(); 
@@ -45,6 +47,8 @@ private:
     MiMemoryResource mi_resource_;
     static thread_local EngineShard* shard_;      
     TxQueue txq_;
+
+    size_t committed_txid_ = 0;
 };
 
 

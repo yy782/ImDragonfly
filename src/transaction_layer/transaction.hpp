@@ -249,7 +249,7 @@ public:
     COORD_CANCELLED = 1 << 2, // 协调器已取消
     COORD_INLINE = 1 << 3, // 协调器在本地执行
   };
-
+  void DispatchHop();
 private:
 
   cppcoro::AsyncTask ScheduleInternal();

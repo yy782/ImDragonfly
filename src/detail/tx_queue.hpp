@@ -27,6 +27,10 @@ class TxQueue {
   
   void Remove(Iterator it);
 
+  Iterator SwapBack(Transaction* t, Iterator it);
+
+
+
   Transaction* At(Iterator it) const {
     return vec_[it].trans;
   }

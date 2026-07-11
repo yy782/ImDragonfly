@@ -1,5 +1,5 @@
 #include "tx_queue.hpp"
-
+#include <cassert>
 namespace dfly {
 
 void TxQueue::Grow() {
@@ -147,6 +147,15 @@ void TxQueue::Remove(Iterator it) {
 
   FreeNode(it);
   --size_;
+}
+
+TxQueue::Iterator TxQueue::SwapBack(Transaction* t, Iterator it) {
+  assert(!Empty());
+  if (it != kEnd) {
+     Remove(it);
+  }
+  PushBack(t);
+  return Tail();
 }
 
 }  // namespace dfly

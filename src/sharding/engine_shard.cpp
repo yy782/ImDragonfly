@@ -47,7 +47,6 @@ void EngineShard::PollExecution(Transaction* trans) {
         if (!concluded) {
             break;
         }
-        txq_.PopFront();
     }
 }
 

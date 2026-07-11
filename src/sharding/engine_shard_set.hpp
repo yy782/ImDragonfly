@@ -53,6 +53,19 @@ public:
         latch.wait();
     }
 
+    template <typename Func, typename P>
+    void DispatchBriefInParallel(Func&& f, P&& pred) {
+        for (uint32_t i = 0; i < size(); ++i) {
+            if (!pred(i))
+                continue;
+            auto dest = pp_->at(i);
+            dest->DispatchBrief([f]() mutable {
+                f(EngineShard::tlocal());
+            });            
+        }
+    }    
+
+
     yy::net::EventLoop* pool(int idx) const { return pp_->at(idx); }
 private:
     void InitThreadLocal(yy::net::EventLoop* pb);
