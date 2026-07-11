@@ -198,7 +198,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     } else {
         conn->SendERROR();
     }
-
+ 
     co_return;
 }
 
@@ -247,6 +247,7 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
     } else {
         conn->SendString(std::string());
     }    
+    
     co_return;
 }
 

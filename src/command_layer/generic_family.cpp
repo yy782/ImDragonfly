@@ -68,7 +68,7 @@ void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
     }
     std::string msg = "PONG";
     
-    LOG(INFO) << "Ping command received, sending response: " << msg;
+    
     conn->SendStatus(msg);
 }
 
