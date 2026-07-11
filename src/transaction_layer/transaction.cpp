@@ -35,15 +35,10 @@ inline TxQueue::Iterator InsertQueue(Transaction* tx) {
   }
 }
 
-uint64_t LockTag::Fingerprint() const {
-  return ::dfly::Fingerprint(str_);
-}
 
-LockTag::LockTag(std::string_view key) : str_(key) {}
 
 
 Transaction::Transaction(const CommandId* cid) : cid_(cid) {
-
 }
 
 Transaction::~Transaction() {
@@ -64,34 +59,31 @@ void Transaction::InitByArgs(ConnectionContext* conn_cntx, CmdArgList args) {
 
 void Transaction::InitSlice() {
   Slices_.resize(shard_set->size());
-  for (ShardId i = 0; i < Slices_.size(); ++i) {
-    Slices_[i].unique_shard_id = i;
-    Slices_[i].tx = this;
-  }
   for (size_t i = cid_->keys_start(); 
-  i < full_args_.size() && i < cid_->keys_start() + cid_->keys_nums() * cid_->keys_offset(); 
-  i += cid_->keys_offset()) {
+  i < full_args_.size() && i < cid_->keys_start() + cid_->keys_nums() * cid_->keys_offset(); i += cid_->keys_offset()) {
     std::string_view key = full_args_[i];
     ShardId sid = Shard(key, shard_set->size());
     auto& slice = Slices_[sid];
-    if (Slices_[sid].keyIds.empty()) {
+    if (slice.keyIds.empty()) {
       ++unique_shard_cnt_;
-      unique_shard_id_ = sid;    
-      slice.lists = CmdArgList(full_args_.begin(), full_args_.end());  
+      unique_shard_id_ = sid;
+      slice.lists = CmdArgList(full_args_.begin(), full_args_.end());
+      Slices_[sid].unique_shard_id = sid;
+      Slices_[sid].tx = this;
     }
     slice.local_mask = ACTIVE;
     slice.keyIds.push_back(i);
     ++key_num_;
   }
 
-  if (unique_shard_cnt_ == 1) {
-    ShardId sid = unique_shard_id_;
-    auto& sd = Slices_[SidToId(sid)];
-    if (sd.local_mask & ACTIVE) {
-      EngineShard* shard = EngineShard::tlocal();
-      if (shard->shard_id() == sid) {
-        coordinator_state_ |= COORD_INLINE;
-      }
+  if (unique_shard_cnt_ != 1) {
+    unique_shard_id_ = kInvalidSid;
+  }else {
+    auto& slice = Slices_[unique_shard_id_];
+    slice.local_mask |= OUT_OF_ORDER;
+    EngineShard* shard = EngineShard::tlocal();
+    if (shard->shard_id() == unique_shard_id_) {
+      coordinator_state_ |= COORD_INLINE;
     }
   }
 }
@@ -114,17 +106,17 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) 
   cb_ = std::move(cb);
   run_barrier_.store(unique_shard_cnt_, std::memory_order_release);
   coordinator_state_ |= COORD_CONCLUDING;
-
   if (isInline()) {
-    return !RunInShard(EngineShard::tlocal());
+    bool executed = RunInShard(EngineShard::tlocal());
+    return executed;
   }
 
   ScheduleInternal();
-  return true;
+  return false;
 }
 
 bool Transaction::isInline() {
-  return coordinator_state_ & COORD_INLINE;
+  return (coordinator_state_ & COORD_INLINE);
 }
 
 cppcoro::AsyncTask Transaction::ScheduleInternal() {
@@ -182,12 +174,19 @@ void Transaction::RunCallback(EngineShard* shard) {
 }
 
 void Transaction::FinishHop() {
+
+  uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
+
   if (isInline()) {
-    Finish();
+      auto e = EngineShard::tlocal();
+      ShardId sid = e->shard_id();
+      auto& sd = Slices_[SidToId(sid)];
+      UnlockMultiShardCb(GetLockArgs(sid), e);
+      if (sd.pq_pos != TxQueue::kEnd)
+        e->txq()->Remove(sd.pq_pos);
     return;
   }
 
-  uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
   if (prev == 1) { 
     coordinator_state_ |= COORD_CONCLUDING;
     conn_cntx_->owner()->GetProactor()->DispatchBrief([this]() mutable {
@@ -239,27 +238,23 @@ void Transaction::UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* 
 
 
 cppcoro::AsyncTask Transaction::Finish() {
-  auto cb = [this](auto& sd, ShardId sid) mutable {
+  co_await IterateActiveShards([this](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
       auto e = EngineShard::tlocal();
       UnlockMultiShardCb(GetLockArgs(sid), e);
-      sd.local_mask &= ~KEYLOCK_ACQUIRED;
-      sd.local_mask &= ~OUT_OF_ORDER;
       if (sd.pq_pos != TxQueue::kEnd)
-        e->txq()->Remove(sd.pq_pos);    
-  };
-  if (isInline()) {
-    cb(Slices_[SidToId(unique_shard_id_)], unique_shard_id_);
-  }else {
-    co_await IterateActiveShards([this, &cb](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
-        cb(sd, sid);
-        co_return;
-      });    
-  }
-  coordinator_state_ = COORD_CANCELLED;
+        e->txq()->Remove(sd.pq_pos);
+      co_return;
+    });
+  coordinator_state_ = COORD_CANCELLED;  
   if (coro_handle_) {
     coro_handle_.resume();
   }
+  
   co_return;
 }
 
 }
+
+
+
+

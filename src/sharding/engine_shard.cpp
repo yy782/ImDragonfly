@@ -8,8 +8,8 @@ namespace dfly{
 thread_local mi_heap_t* data_heap = nullptr;
 thread_local EngineShard* EngineShard::shard_ = nullptr;
 
-void EngineShard::InitThreadLocal(base::UringProactorPtr pb) {
-    LOG(INFO) << "Initializing EngineShard thread local for proactor " << pb->GetPoolIndex();
+void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
+    LOG(INFO) << "Initializing EngineShard thread local for proactor " << pb->id();
     data_heap = mi_heap_new();
     void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(EngineShard), alignof(EngineShard));
     shard_ = new (ptr) EngineShard(pb, data_heap);
@@ -17,9 +17,9 @@ void EngineShard::InitThreadLocal(base::UringProactorPtr pb) {
     LOG(INFO) << "EngineShard thread local initialized, shard_id=" << shard_->shard_id();
 }
 
-EngineShard::EngineShard(base::UringProactorPtr pb, mi_heap_t* heap) : 
+EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap) : 
 proactor_(pb),
-shard_id_(pb->GetPoolIndex()),
+shard_id_(pb->id()),
 mi_resource_(heap),
 txq_() {
 }

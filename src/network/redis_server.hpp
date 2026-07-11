@@ -1,5 +1,4 @@
-// network/redis_server.h
-#pragma once // redis_server.hpp  
+#pragma once
 #include <glog/logging.h>
 #include <netinet/tcp.h>
 #include "sharding/engine_shard_set.hpp"
@@ -11,106 +10,44 @@
 
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
-#include "base/uring_proactor_pool.hpp"
 #include "transaction_layer/transaction.hpp"
-#include "base/fd_wrapper.hpp"
+#include "YY/net/TcpServer.h"
+#include "YY/net/TcpConnection.h"
+#include "YY/net/EventLoop.h"
+#include "YY/net/InetAddress.h"
 #include <memory>
 #include <cstring>
 #include <exception>
+
 namespace dfly{
-using base::UringProactorPtr;
+
 inline CommandRegistry* CIs = nullptr;
 class RedisServer;
 inline RedisServer* ser = nullptr;
 
-class RedisSession : public std::enable_shared_from_this<RedisSession> {
+class RedisSession : public yy::net::TcpConnection {
 public:
-    RedisSession(int fd, UringProactorPtr proactor)
-        : socket_(proactor, fd)
-
-         {
-            
+    RedisSession(int fd, const yy::net::Address& addr, yy::net::EventLoop* loop)
+        : TcpConnection(fd, addr, loop)
+    {
     }
 
     ~RedisSession() {
-       assert(std::uncaught_exceptions() == 0);
+        assert(std::uncaught_exceptions() == 0);
     }
-    
-    UringProactorPtr GetProactor() { return socket_.Proactor(); }
+
     Transaction* GetTransaction() { return &transaction_; }
-
-    cppcoro::AsyncTask DoRead(){
-        try{
-            pId_ = socket_.Proactor()->GetLoopThreadId();
-            context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
-            int fd = socket_.fd();
-            // LOG(INFO) << "New session created for fd: " << fd;
-            while (true) {
-                auto r = co_await socket_.AsyncRead(RecvBuf_.BeginWrite(), RecvBuf_.writable_size(), -1);
-                assert(util::Thread::current_tid() == pId_);
-                if (r > 0) {
-         
-                    RecvBuf_.hasWritten(r);
-                    auto& com = RecvBuf_.ParseRESP();
-                    if (com.empty()) continue;
-                    args_ = ::cmn::CmdArgList(com);
-                    
-                    // VLOG(1) << "Received command: " << args_[0] << " with " << args_.size() << " arguments";
-                    
-                    auto ci = CIs->Find(args_[0]);
-                    if (!ci) { 
-                        LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << fd;
-                        SendERROR("unknown command:" + std::string(args_[0]));
-                        continue;
-                    }
-
-                    std::string cmd_name(args_[0]);
-                    
-                    is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
-                                            cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
-
-                    if (transaction_.GetState() == Transaction::State::IDLE) {
-                        std::destroy_at(&transaction_);                
-                        std::construct_at(&transaction_, ci);         
-                        transaction_.InitByArgs(&context_, args_);
-                    }else {
-                        if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
-                            transaction_.QueueCommand(ci, args_);
-                            SendStatus("QUEUED");
-                            continue;
-                        }               
-                    }
-
-                    ci->Invoke(&transaction_.GetCommandContext(), args_); 
-                }
-                else if (r == 0) { 
-                    LOG(INFO) << "Connection closed by client, fd: " << fd;
-                    socket_.Close(); 
-                    context_.owner().reset();
-                    break;
-                }
-                else {
-                    LOG(ERROR) << "Read error on fd: " << fd << ", error: " << strerror(errno) << " r:" << r;
-                }            
-            }
-        } catch(const std::exception& e) {
-            std::cerr << "Exception in session fd:" << socket_.fd() << ": " << e.what() << std::endl;
-        }
-        co_return;  
-    }    
+    yy::net::EventLoop* GetProactor() { return loop(); }
 
     void SendERROR(std::string err = "NULL") {
         SendImp(BuildError(err));
     }
-    void Send(int64_t n) {
-        SendImp(BuildInteger(n));
-    }
 
-    void Send(const std::string& s){
+    void SendString(const std::string& s){
         SendImp(BuildBulkString(s));
     }
-    void Send(const std::string_view& s){
-        Send(std::string(s));
+    void SendViewStr(const std::string_view& s){
+        SendImp(std::string(s));
     }
     void SendVec(const std::vector<std::string>& v) {
         SendImp(BuildArray(v));
@@ -128,66 +65,106 @@ public:
         SendImp(BuildInteger(n));
     }
     void SendNULL() {
-        Send(std::string());
+        SendString(std::string());
     }
-    base::UringSocket& socket() { return socket_; }
-private:
-    void SendImp(std::string&& s) {
-        auto p = socket_.Proactor(); 
-        // if (transaction_->GetState() == Transaction::State::EXEC && args_[0] == "EXEC") {// 这里如果DoRead意外恢复了，可能不同线程操作transaction_
-        //     if (!transaction_->collectMultiRes(s)) co_return; // 可能多线程操作同一个容器
-        //     s = BuildMultiArray(transaction_->SwapOrClearMultiRes());
-        //     transaction_->FinishOrDiscardMulti();
-        // }
-        p->DispatchBrief([this, s = std::move(s)](){
-            SendBuf_.append(s);
-            DoWrite();     
-        });
-        return;         
-    }
-    cppcoro::AsyncTask DoWrite() {
-        assert(util::Thread::current_tid() == pId_);
-        while (SendBuf_.readable_size()) {
-            auto wr = co_await socket_.AsyncWrite(SendBuf_.BeginRead(), SendBuf_.readable_size(), -1);
-            if (wr>0) {
-                SendBuf_.retrieve(wr);
-            }else {
-                // TODO
-            }
+    void OnMessage() {
+        int client_fd = this->fd();
+        
+
+        auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
+        context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
+        
+        auto& com = parser_.ParseRESP(recvBuffer());
+        
+        if (com.empty())
+            return;
+            
+        args_ = ::cmn::CmdArgList(com);
+        
+        std::string cmd_name(args_[0]);
+        std::transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::toupper);
+        
+        auto ci = CIs->Find(cmd_name);
+        if (!ci) {
+            LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << client_fd;
+            SendERROR("unknown command:" + std::string(args_[0]));
+            return;
         }
-        co_return;
+        
+        is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
+                                cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
+
+        if (transaction_.GetState() == Transaction::State::IDLE) {
+            std::destroy_at(&transaction_);                
+            std::construct_at(&transaction_, ci);         
+            transaction_.InitByArgs(&context_, args_);
+        } else {
+            if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
+                transaction_.QueueCommand(ci, args_);
+                SendStatus("QUEUED");
+                return;
+            }               
+        }
+        
+        ci->Invoke(&transaction_.GetCommandContext(), args_);
+        
     }
 
+    void OnClose() {
+        LOG(INFO) << "Connection closed by client, fd: " << fd();
+        context_.owner().reset();
+    }
+
+    void OnError() {
+        LOG(ERROR) << "Error on connection, fd: " << fd() <<" errno:" <<errno;
+    }
+    int fd() const noexcept { return fd_; }
+private:
+    void SendImp(std::string&& s) {
+        send(std::move(s));
+    }
 
     friend class ConnectionContext;
     
-    base::UringSocket socket_; 
-    RESP_Buf RecvBuf_;
-    RESP_Buf SendBuf_;
+    RESP_Buf parser_;
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
     Transaction transaction_;   
     bool is_multi_command = false;
-
-    pthread_t pId_;
 };
 
 class RedisServer {
 public:
-    RedisServer(int listenFd, uint32_t size)
-        :   main_proactor_(new base::UringProactor(0, 4096)),
-            pool_(size),
-            ListenSocket_(main_proactor_, listenFd)
+    RedisServer(uint16_t port, int acceptorNum, int workThreadNum)
+        : server_(yy::net::Address(port), acceptorNum, workThreadNum)
     {
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
-        RegisterMulti(CIs);
+        //RegisterMulti(CIs);
         RegisterListFamily(CIs);
         RegisterHashFamily(CIs);
         RegisterSetFamily(CIs);
         RegisterZSetFamily(CIs);
         ser = this;
+
+        server_.setConnectCallBack([this](int fd, const yy::net::Address& addr, yy::net::EventLoop* loop) {
+            auto session = std::make_shared<RedisSession>(fd, addr, loop);
+            LOG(INFO) << "New connection from " << addr.sockaddrToString() << ", fd: " << fd;
+            session->setTcpNoDelay(true);
+            session->setMessageCallBack([this, se = session](yy::net::TcpConnectionPtr) {
+                
+                se->OnMessage();
+            });
+            session->setCloseCallBack([this, se = session](yy::net::TcpConnectionPtr) {
+                se->OnClose();
+            });
+            session->setErrorCallBack([this, se = session](yy::net::TcpConnectionPtr) {
+                se->OnError();
+            });
+            session->setReading();
+            return session;
+        });
     }
 
     ~RedisServer() {
@@ -203,79 +180,25 @@ public:
     void Start() {
         LOG(INFO) << "Starting RedisServer...";
         isRuning = true;
-        pool_.AsyncLoop();
-        sleep(1);
-        shard_set = new EngineShardSet(&pool_);
-        shard_set->Init(pool_.size());
-        main_proactor_->DispatchBrief([this]{
-            listen();
-        });
-        main_proactor_->loop();
+      
+
+        server_.loop();
+        shard_set = new EngineShardSet(server_.getWorkThreadPool());
+        shard_set->Init(server_.getWorkThreadPool()->size());         
+        server_.wait();
     }
     
     void Stop() {
-        main_proactor_->DispatchBrief([this](){
-            isRuning = false;
-            main_proactor_->stop();
+        server_.stop();
+        isRuning = false;
+        if (shard_set) {
             shard_set->Shutdown();
-            pool_.stop();
-            
-        });
+        }
     }
     
 private:
-    cppcoro::AsyncTask listen() {
-        try {
-            while(isRuning){
-                auto fd = co_await ListenSocket_.AsyncAccept();
-                if (fd > 0){
-                    // 禁用 Nagle 算法，Redis 响应多为小包，避免 40ms+ 延迟
-                    int nodelay = 1;
-                    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-                    // 启用 Quick ACK，进一步降低延迟
-                    int quickack = 1;
-                    setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
-
-                    std::string addr = base::AddressToString(base::Address(fd));
-                    LOG(INFO) << "Accepted new connection, addr: " << addr;
-
-                    auto p = NextProactor();
-                    VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
-
-                    auto session = std::make_shared<RedisSession>(fd, p);
-                    
-                    bool success = p->DispatchBrief([session](){
-                        session->DoRead();
-                    });
-                    if (!success) {
-                        LOG(ERROR) << "Failed to dispatch session to proactor: " << p->GetPoolIndex();
-                        session->socket().Close();
-                    }                    
-                } else if (fd < 0) {
-                    LOG(WARNING) << "Failed to accept connection, error: " << strerror(errno);
-                }                    
-            }
-        }catch(const std::exception& e) {
-            std::cerr << "Exception in accept: " << e.what() << std::endl;
-
-        }
-        co_return;
-    }
-    auto NextProactor() -> UringProactorPtr {
-        NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
-        return pool_[NextProIndex_];
-    }
-
-    ssize_t NextProIndex_ = 0;
-
-
-    base::UringProactorPtr main_proactor_;
-    base::UringProactorPool pool_;
-    base::UringSocket ListenSocket_;
+    yy::net::TcpServer server_;
     bool isRuning = false;
-
 };
-
-
 
 }

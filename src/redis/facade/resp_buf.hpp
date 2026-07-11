@@ -1,16 +1,14 @@
-
-#include "base/io_buf.hpp"
+#include "YY/net/TcpBuffer.h"
 #include <cctype>
 namespace dfly{
 
-class RESP_Buf : public base::IoBuf{
-using base::IoBuf::IoBuf;
+class RESP_Buf {
 public:
-    std::vector<std::string_view>& ParseRESP() {
+    std::vector<std::string_view>& ParseRESP(yy::net::TcpBuffer& buf) {
         result.clear();
-        char* data = begin();
-        size_t size = write_index_;
-        size_t pos = read_index_;  
+        char* data = buf.begin();
+        size_t size = buf.write_index_;
+        size_t pos = buf.read_index_;  
         if (pos >= size) {
             return result;
         }
@@ -69,34 +67,12 @@ public:
             }
             pos += 2;
         }
-        size_t consumed = pos - read_index_;
-        consume(consumed);  
+        size_t consumed = pos - buf.read_index_;
+        buf.consume(consumed);  
         return result;
     }
 private:
-    size_t getNum() {
-        assert(std::isdigit(*(begin() + p_)));
-        char* start = begin() + p_;
-        char* end = start;
-        do {
-            ++CommandByte_;
-            ++end;
-        } while (*end != '\r');
-        
-        std::string_view Num(start, end - start);
-        size_t num = 0;
-        for (char c : Num) {
-            num = num * 10 + (c - '0');
-        }
-        p_ = end - begin();  
-        return num;
-    }
-
-    char* getChar() {
-        return &buffer_[p_];
-    }
-
-    size_t p_ = read_index_;
+    size_t p_ = 0;
     ssize_t CommandByte_ = 0;
     std::vector<std::string_view> result; 
 };    

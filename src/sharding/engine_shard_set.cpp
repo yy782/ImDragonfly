@@ -15,7 +15,7 @@ void EngineShardSet::Init(uint32_t sz) {
     shards_.reset(new EngineShard*[sz]);
     size_ = sz;
     
-    pp_->AwaitOnAll([this](base::UringProactorPtr pb) {
+    pp_->AwaitOnAll([this](yy::net::EventLoop* pb) {
         InitThreadLocal(pb);
     });
 
@@ -39,7 +39,7 @@ void EngineShardSet::Shutdown() {
 }
 
 
-void EngineShardSet::InitThreadLocal(base::UringProactorPtr pb) {
+void EngineShardSet::InitThreadLocal(yy::net::EventLoop* pb) {
     EngineShard::InitThreadLocal(pb);
     EngineShard* es = EngineShard::tlocal();
     shards_[es->shard_id()] = es;

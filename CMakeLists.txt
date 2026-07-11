@@ -64,27 +64,27 @@ else()
     )
 endif()    
 
-# 主代码
-add_subdirectory(net)
-add_subdirectory(src)
-# 测试
+add_subdirectory(YY)
 
+add_subdirectory(src)
 
 if(BUILD_TESTS)
     add_subdirectory(test/redis)
     add_subdirectory(test)   
 endif()
 
-# 主程序
 add_executable(imdragonfly main.cpp)
 target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/net
+    ${CMAKE_SOURCE_DIR}/YY
+    ${CMAKE_SOURCE_DIR}/YY/base
 )
 target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
     incomplete-imdragonfly
     net
+    base
+    thread
     third_party_deps 
 )

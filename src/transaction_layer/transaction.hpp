@@ -43,15 +43,14 @@ public:
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
-
   ~Transaction();
 
   using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
-    ACTIVE = 1,
-    OUT_OF_ORDER = 1 << 2,  // 乱序执行
-    KEYLOCK_ACQUIRED = 1 << 3, // 锁已获取
+    ACTIVE = 1 << 0, // shard上有活跃的slice
+    OUT_OF_ORDER = 1 << 1,  // 乱序执行
+    KEYLOCK_ACQUIRED = 1 << 2, // 锁已获取
   };
 
 
@@ -248,7 +247,7 @@ public:
     COORD_SCHED = 1, // 协调器已调度
     COORD_CONCLUDING = 1 << 1, // 协调器正在结束
     COORD_CANCELLED = 1 << 2, // 协调器已取消
-    COORD_INLINE = 1 << 3, // 内联
+    COORD_INLINE = 1 << 3, // 协调器在本地执行
   };
 
 private:
@@ -316,7 +315,7 @@ private:
   std::atomic_uint32_t use_count_{0};
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
-  uint8_t coordinator_state_ = 0;
+  uint8_t coordinator_state_ = COORD_CANCELLED;
   State state_ = State::IDLE;
   uint32_t key_num_ = 0;
   std::vector<QueuedCommand> queued_commands_;
@@ -324,9 +323,6 @@ private:
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
-
-public:
-  std::atomic_int debug_re = 0;
 };
 
 }

@@ -1,6 +1,6 @@
 #pragma once
 #include "engine_shard.hpp"
-#include "base/uring_proactor_pool.hpp"
+#include "YY/net/EventLoopThreadPool.h"
 
 #include "util/Time.hpp"
 #include <latch>
@@ -13,10 +13,10 @@ class EngineShardSet;
 class EngineShardSet {
 public:
 
-    explicit EngineShardSet(base::UringProactorPool* pp) : 
+    explicit EngineShardSet(yy::net::EventLoopThreadPool* pp) : 
     pp_(pp) {}
     uint32_t size() const { return size_; }
-    base::UringProactorPool* pool() { return pp_; }
+    yy::net::EventLoopThreadPool* pool() { return pp_; }
     void Init(uint32_t size);
     void PreShutdown();
     void Shutdown();
@@ -53,9 +53,10 @@ public:
         latch.wait();
     }
 
+    yy::net::EventLoop* pool(int idx) const { return pp_->at(idx); }
 private:
-    void InitThreadLocal(base::UringProactorPtr pb);
-    base::UringProactorPool* pp_;
+    void InitThreadLocal(yy::net::EventLoop* pb);
+    yy::net::EventLoopThreadPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;
 };
@@ -63,12 +64,5 @@ private:
 
 
 
-
-
-
-
-
 extern EngineShardSet* shard_set;
 }  // namespace dfly
-
-

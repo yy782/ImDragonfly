@@ -48,7 +48,7 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto conn = cmd_cntx->conn_cntx()->owner();
     if ( res.status() == OpStatus::OK)
-        conn->Send(del_cnt);
+        conn->SendInteger(del_cnt);
     else 
         conn->SendERROR();
     co_return;
@@ -68,6 +68,7 @@ void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
     }
     std::string msg = "PONG";
     
+    LOG(INFO) << "Ping command received, sending response: " << msg;
     conn->SendStatus(msg);
 }
 
@@ -101,7 +102,7 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
     if(res.status() == OpStatus::OK)
     {
         
-        conn->Send(result.load());  // FIXME
+        conn->SendInteger(result.load());  // FIXME
     }
     else 
     {
@@ -181,7 +182,7 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
     auto conn = cmd_cntx->conn_cntx()->owner();  
     if(res.status() == OpStatus::OK)
     {
-        conn->Send(res.value());
+        conn->SendInteger(res.value());
     }
     else 
     {
@@ -226,7 +227,7 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
     if(res.status() == OpStatus::OK)
     {
         
-        conn->Send(res.value());
+        conn->SendInteger(res.value());
     }
     else 
     {

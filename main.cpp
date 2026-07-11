@@ -70,15 +70,12 @@ int main(int argc, char *argv[]) {
     
     LOG(INFO) << "ImDragonfly server starting...";
 
-    int listen_fd = base::ListenFd();
-    LOG(INFO) << "Listening on fd: " << listen_fd;
-
     int num = 4;
     if (argc > 1) {
         num = std::atoi(argv[1]);
     }
-    RedisServer server(listen_fd, num);
-    std::string str = "RedisServer initialized with  " + std::to_string(num) + "shards";
+    RedisServer server(6379, 1, num);
+    std::string str = "RedisServer initialized with  " + std::to_string(num) + " shards";
     LOG(INFO) << str;
 
     server.Start();
