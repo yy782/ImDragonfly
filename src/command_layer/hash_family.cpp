@@ -58,7 +58,7 @@ CoroTask CmdHSet(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -96,9 +96,9 @@ CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(result.value());
+        conn->SendString(result.value());
     } else {
-        conn->Send(std::string());
+        conn->SendNULL();
     }
 
     co_return;
@@ -134,7 +134,7 @@ CoroTask CmdHDel(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -168,7 +168,7 @@ CoroTask CmdHExists(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -201,7 +201,7 @@ CoroTask CmdHLen(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }

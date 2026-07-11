@@ -306,11 +306,17 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
 
     auto& lt = db_arr_[lock_args.db_index]->trans_locks;
     bool all_locked = true;
-    
-    for (LockFp fp : lock_args.fps) {
-        if (!lt.Acquire(fp, mode)) {
+    int i = 0;
+    for (; i < lock_args.fps.size(); i++) {
+        if (!lt.Acquire(lock_args.fps[i], mode)) {
             all_locked = false;
+            break;
         }
+    }
+    if (!all_locked) {
+        for (;i > 0; i--) {
+            lt.Release(lock_args.fps[i - 1], mode);
+        }        
     }
     return all_locked;
 }

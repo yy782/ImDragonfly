@@ -198,7 +198,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
     } else {
         conn->SendERROR();
     }
-
+ 
     co_return;
 }
 
@@ -243,10 +243,11 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
     auto result = co_await cmd::SingleHopT(cb);
     auto conn = cmd_cntx->conn_cntx()->owner(); 
     if (result.status() == OpStatus::OK) {   
-        conn->Send(result.value());
+        conn->SendString(result.value());
     } else {
-        conn->Send(std::string());
+        conn->SendString(std::string());
     }    
+    
     co_return;
 }
 

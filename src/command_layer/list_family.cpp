@@ -59,7 +59,7 @@ CoroTask CmdLPush(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -88,7 +88,7 @@ CoroTask CmdRPush(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -128,7 +128,7 @@ CoroTask CmdLPop(CommandContext* cmd_cntx, CmdArgList args) {
         if (result.value().empty()) {
             conn->SendERROR();
         } else {
-            conn->Send(result.value());
+            conn->SendString(result.value());
         }
     } else if (result.status() == OpStatus::KEY_NOTFOUND) {
         conn->SendERROR();
@@ -171,7 +171,7 @@ CoroTask CmdRPop(CommandContext* cmd_cntx, CmdArgList args) {
         if (result.value().empty()) {
             conn->SendERROR();
         } else {
-            conn->Send(result.value());
+            conn->SendString(result.value());
         }
     } else if (result.status() == OpStatus::KEY_NOTFOUND) {
         conn->SendERROR();
@@ -207,7 +207,7 @@ CoroTask CmdLLen(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -245,7 +245,7 @@ CoroTask CmdLIndex(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(result.value());
+        conn->SendString(result.value());
     } else {
         conn->SendNULL();
     }
@@ -359,7 +359,7 @@ CoroTask CmdLRem(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -407,7 +407,7 @@ CoroTask CmdLInsert(CommandContext* cmd_cntx, CmdArgList args) {
         if (result.value() == -1) {
             conn->SendERROR("no such pivot");
         } else {
-            conn->Send(static_cast<int64_t>(result.value()));
+            conn->SendInteger(static_cast<int64_t>(result.value()));
         }
     } else if (result.status() == OpStatus::SYNTAX_ERROR) {
         conn->SendERROR("syntax error");
