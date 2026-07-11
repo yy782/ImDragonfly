@@ -113,7 +113,10 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle, RunnableType&& cb) 
 
   ScheduleInternal();
   return false;
+
 }
+
+
 
 bool Transaction::isInline() {
   return (coordinator_state_ & COORD_INLINE);
@@ -146,8 +149,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   }
   bool can_execute = (sd.local_mask & (OUT_OF_ORDER | KEYLOCK_ACQUIRED)) || shard->txq()->Empty();
   if (can_execute) RunInShard(shard);
-  else 
-    sd.pq_pos = InsertQueue(this);
+  else {
+      sd.pq_pos = InsertQueue(this);
+  }
   return true;
 }
 
@@ -167,9 +171,7 @@ bool Transaction::RunInShard(EngineShard* shard) {
 }
 
 void Transaction::RunCallback(EngineShard* shard) {
-  if (!cb_) {
-    return;
-  }
+  assert(cb_);
   cb_(this, shard);
 }
 
@@ -182,17 +184,30 @@ void Transaction::FinishHop() {
       ShardId sid = e->shard_id();
       auto& sd = Slices_[SidToId(sid)];
       UnlockMultiShardCb(GetLockArgs(sid), e);
-      if (sd.pq_pos != TxQueue::kEnd)
+      if (sd.pq_pos != TxQueue::kEnd) {
         e->txq()->Remove(sd.pq_pos);
+      }
     return;
   }
-
-  if (prev == 1) { 
-    coordinator_state_ |= COORD_CONCLUDING;
-    conn_cntx_->owner()->GetProactor()->DispatchBrief([this]() mutable {
-       Finish();
-    }); 
-  }    
+  
+  if (state_ == State::IDLE) {
+    auto e = EngineShard::tlocal();
+    ShardId sid = e->shard_id();
+    auto& sd = Slices_[SidToId(sid)];
+    UnlockMultiShardCb(GetLockArgs(sid), e);
+    if (sd.pq_pos != TxQueue::kEnd) {
+      e->txq()->Remove(sd.pq_pos);
+    }
+    if (prev == 1) {
+      coordinator_state_ |= COORD_CONCLUDING;
+      coordinator_state_ = COORD_CANCELLED;  
+      assert(coro_handle_);
+      
+      coro_handle_.resume();
+    }
+    
+  }  
+ 
 }
 
 KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
@@ -237,21 +252,23 @@ void Transaction::UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* 
 }
 
 
-cppcoro::AsyncTask Transaction::Finish() {
-  co_await IterateActiveShards([this](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
-      auto e = EngineShard::tlocal();
-      UnlockMultiShardCb(GetLockArgs(sid), e);
-      if (sd.pq_pos != TxQueue::kEnd)
-        e->txq()->Remove(sd.pq_pos);
-      co_return;
-    });
-  coordinator_state_ = COORD_CANCELLED;  
-  if (coro_handle_) {
-    coro_handle_.resume();
-  }
+// cppcoro::AsyncTask Transaction::Finish() {
+//   co_await IterateActiveShards([this](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
+//       auto e = EngineShard::tlocal();
+//       UnlockMultiShardCb(GetLockArgs(sid), e);
+//       if (sd.pq_pos != TxQueue::kEnd) {
+//         LOG(ERROR) << "Transaction " << txid_ << " is finishing but has a non-empty queue position in shard " << sid;
+//         e->txq()->Remove(sd.pq_pos);
+//       }
+//       co_return;
+//     });
+//   coordinator_state_ = COORD_CANCELLED;  
+//   assert(coro_handle_);
+//   coro_handle_.resume();
   
-  co_return;
-}
+  
+//   co_return;
+// }
 
 }
 
