@@ -69,6 +69,13 @@ void Transaction::InitSlice() {
 
   if (unique_shard_cnt_ != 1) {
     unique_shard_id_ = kInvalidSid;
+    for (uint32_t i = 0; i < Slices_.size(); ++i) {
+      auto& slice = Slices_[i];
+      if (!(slice.local_mask & ACTIVE)) {
+        continue;
+      }
+      slice.lock_args = GetLockArgs(slice.unique_shard_id);
+    }
   }else {
     auto& slice = Slices_[unique_shard_id_];
     slice.local_mask |= OUT_OF_ORDER;
@@ -76,6 +83,7 @@ void Transaction::InitSlice() {
     if (shard->shard_id() == unique_shard_id_) {
       coordinator_state_ |= COORD_INLINE;
     }
+    slice.lock_args = GetLockArgs(unique_shard_id_);
   }
 }
 
@@ -165,14 +173,13 @@ void Transaction::DispatchHop() {
 
 bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   auto& sd = Slices_[SidToId(shard->shard_id())];
-  KeyLockArgs lock_args = GetLockArgs(shard->shard_id());
 /*
 - 拿到锁了 → 直接入队，排着等执行
 - 没拿到锁，但 txid 比队尾大 → 也可以入队（排到队尾），等前面的事务释放锁后才有机会执行
 - 没拿到锁，且 txid 比队尾小 → 不行，会破坏 FIFO 顺序，返回失败让协调器重试
 */
 
-  if ((!(sd.local_mask & KEYLOCK_ACQUIRED)) && LockMultiShardCb(lock_args, shard)) {
+  if ((!(sd.local_mask & KEYLOCK_ACQUIRED)) && LockMultiShardCb(sd.lock_args, shard)) {
     sd.local_mask |= KEYLOCK_ACQUIRED;
   }else {
     if (!shard->txq()->Empty() && shard->txq()->Back()->txid() > txid_) {
@@ -195,7 +202,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
 bool Transaction::RunInShard(EngineShard* shard) {
   auto& sd = Slices_[SidToId(shard->shard_id())];
   if (!(sd.local_mask & KEYLOCK_ACQUIRED)) {
-    if (!LockMultiShardCb(GetLockArgs(shard->shard_id()), shard)) {
+    if (!LockMultiShardCb(sd.lock_args, shard)) {
       return false;
     }
     sd.local_mask |= KEYLOCK_ACQUIRED;    
@@ -219,7 +226,7 @@ void Transaction::FinishHop() {
       auto e = EngineShard::tlocal();
       ShardId sid = e->shard_id();
       auto& sd = Slices_[SidToId(sid)];
-      UnlockMultiShardCb(GetLockArgs(sid), e);
+      UnlockMultiShardCb(sd.lock_args, e);
       e->AddCommittedTxid(this);
       if (sd.pq_pos != TxQueue::kEnd) {
         e->txq()->Remove(sd.pq_pos);
@@ -231,7 +238,7 @@ void Transaction::FinishHop() {
     auto e = EngineShard::tlocal();
     ShardId sid = e->shard_id();
     auto& sd = Slices_[SidToId(sid)];
-    UnlockMultiShardCb(GetLockArgs(sid), e);
+    UnlockMultiShardCb(sd.lock_args, e);
     e->AddCommittedTxid(this);
     if (sd.pq_pos != TxQueue::kEnd) {
       e->txq()->Remove(sd.pq_pos);
@@ -273,12 +280,6 @@ IntentLock::Mode Transaction::LockMode() const {
   return (cid_->opt_mask() & CO::READABLE) ? IntentLock::Mode::SHARED : IntentLock::Mode::EXCLUSIVE;
 }
 
-void Transaction::QueueCommand(const CommandId* cid, CmdArgList args) {
-  std::vector<std::string> VecArgs(args.begin(), args.end());
-  std::vector<std::string_view> ViewArgs(VecArgs.begin(), VecArgs.end());
-  queued_commands_.push_back({cid, std::move(VecArgs), std::move(ViewArgs)});
-}
-
 
 bool Transaction::LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard) {
   return GetDbSlice(shard->shard_id()).Acquire(LockMode(), lock_args);
@@ -289,26 +290,35 @@ void Transaction::UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* 
 }
 
 
-// cppcoro::AsyncTask Transaction::Finish() {
-//   co_await IterateActiveShards([this](auto& sd, ShardId sid) mutable -> cppcoro::task<void> {
-//       auto e = EngineShard::tlocal();
-//       UnlockMultiShardCb(GetLockArgs(sid), e);
-//       if (sd.pq_pos != TxQueue::kEnd) {
-//         LOG(ERROR) << "Transaction " << txid_ << " is finishing but has a non-empty queue position in shard " << sid;
-//         e->txq()->Remove(sd.pq_pos);
-//       }
-//       co_return;
-//     });
-//   coordinator_state_ = COORD_CANCELLED;  
-//   assert(coro_handle_);
-//   coro_handle_.resume();
-  
-  
-//   co_return;
+// void Transaction::startMulti() {
+//   state_ = State::MULTI;
+// }
+
+// void Transaction::FinishOrDiscardMulti() {
+//   // TODO
+//   state_ = State::IDLE;
+// }
+// void Transaction::CollectCommands(const CommandId* cid, CmdArgList args) {
+//   std::vector<std::string_view> ViewArgs(args.begin(), args.end());
+//   multi_.Commmends.push_back({cid, std::move(ViewArgs)});
+// }
+
+// cppcoro::task<bool> Transaction::CollectMutex() {
+//   for (auto& [cid, args] : multi_.Commmends) {
+//     cid_ = cid;
+//     args_ = args;
+//     InitSlice();
+//     SlicesArgs slices_args;
+//     slices_args.unique_shard_id = unique_shard_id_;
+//     slices_args.unique_shard_cnt = unique_shard_cnt_;
+//     slices_args.key_num = key_num_;
+//     slices_args.slices = std::move(Slices_);
+//     multi_.slices_args.push_back(std::move(slices_args));
+//   }
+     //absl::flat_hash_set<
 // }
 
 }
-
 
 
 

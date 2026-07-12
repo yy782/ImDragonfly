@@ -86,11 +86,26 @@ public:
   const CommandContext& GetCommandContext() const {
     return cmd_cntx_;
   }
+  ConnectionContext* GetConnectionContext() {
+    return conn_cntx_;
+  }
 
+  bool RunInShard(EngineShard* shard);
+  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+
+  // 协调器状态
+  enum CoordinatorState : uint8_t {
+    COORD_SCHED = 1, // 协调器已调度
+    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
+    COORD_CANCELLED = 1 << 2, // 协调器已取消
+    COORD_INLINE = 1 << 3, // 协调器在本地执行
+  };
+  void DispatchHop();
   struct Slice{
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
+    KeyLockArgs lock_args;
     CmdArgList lists;
     uint16_t local_mask = 0;
     TxQueue::Iterator pq_pos = TxQueue::kEnd;
@@ -186,70 +201,35 @@ public:
   std::string_view Name() const;
   State GetState() const { return state_; }
   uint8_t GetCoordinatorState() const { return coordinator_state_; }
-  void SetState(State new_state) { state_ = new_state; }
 
-  struct QueuedCommand {
-    const CommandId* cid;
-    std::vector<std::string> args;
-    std::vector<std::string_view> ViewArgs;
-    CmdArgList GetCmdArgList() const {
-      CmdArgList argsList(ViewArgs);
-      return argsList;
-    }
+  struct SlicesArgs {
+    std::vector<Slice> slices;
+    ShardId unique_shard_id;
+    uint32_t unique_shard_cnt;
+    uint32_t key_num;
   };
 
-  void QueueCommand(const CommandId* cid, CmdArgList args);
-  const std::vector<QueuedCommand>& GetQueuedCommands() const { return queued_commands_; }
-  void ClearQueuedCommands() { queued_commands_.clear(); }
-
-  template<typename Cb>
-  void AddWatchKey(std::string_view key, Cb&& cb) { return conn_cntx_->AddWatchKey(key, std::move(cb)); }
-
-  auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
-
-  const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
-  bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
-  
-  bool IsDirty() const { return conn_cntx_->IsDirty(); }
-
-  bool collectMultiRes(const std::string& s) {
-    MultiRes_.push_back(s);
-    return MultiReady();
-  }
-  void ClearMultiRes() {
-    MultiRes_.clear();
-  }
-  std::vector<std::string> SwapOrClearMultiRes(std::vector<std::string> vec = {}) {
-    MultiRes_.swap(vec);
-    return vec;
-  }
-  bool MultiReady() {
-    return MultiRes_.size() == queued_commands_.size();
-  }
-  void startMulti() {
-    SetState(Transaction::State::MULTI);
-  }
-  void FinishOrDiscardMulti() {
-    SetState(Transaction::State::IDLE);
-    ClearQueuedCommands();
-    ClearWatchKeys();
-    ClearMultiRes();
-  }
-  ConnectionContext* GetConnectionContext() {
-    return conn_cntx_;
-  }
-
-  bool RunInShard(EngineShard* shard);
-  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
-
-  // 协调器状态
-  enum CoordinatorState : uint8_t {
-    COORD_SCHED = 1, // 协调器已调度
-    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
-    COORD_CANCELLED = 1 << 2, // 协调器已取消
-    COORD_INLINE = 1 << 3, // 协调器在本地执行
+  struct MultiData {
+    using ComPair = std::pair<const CommandId*, std::vector<std::string_view>>;
+    std::vector<ComPair> Commmends;
+    std::vector<SlicesArgs> slices_args;
+    std::vector<std::string> Res;
   };
-  void DispatchHop();
+  // void startMulti();
+  // auto& StartExec() -> MultiData::Commends&;
+  // template<typename Cb>
+  // void AddWatchKey(std::string_view key, Cb&& cb) { return conn_cntx_->AddWatchKey(key, std::move(cb)); }
+  // auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
+  // const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
+  // bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
+  // bool IsDirty() const { return conn_cntx_->IsDirty(); }
+  // void FinishOrDiscardMulti();
+  // void CollectCommands(const CommandId* cid, CmdArgList args);
+
+
+
+
+
 private:
 
   cppcoro::AsyncTask ScheduleInternal();
@@ -299,9 +279,6 @@ private:
     co_return;
   }
 
-  struct MultiData {
-
-  };
 
   std::atomic_uint32_t run_barrier_{0};
   std::vector<Slice> Slices_;
@@ -309,7 +286,7 @@ private:
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
   const CommandId* cid_ = nullptr;
-  std::unique_ptr<MultiData> multi_;
+  MultiData multi_;
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
   std::atomic_uint32_t use_count_{0};
@@ -318,8 +295,6 @@ private:
   uint8_t coordinator_state_ = COORD_CANCELLED;
   State state_ = State::IDLE;
   uint32_t key_num_ = 0;
-  std::vector<QueuedCommand> queued_commands_;
-  std::vector<std::string> MultiRes_;
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
