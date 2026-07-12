@@ -86,7 +86,7 @@ struct DbTable :
     };
     PrimeTable prime_;
     DbIndex index_;
-    absl::flat_hash_map<std::string, std::vector<WatchedKeyContext>> watched_keys_;
+    absl::flat_hash_map<std::string_view, std::vector<WatchedKeyContext>> watched_keys_;
     LockTable trans_locks;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;

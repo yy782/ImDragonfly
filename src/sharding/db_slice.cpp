@@ -265,39 +265,39 @@ void DbSlice::RegisterWatchedKey(std::string_view key,
 }
 
 void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
-    // auto& db = *db_arr_[db_ind];
-    // auto& watched_keys = db.watched_keys_;
-    // if (!watched_keys.empty()) {
-    //     if (auto wit = watched_keys.find(std::string(key)); wit != watched_keys.end()) {
-    //         for (auto& key_cntx : wit->second)
-    //         {
-    //             if (key_cntx.isExpired()) {
-    //                 continue;
-    //             }
-    //             if (!key_cntx.conn_context->SetDirty(key_cntx.key_version)) {
-    //                 // 这里开启了新的一轮事务，清除key_cntx的所有数据 TODO,
-    //             }
-    //         }
-    //         watched_keys.erase(wit);
-    //     }
-    // }
-}
-
-void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys) {
-    auto& db = *db_arr_[conn_cntx->GetDbIndex()];
-    for (const auto& key : keys) {
-        if (auto wit = db.watched_keys_.find(std::string(key)); wit != db.watched_keys_.end()) { // 这里需要优化
-            auto& vec = wit->second;
-            for (auto& key_cntx : vec) {
-                if (key_cntx.conn_context != conn_cntx) continue; // 这里是同步删除，一定是安全的
-                std::erase(wit->second, key_cntx);
+    auto& db = *db_arr_[db_ind];
+    auto& watched_keys = db.watched_keys_;
+    if (!watched_keys.empty()) {
+        if (auto wit = watched_keys.find(key); wit != watched_keys.end()) {
+            for (auto& key_cntx : wit->second)
+            {
+                if (key_cntx.isExpired()) {
+                    continue;
+                }
+                if (!key_cntx.conn_context->SetDirty(key_cntx.key_version)) {
+                    // 这里开启了新的一轮事务，清除key_cntx的所有数据 TODO,
+                }
             }
-            if (wit->second.empty()) {
-                db.watched_keys_.erase(wit);
-            }            
+            watched_keys.erase(wit);
         }
     }
 }
+
+// void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys) {
+//     auto& db = *db_arr_[conn_cntx->GetDbIndex()];
+//     for (const auto& key : keys) {
+//         if (auto wit = db.watched_keys_.find(key); wit != db.watched_keys_.end()) { // 这里需要优化
+//             auto& vec = wit->second;
+//             for (auto& key_cntx : vec) {
+//                 if (key_cntx.conn_context != conn_cntx) continue; // 这里是同步删除，一定是安全的
+//                 std::erase(wit->second, key_cntx);
+//             }
+//             if (wit->second.empty()) {
+//                 db.watched_keys_.erase(wit);
+//             }            
+//         }
+//     }
+// }
 
 bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
     if (lock_args.fps.empty()) {  
@@ -320,6 +320,7 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
     }
     return all_locked;
 }
+
 
 void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
     if (lock_args.fps.empty()) {

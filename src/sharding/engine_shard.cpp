@@ -43,6 +43,9 @@ void EngineShard::PollExecution(Transaction* trans) {
     (void)trans;
     while (!txq_.Empty()) {
         auto tx = txq_.Front();
+        if (!tx->IsArmed()) {
+            break;
+        }
         bool concluded = tx->RunInShard(this);
         if (!concluded) {
             break;
@@ -51,8 +54,5 @@ void EngineShard::PollExecution(Transaction* trans) {
 }
 
 
-DbSlice* EngineShard::GetDbSlice(ShardId sid) {
-    return nullptr;
-}
 
 }  // namespace dfly

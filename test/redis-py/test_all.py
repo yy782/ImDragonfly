@@ -1,7 +1,7 @@
 """ImDragonfly 全部测试 —— 一个文件，通过命令行选择运行哪些测试.
 
 一键运行全部:
-    python3 -m pytest test/redis-py/test_all.py -v
+    python3 -m pytest test_all.py -v
 
 按类别运行:
     python3 -m pytest test/redis-py/test_all.py -v -m basic
@@ -279,43 +279,41 @@ def test_zrem(clean_redis):
 # 事务命令
 # ═══════════════════════════════════════════════════════════
 
-# @pytest.mark.transaction
-# def test_multi_exec(clean_redis):
-#     r, track = clean_redis
-#     k1, k2 = "test:tx:k1", "test:tx:k2"
-#     track(k1); track(k2)
-#     r.set(k1, "100"); r.set(k2, "200")
-#     pipe = r.pipeline()
-#     pipe.multi()
-#     pipe.set(k1, "150"); pipe.set(k2, "250")
-#     assert pipe.execute() == [True, True]
-#     assert r.get(k1) == "150"
-#     assert r.get(k2) == "250"
+@pytest.mark.transaction
+def test_multi_exec(clean_redis):
+    r, track = clean_redis
+    k1, k2 = "test:tx:k1", "test:tx:k2"
+    track(k1); track(k2)
+    r.set(k1, "100"); r.set(k2, "200")
+    r.execute_command("MULTI")
+    r.execute_command("SET", k1, "150")
+    r.execute_command("SET", k2, "250")
+    assert r.execute_command("EXEC") == [True, True]
+    assert r.get(k1) == "150"
+    assert r.get(k2) == "250"
 
 
-# @pytest.mark.transaction
-# def test_discard(clean_redis):
-#     r, track = clean_redis
-#     key = "test:tx:discard"
-#     track(key)
-#     r.set(key, "100")
-#     pipe = r.pipeline()
-#     pipe.multi()
-#     pipe.set(key, "should_not_set")
-#     pipe.discard()
-#     assert r.get(key) == "100"
+@pytest.mark.transaction
+def test_discard(clean_redis):
+    r, track = clean_redis
+    key = "test:tx:discard"
+    track(key)
+    r.set(key, "100")
+    r.execute_command("MULTI")
+    r.execute_command("SET", key, "should_not_set")
+    r.execute_command("DISCARD")
+    assert r.get(key) == "100"
 
 
-# @pytest.mark.transaction
-# def test_watch_exec(clean_redis):
-#     r, track = clean_redis
-#     key = "test:tx:watch"
-#     track(key)
-#     r.set(key, "100")
-#     r.watch(key)
-#     pipe = r.pipeline()
-#     pipe.multi()
-#     pipe.set(key, "watched_value")
-#     assert pipe.execute() == [True]
-#     assert r.get(key) == "watched_value"
-#     r.unwatch()
+@pytest.mark.transaction
+def test_watch_exec(clean_redis):
+    r, track = clean_redis
+    key = "test:tx:watch"
+    track(key)
+    r.set(key, "100")
+    r.watch(key)
+    r.execute_command("MULTI")
+    r.execute_command("SET", key, "watched_value")
+    assert r.execute_command("EXEC") == [True]
+    assert r.get(key) == "watched_value"
+    r.unwatch()

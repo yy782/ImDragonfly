@@ -35,80 +35,16 @@ class EngineShard;
 class Transaction{
 public:
   enum class State {
-    IDLE,
+    UnMULTI, // 一般事务，只有一条命令
     MULTI,
     EXEC
   };
-
-  Transaction(const Transaction&) = delete;
-  void operator=(const Transaction&) = delete;
-
-  ~Transaction();
-
-  using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
-
-  enum LocalMask : uint16_t {
-    ACTIVE = 1 << 0, // shard上有活跃的slice
-    OUT_OF_ORDER = 1 << 1,  // 乱序执行
-    KEYLOCK_ACQUIRED = 1 << 2, // 锁已获取
-  };
-
-
-  Transaction(const CommandId* cid = nullptr);
-
-  void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
-
-  KeyLockArgs GetLockArgs(ShardId sid) const;
-
-  bool IsActive(ShardId sid) const;
-
-  bool IsScheduled() const {
-    return coordinator_state_ & COORD_SCHED;
-  }
-
-
-  const DbContext& GetDbContext() const {
-    return db_cntx_;
-  }
-  DbContext& GetDbContext() {
-    return db_cntx_;
-  }
-
-  const Namespace& GetNamespace() const {
-    return *namespace_;
-  }
-
-  DbSlice& GetDbSlice(ShardId sid) const;
-
-  CommandContext& GetCommandContext() {
-    return cmd_cntx_;
-  }
-  const CommandContext& GetCommandContext() const {
-    return cmd_cntx_;
-  }
-  ConnectionContext* GetConnectionContext() {
-    return conn_cntx_;
-  }
-
-  bool RunInShard(EngineShard* shard);
-  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
-
-  // 协调器状态
-  enum CoordinatorState : uint8_t {
-    COORD_SCHED = 1, // 协调器已调度
-    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
-    COORD_CANCELLED = 1 << 2, // 协调器已取消
-    COORD_INLINE = 1 << 3, // 协调器在本地执行
-  };
-  void DispatchHop();
   struct Slice{
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
-    KeyLockArgs lock_args;
     CmdArgList lists;
     uint16_t local_mask = 0;
-    TxQueue::Iterator pq_pos = TxQueue::kEnd;
     DbSlice& GetDbSlice() {
       return tx->GetDbSlice(unique_shard_id);
     }
@@ -175,6 +111,88 @@ public:
       return cend();
     }   
   };
+  struct SlicesArgs {
+    std::vector<Slice> slices;
+    ShardId unique_shard_id;
+    uint32_t unique_shard_cnt;
+    uint32_t key_num;
+  };
+
+  using ComPair = std::pair<const CommandId*, std::vector<std::string_view>>;
+  struct MultiData {
+    std::vector<ComPair> commands;
+    std::vector<SlicesArgs> slices_args;
+    std::vector<std::string> Res;
+  };
+
+  // 协调器状态
+  enum CoordinatorState : uint8_t {
+    COORD_SCHED = 1, // 协调器已调度
+    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
+    COORD_CANCELLED = 1 << 2, // 协调器已取消
+    COORD_INLINE = 1 << 3, // 协调器在本地执行
+  };
+
+
+  Transaction(const Transaction&) = delete;
+  void operator=(const Transaction&) = delete;
+
+  ~Transaction();
+
+  using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
+
+  enum LocalMask : uint16_t {
+    ACTIVE = 1 << 0, // shard上有活跃的slice
+    OUT_OF_ORDER = 1 << 1,  // 乱序执行
+    KEYLOCK_ACQUIRED = 1 << 2, // 锁已获取
+  };
+
+
+  Transaction(const CommandId* cid = nullptr);
+
+  void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
+  void InitByArgs(const ComPair& cp, SlicesArgs& slices_args);
+
+  KeyLockArgs GetLockArgs(ShardId sid) const;
+
+  bool IsActive(ShardId sid) const;
+
+  bool IsScheduled() const {
+    return coordinator_state_ & COORD_SCHED;
+  }
+
+
+  const DbContext& GetDbContext() const {
+    return db_cntx_;
+  }
+  DbContext& GetDbContext() {
+    return db_cntx_;
+  }
+  MultiData& GetMultiData() {
+    return multi_;
+  }
+  const Namespace& GetNamespace() const {
+    return *namespace_;
+  }
+
+  DbSlice& GetDbSlice(ShardId sid) const;
+
+  CommandContext& GetCommandContext() {
+    return cmd_cntx_;
+  }
+  const CommandContext& GetCommandContext() const {
+    return cmd_cntx_;
+  }
+  ConnectionContext* GetConnectionContext() {
+    return conn_cntx_;
+  }
+
+  bool RunInShard(EngineShard* shard);
+  bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
+
+
+  void DispatchHop();
+
 
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
@@ -202,39 +220,29 @@ public:
   State GetState() const { return state_; }
   uint8_t GetCoordinatorState() const { return coordinator_state_; }
 
-  struct SlicesArgs {
-    std::vector<Slice> slices;
-    ShardId unique_shard_id;
-    uint32_t unique_shard_cnt;
-    uint32_t key_num;
-  };
 
-  struct MultiData {
-    using ComPair = std::pair<const CommandId*, std::vector<std::string_view>>;
-    std::vector<ComPair> Commmends;
-    std::vector<SlicesArgs> slices_args;
-    std::vector<std::string> Res;
-  };
-  // void startMulti();
-  // auto& StartExec() -> MultiData::Commends&;
-  // template<typename Cb>
-  // void AddWatchKey(std::string_view key, Cb&& cb) { return conn_cntx_->AddWatchKey(key, std::move(cb)); }
-  // auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
-  // const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
-  // bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
-  // bool IsDirty() const { return conn_cntx_->IsDirty(); }
-  // void FinishOrDiscardMulti();
-  // void CollectCommands(const CommandId* cid, CmdArgList args);
+  void startMulti();
+  size_t StartExec();
+  template<typename Cb>
+  void AddWatchKey(std::string_view key, Cb&& cb) { return conn_cntx_->AddWatchKey(key, std::move(cb)); }
+  auto ClearWatchKeys() { conn_cntx_->ClearWatchKeys(); }
+  const auto& GetWatchKeys() const { return conn_cntx_->GetWatchKeys(); }
+  bool HasWatchKeys() const { return conn_cntx_->HasWatchKeys(); }
+  bool IsDirty() const { return conn_cntx_->IsDirty(); }
+  void FinishOrDiscardMulti();
+  void CollectCommands(const CommandId* cid, CmdArgList args);
+  cppcoro::task<> CollectMutex();
+  TxQueue::Iterator& GetPqPos(ShardId sid) {
+    return pq_pos_[SidToId(sid)];
+  }
+  void CollectAndSend(int fd, std::string&& s);
 
-
-
-
-
+  bool IsArmed() const { return is_armed_.load(std::memory_order_acquire); }
 private:
 
   cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
-  void FinishHop();
+  void FinishHop(ShardId sid);
   cppcoro::AsyncTask Finish();
   void RunCallback(EngineShard* shard);
 
@@ -245,8 +253,10 @@ private:
   void EnableAllShards();
 
 
-  bool LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
-  void UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
+  bool LockMultiShardCb(ShardId sid) const ;
+  void UnlockMultiShardCb(ShardId sid) const ;
+
+
 
   unsigned SidToId(ShardId sid) const {
     return sid < Slices_.size() ? sid : 0;
@@ -282,6 +292,9 @@ private:
 
   std::atomic_uint32_t run_barrier_{0};
   std::vector<Slice> Slices_;
+  std::vector<uint32_t> SliceHopCount_;
+  std::vector<TxQueue::Iterator> pq_pos_;
+  std::vector<KeyLockArgs> lock_args_;
   CmdArgList full_args_;
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
@@ -289,15 +302,19 @@ private:
   MultiData multi_;
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
-  std::atomic_uint32_t use_count_{0};
+  //std::atomic_uint32_t use_count_{0};
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
   uint8_t coordinator_state_ = COORD_CANCELLED;
-  State state_ = State::IDLE;
+  State state_ = State::UnMULTI;
   uint32_t key_num_ = 0;
   ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
+  IntentLock::Mode lock_mode_;
+
+  std::atomic<bool> is_armed_{false};
+
 };
 
 }

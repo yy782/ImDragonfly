@@ -36,7 +36,6 @@ public:
     
     template<typename Cb>
     void AddWatchKey(std::string_view key, Cb&& cb);
-
     void ClearWatchKeys() {
         watch_keys_.clear();
         ++watched_dirty_ver_;
@@ -55,8 +54,6 @@ public:
     }
     const Namespace* GetNamespace() const { return ns_; }
     DbIndex GetDbIndex() const { return index_; }
-
-
 private:
     friend class RedisSession;
     ConnectionContext(RedisSessionPtr owner, Namespace* ns, DbIndex index) : owner_(owner), ns_(ns),index_(index) {}

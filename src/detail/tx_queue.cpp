@@ -150,7 +150,6 @@ void TxQueue::Remove(Iterator it) {
 }
 
 TxQueue::Iterator TxQueue::SwapBack(Transaction* t, Iterator it) {
-  assert(!Empty());
   if (it != kEnd) {
      Remove(it);
   }

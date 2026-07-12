@@ -137,7 +137,7 @@ public:
     void RegisterWatchedKey(std::string_view key,
                                     ConnectionContext* conn_cntx);
     void PostUpdate(DbIndex db_ind, std::string_view key);
-    void UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys);
+    // void UnregisterWatchedKeys(ConnectionContext* conn_cntx, const std::vector<std::string_view>& keys);
 
     bool Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args);
     void Release(IntentLock::Mode mode, const KeyLockArgs& lock_args);

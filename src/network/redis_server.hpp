@@ -94,13 +94,15 @@ public:
         is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
                                 cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
 
-        if (transaction_.GetState() == Transaction::State::IDLE) {
+        if (transaction_.GetState() == Transaction::State::UnMULTI) {
             std::destroy_at(&transaction_);                
             std::construct_at(&transaction_, ci);         
             transaction_.InitByArgs(&context_, args_);
+        
         } else {
             if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
-                transaction_.QueueCommand(ci, args_);
+                LOG(INFO) << "Collect command " << ci->name();
+                transaction_.CollectCommands(ci, args_);
                 SendStatus("QUEUED");
                 return;
             }               
@@ -121,7 +123,7 @@ public:
     int fd() const noexcept { return fd_; }
 private:
     void SendImp(std::string&& s) {
-        yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+        transaction_.CollectAndSend(fd(), std::move(s));
     }
 
     friend class ConnectionContext;
@@ -141,7 +143,7 @@ public:
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
-        //RegisterMulti(CIs);
+        RegisterMulti(CIs);
         RegisterListFamily(CIs);
         RegisterHashFamily(CIs);
         RegisterSetFamily(CIs);
