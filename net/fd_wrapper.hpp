@@ -37,8 +37,7 @@ inline int ListenFd(){
         close(listen_fd);
         return -1;
     }
-    int backlog = 128;  
-    if (listen(listen_fd, backlog) == -1) {
+    if (listen(listen_fd, SOMAXCONN) == -1) {
         perror("listen");
         close(listen_fd);
         return -1;

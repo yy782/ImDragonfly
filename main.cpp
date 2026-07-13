@@ -7,9 +7,12 @@
 #include <memory>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <errno.h>
 #include <cstdio>
-
+#include <cstdlib>
+#include "net/fd_wrapper.hpp"
 using namespace dfly;
 
 /*
@@ -50,13 +53,11 @@ mimalloc: warning: mi_usable_size: pointer might not point to a valid heap regio
 // ./imdragonfly
 
 int main(int argc, char *argv[]) {
-
     int ret = mkdir("./logs", 0755);
     if (ret != 0 && errno != EEXIST) {
         fprintf(stderr, "Failed to create logs directory: %s\n", strerror(errno));
         return 1;
     }
-    
     FLAGS_log_dir = "./logs";
     FLAGS_logtostderr = false;
     FLAGS_alsologtostderr = false;
@@ -65,24 +66,18 @@ int main(int argc, char *argv[]) {
 #ifndef NDEBUG
     FLAGS_logbufsecs = 0;
 #endif
-
     google::InitGoogleLogging(argv[0]);
-    
     LOG(INFO) << "ImDragonfly server starting...";
-
-    int listen_fd = base::ListenFd();
-    LOG(INFO) << "Listening on fd: " << listen_fd;
-
     int num = 4;
+    int port = 6379;
     if (argc > 1) {
         num = std::atoi(argv[1]);
     }
-    RedisServer server(listen_fd, num);
-    std::string str = "RedisServer initialized with  " + std::to_string(num) + "shards";
+    int fd = base::ListenFd();
+    RedisServer server(fd, num);
+    std::string str = "RedisServer initialized with  " + std::to_string(num) + " shards";
     LOG(INFO) << str;
-
     server.Start();
-    
     LOG(INFO) << "ImDragonfly server shutting down...";
     google::ShutdownGoogleLogging();
     return 0;

@@ -11,28 +11,23 @@ namespace base{
 
 class UringProactorPool{
 public:
-    UringProactorPool(uint32_t size) : proactors_(size) {
-        for(std::size_t i = 0;i < proactors_.size(); ++i){
-            proactors_[i] = std::make_shared<UringProactor>(i, 4096);
-        }
-
+    UringProactorPool(uint32_t size, UringConfig cfg = {}) : cfg_(cfg),proactors_(size) {
         for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_.emplace_back();
         }
     }
-
     void AsyncLoop() {
 
         std::string base_name = "proactor_thread_";
         for(std::size_t i = 0;i < proactors_.size(); ++i){
             threads_[i] = std::make_unique<util::Thread>((base_name + std::to_string(i)).c_str(), [this, i]{
+                proactors_[i] = std::make_shared<UringProactor>(cfg_, i);
                 proactors_[i]->loop();
             });            
         }
     }
 
     void stop() {
-
         DispatchBrief([this](std::shared_ptr<UringProactor> p){
             p->stop();
         });
@@ -69,6 +64,7 @@ public:
     auto operator[](size_t index) const { return at(index); }
 
 private:
+    UringConfig cfg_;
     std::vector<std::shared_ptr<UringProactor>> proactors_;
     std::vector<std::unique_ptr<util::Thread>> threads_;
 };

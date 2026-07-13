@@ -12,8 +12,8 @@
 #include <boost/intrusive_ptr.hpp>
 #include "cppcoro/async_mutex.hpp"
 #include "cppcoro/task.hpp"
-#include "util/wait_queue.hpp"
-#include "util/spinlock.hpp"
+#include "wait_queue.hpp"
+#include "spinlock.hpp"
 namespace util {
 
 class EventCount {
@@ -22,6 +22,44 @@ public:
     }
 
     using cv_status = std::cv_status;
+
+    struct WaitAwaitable{
+        EventCount* event_;
+        uint32_t epoch_;
+
+        bool SuspendWithResume = true;
+        detail::Waiter waiter {};
+
+        bool await_ready() const noexcept
+        {
+            return false;
+        }
+        bool await_suspend(
+            std::coroutine_handle<> awaitingCoroutine) noexcept
+            {
+                std::unique_lock lk(event_->lock_); 
+                if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
+                        waiter.handler = awaitingCoroutine;
+                        event_->wait_queue_.Link(&waiter);
+                        lk.unlock();
+                        SuspendWithResume = true;
+                }
+                else {
+                        SuspendWithResume = false;
+                        lk.unlock();
+                }
+                return SuspendWithResume;
+            }
+
+            bool await_resume() 
+            {
+                return SuspendWithResume;
+            }
+    };
+
+    WaitAwaitable wait(uint32_t epoch) noexcept{
+        return WaitAwaitable{this, epoch};
+    }
 
     class Key {
         friend class EventCount;
@@ -76,56 +114,12 @@ public:
 
     Key prepareWait() noexcept {
         uint64_t prev = val_.fetch_add(kAddWaiter, std::memory_order_acq_rel);
-        return Key(this, prev >> kEpochShift);
+        return Key(this, static_cast<uint32_t>(prev >> kEpochShift));
     }
 
     void finishWait() noexcept {
-        // We need this barrier to ensure that notify()/notifyAll() has finished before we return.
-        // This is necessary because we want to avoid the case where continue to wait for
-        // another eventcount/condition_variable and have two notify functions waking up the same
-        // fiber at the same time.
         lock_.lock();
         lock_.unlock();
-    }
-
-    struct WaitAwaitable{
-        EventCount* event_;
-        uint32_t epoch_;
-
-
-
-        bool SuspendWithResume = true;
-        detail::Waiter waiter {};
-
-        bool await_ready() const noexcept
-        {
-            return false;
-        }
-        bool await_suspend(
-            std::coroutine_handle<> awaitingCoroutine) noexcept
-            {
-                std::unique_lock lk(event_->lock_); 
-                if((event_->val_.load(std::memory_order_relaxed) >> event_->kEpochShift) == epoch_){
-                        waiter.handler = awaitingCoroutine;
-                        event_->wait_queue_.Link(&waiter);
-                        lk.unlock();
-                        SuspendWithResume = true;
-                }
-                else {
-                        SuspendWithResume = false;
-                        lk.unlock();
-                }
-                return SuspendWithResume;
-            }
-
-
-            bool await_resume() 
-            {
-                return SuspendWithResume;
-            }
-    };
-    auto wait(uint32_t epoch) noexcept{
-        return WaitAwaitable{this, epoch};
     }
 
 
@@ -358,4 +352,4 @@ private:
 
 
 
-}  // namespace util
+}  // namespace base

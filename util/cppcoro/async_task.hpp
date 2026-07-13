@@ -27,10 +27,7 @@ private:
 };
 class AsyncPromise {
 public:
-    template<typename ...Args>
-    AsyncPromise(Args&&...) noexcept {
 
-    }
     AsyncPromise() noexcept {
 
     }

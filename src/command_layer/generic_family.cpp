@@ -48,7 +48,7 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto conn = cmd_cntx->conn_cntx()->owner();
     if ( res.status() == OpStatus::OK)
-        conn->Send(del_cnt);
+        conn->SendInteger(del_cnt);
     else 
         conn->SendERROR();
     co_return;
@@ -67,6 +67,7 @@ void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
         return conn->SendERROR();
     }
     std::string msg = "PONG";
+    
     
     conn->SendStatus(msg);
 }
@@ -101,7 +102,7 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
     if(res.status() == OpStatus::OK)
     {
         
-        conn->Send(result.load());  // FIXME
+        conn->SendInteger(result.load());  // FIXME
     }
     else 
     {
@@ -181,7 +182,7 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
     auto conn = cmd_cntx->conn_cntx()->owner();  
     if(res.status() == OpStatus::OK)
     {
-        conn->Send(res.value());
+        conn->SendInteger(res.value());
     }
     else 
     {
@@ -226,7 +227,7 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
     if(res.status() == OpStatus::OK)
     {
         
-        conn->Send(res.value());
+        conn->SendInteger(res.value());
     }
     else 
     {
@@ -270,9 +271,9 @@ void GenericFamily::Register(CommandRegistry* registry) {
   *registry
       << CI{"DEL", /*keys_start*/ 1, /*keys_nums*/ kInvalidKeysNum, /*keys_offset*/ 1}.SetHandler(&GenericFamily::Delex)
       << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", 1, kInvalidKeysNum, 1, CO::READABLE}.SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", 1, 1, kInvalidKeysOffset}.SetHandler(&GenericFamily::Expire)
-      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::ExpireTime)
+      << CI{"EXISTS", 1, kInvalidKeysNum, 1, CO::READABLE | CO::NEED_TIME}.SetHandler(&GenericFamily::Exists)
+      << CI{"EXPIRE", 1, 1, kInvalidKeysOffset, CO::NEED_TIME}.SetHandler(&GenericFamily::Expire)
+      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset, CO::READABLE | CO::NEED_TIME}.SetHandler(&GenericFamily::ExpireTime)
       << CI{"TTL", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Ttl)
       << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)
       << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)

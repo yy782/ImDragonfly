@@ -15,6 +15,7 @@ if(URING_LIBRARY AND URING_INCLUDE_DIR)
         IMPORTED_LOCATION "${URING_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${URING_INCLUDE_DIR}"
     )
+    target_link_libraries(third_party_deps INTERFACE uring)
 else()
     message(STATUS "[third_party] 系统未找到 liburing，下载到 build/_deps ...")
     FetchContent_Declare(
@@ -25,6 +26,7 @@ else()
     )
     FetchContent_MakeAvailable(liburing)
     # liburing 的 CMake 项目会生成 target: uring
+    target_link_libraries(third_party_deps INTERFACE uring)
 endif()
 
 find_library(MIMALLOC_LIBRARY NAMES mimalloc libmimalloc)

@@ -1,16 +1,26 @@
 # StorageEngine/CMakeLists.txt
 cmake_minimum_required(VERSION 3.14)
-project(StorageEngine VERSION 1.0.0)
 
-# C++ 标准
+find_program(CLANG_EXECUTABLE clang)
+find_program(CLANGXX_EXECUTABLE clang++)
+
+if(CLANG_EXECUTABLE AND CLANGXX_EXECUTABLE)
+    set(CMAKE_C_COMPILER "${CLANG_EXECUTABLE}" CACHE PATH "C compiler" FORCE)
+    set(CMAKE_CXX_COMPILER "${CLANGXX_EXECUTABLE}" CACHE PATH "C++ compiler" FORCE)
+else()
+    message(FATAL_ERROR "clang/clang++ not found! Please install Clang 17+")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+project(StorageEngine VERSION 1.0.0)
+
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-option(BUILD_TESTS "Build tests" ON)
+option(BUILD_TESTS "Build tests" OFF)
 # cmake CMAKE_BUTLD_TYPE = Release ..
 # cmake -DBUILD_TESTING=OFF -DHELIO_BUILD_TESTS=OFF ..
 # 开启 Debug/Release 模式
@@ -64,22 +74,20 @@ else()
     )
 endif()    
 
-# 主代码
+# 不编译 YY — 项目 util/ 已提供全部工具类（Thread, TaskQueue 等）
 add_subdirectory(net)
-add_subdirectory(src)
-# 测试
 
+add_subdirectory(src)
 
 if(BUILD_TESTS)
     add_subdirectory(test/redis)
     add_subdirectory(test)   
 endif()
 
-# 主程序
 add_executable(imdragonfly main.cpp)
 target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/net
+    ${CMAKE_SOURCE_DIR}/util
 )
 target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 

@@ -5,16 +5,10 @@
 #include "lock_free_queues/ProducerConsumerQueue.h"
 
 namespace util{
-
 template < typename T>
 using mpmc_bounded_queue = base::mpmc_bounded_queue<T>;
-
 template < typename T>
 using MPSCIntrusiveQueue = base::MPSCIntrusiveQueue<T>;
-
 template < typename T>
 using ProducerConsumerQueue = folly::ProducerConsumerQueue<T>;
-
-
-
 }

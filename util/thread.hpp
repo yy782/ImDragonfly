@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <iostream>
 #include <pthread.h>
 #include <functional>
 #include <utility>
@@ -52,7 +53,19 @@ public:
             std::terminate();  
         }
     }
-    
+    static bool set_cpu_affinity(int core_id) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(core_id, &cpuset);
+        
+        int ret = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+        if (ret != 0) {
+            std::cerr << "Failed to set CPU affinity for thread " << pthread_self() << std::endl;
+            assert(false && "Failed to set CPU affinity");
+            return false;
+        }
+        return true;
+    }     
     void join() {
         if (!joinable()) {
             throw std::runtime_error("Thread not joinable");

@@ -1,6 +1,7 @@
 #pragma once
 #include "engine_shard.hpp"
-#include "base/uring_proactor_pool.hpp"
+#include "net/uring_proactor_pool.hpp"
+
 
 #include "util/Time.hpp"
 #include <latch>
@@ -53,8 +54,22 @@ public:
         latch.wait();
     }
 
+    template <typename Func, typename P>
+    void DispatchBriefInParallel(Func&& f, P&& pred) {
+        for (uint32_t i = 0; i < size(); ++i) {
+            if (!pred(i))
+                continue;
+            auto dest = pp_->at(i);
+            dest->DispatchBrief([f]() mutable {
+                f(EngineShard::tlocal());
+            });            
+        }
+    }    
+
+
+    
 private:
-    void InitThreadLocal(base::UringProactorPtr pb);
+    void InitThreadLocal(base::UringProactor* pb);
     base::UringProactorPool* pp_;
     std::unique_ptr<EngineShard*[]> shards_;
     uint32_t size_ = 0;
@@ -63,12 +78,5 @@ private:
 
 
 
-
-
-
-
-
 extern EngineShardSet* shard_set;
 }  // namespace dfly
-
-

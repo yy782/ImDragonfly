@@ -1,6 +1,7 @@
-// network/redis_server.h
-#pragma once // redis_server.hpp  
+#pragma once
 #include <glog/logging.h>
+#include <netinet/tcp.h>
+#include <netinet/in.h>
 #include "sharding/engine_shard_set.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "redis/facade/ParseRESP.hpp"
@@ -9,36 +10,30 @@
 #include <netinet/tcp.h>
 #include "command_layer/multi_family.hpp"
 #include "sharding/namespaces.hpp"
-#include "base/uring_proactor_pool.hpp"
-#include "base/socket.hpp"
 #include "transaction_layer/transaction.hpp"
-#include "base/fd_wrapper.hpp"
-#include "util/thread.hpp"
-#include <cstring>
-#include <exception>
+#include "net/uring_socket.hpp"
 namespace dfly{
-using base::UringProactorPtr;
+
 inline CommandRegistry* CIs = nullptr;
 class RedisServer;
 inline RedisServer* ser = nullptr;
 
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
 public:
-    RedisSession(int fd, UringProactorPtr proactor)
-        : socket_(proactor, fd)
-
-         {
-            
+    RedisSession(int fd, base::UringProactorPtr p)
+        : socket_(p, fd)
+    {
     }
 
     ~RedisSession() {
-       assert(std::uncaught_exceptions() == 0);
+        assert(std::uncaught_exceptions() == 0);
     }
     
-    UringProactorPtr GetProactor() { return socket_.Proactor(); }
+    base::UringProactorPtr GetProactor() { return socket_.Proactor(); }
     Transaction* GetTransaction() { return &transaction_; }
 
     cppcoro::AsyncTask DoRead(){        
+        socket_.RegisterRecvBuf();
         pId_ = socket_.Proactor()->GetLoopThreadId();
         context_ = ConnectionContext(shared_from_this(), &namespaces->GetDefaultNamespace(), 0);
         int fd = socket_.fd();
@@ -71,11 +66,11 @@ public:
                     std::construct_at(&transaction_, ci);
                     transaction_.InitByArgs(&context_, args_);
                 }else {
-                    if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
-                        transaction_.QueueCommand(ci, args_);
-                        SendStatus("QUEUED");
-                        continue;
-                    }               
+                    // if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
+                    //     transaction_.QueueCommand(ci, args_);
+                    //     SendStatus("QUEUED");
+                    //     continue;
+                    // }               
                 }
 
                 ci->Invoke(&transaction_.GetCommandContext(), args_); 
@@ -90,7 +85,10 @@ public:
             }            
         }
         auto t = &transaction_;
-        assert(t && (t->GetCoordinatorState() == Transaction::COORD_CANCELLED));
+
+        close.store(true, std::memory_order_release);
+        if (t && (t->GetCoordinatorState() != Transaction::COORD_CANCELLED))
+            co_return;
         socket_.Close();
         context_.owner().reset();
         co_return;  
@@ -99,15 +97,12 @@ public:
     void SendERROR(std::string err = "NULL") {
         SendImp(BuildError(err));
     }
-    void Send(int64_t n) {
-        SendImp(BuildInteger(n));
-    }
 
-    void Send(const std::string& s){
+    void SendString(const std::string& s){
         SendImp(BuildBulkString(s));
     }
-    void Send(const std::string_view& s){
-        Send(std::string(s));
+    void SendViewStr(const std::string_view& s){
+        SendImp(std::string(s));
     }
     void SendVec(const std::vector<std::string>& v) {
         SendImp(BuildArray(v));
@@ -125,7 +120,7 @@ public:
         SendImp(BuildInteger(n));
     }
     void SendNULL() {
-        Send(std::string());
+        SendString(std::string());
     }
     base::UringSocket& socket() { return socket_; }
 private:
@@ -138,7 +133,11 @@ private:
         // }
         multi_res_ = std::move(s);
         p->DispatchBrief([this] () mutable {
-            DoWrite();     
+            DoWrite();
+            if (close.load(std::memory_order_acquire)) {
+                socket_.Close();
+                context_.owner().reset();
+            }     
         });
         return;         
     }
@@ -148,7 +147,6 @@ private:
         assert(wr == multi_res_.size());
         co_return;
     }
-
 
     friend class ConnectionContext;
     
@@ -161,19 +159,20 @@ private:
     base::RecvResult res_;
     std::string multi_res_;
     pthread_t pId_;
+    std::atomic<bool> close = false;
 };
 
 class RedisServer {
 public:
     RedisServer(int listenFd, uint32_t size)
-        :   main_proactor_(new base::UringProactor(0)),
-            pool_(size),
+        :   main_proactor_(std::make_shared<base::UringProactor>(CreateOptimizedRedisConfig())),
+            pool_(size, CreateOptimizedRedisConfig()),
             ListenSocket_(main_proactor_, listenFd)
     {
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
         RegisterGeneric(CIs);
-        RegisterMulti(CIs);
+        //RegisterMulti(CIs);
         RegisterListFamily(CIs);
         RegisterHashFamily(CIs);
         RegisterSetFamily(CIs);
@@ -191,8 +190,9 @@ public:
         config.use_registered_bufs = true;    // 启用注册缓冲区：零拷贝接收
         config.registered_buf_count = 1024;   // 更多缓冲区：支持高并发连接
         config.registered_buf_size = 100;   
-        config.cqe_batch_size = 128;          // 大批次处理：提高吞吐量
-        config.kSqeBatchSize = 10;
+        config.cqe_batch_size = 100;          // 大批次处理：提高吞吐量
+        config.task_queue_size = 1024;    
+        config.sqe_batch_size = 32;   
         return config;
     }
 
@@ -214,19 +214,19 @@ public:
         shard_set = new EngineShardSet(&pool_);
         shard_set->Init(pool_.size());
         main_proactor_->DispatchBrief([this]{
+            LOG(INFO) << "Starting ListenSocket...";
             listen();
         });
         main_proactor_->loop();
     }
     
     void Stop() {
-        main_proactor_->DispatchBrief([this](){
-            isRuning = false;
-            main_proactor_->stop();
+        pool_.stop();
+        main_proactor_->Shutdown();
+        isRuning = false;
+        if (shard_set) {
             shard_set->Shutdown();
-            pool_.stop();
-            
-        });
+        }
     }
     
 private:
@@ -235,6 +235,7 @@ private:
         while(isRuning){
             auto fd = co_await ListenSocket_.AsyncAccept();
             if (fd > 0){
+                LOG(INFO) << "Accepted connection, fd: " << fd;
                 // 禁用 Nagle 算法，Redis 响应多为小包，避免 40ms+ 延迟
                 int nodelay = 1;
                 setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
@@ -242,14 +243,7 @@ private:
                 int quickack = 1;
                 setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
 
-
-                std::string addr = base::AddressToString(base::Address(fd));
-                LOG(INFO) << "Accepted new connection, addr: " << addr;
-
                 auto p = NextProactor();
-                VLOG(1) << "Assigning connection to proactor: " << p->GetPoolIndex();
-
-                
                 
                 bool success = p->DispatchBrief([fd, p] () {
                     auto session = std::make_shared<RedisSession>(fd, p);
@@ -266,7 +260,7 @@ private:
 
         co_return;
     }
-    auto NextProactor() -> UringProactorPtr {
+    auto NextProactor() -> base::UringProactorPtr {
         NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
         return pool_[NextProIndex_];
     }
@@ -278,9 +272,6 @@ private:
     base::UringProactorPool pool_;
     base::UringSocket ListenSocket_;
     bool isRuning = false;
-
 };
-
-
 
 }

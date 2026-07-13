@@ -1,20 +1,16 @@
+cmake_minimum_required(VERSION 3.10)
 
-file(GLOB_RECURSE STORAGE_SOURCES 
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-
+file(GLOB NET_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
 )
 
-add_library(net STATIC ${STORAGE_SOURCES} )
+add_library(net ${NET_SOURCES})
 
 target_include_directories(net PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/util
 )
 
-target_compile_options(net PRIVATE ${CXX_WARNING_OPTIONS})
-
-# 链接库
 target_link_libraries(net PUBLIC
-    ${CMAKE_THREAD_LIBS_INIT}
-    third_party_deps 
-    uring 
+    third_party_deps
 )

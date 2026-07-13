@@ -53,4 +53,8 @@ compile_commands.json
 CTestTestfile.cmake
 tmp/
 
+# Python / pytest 缓存
 test/redis-py/__pycache__/
+
+
+

@@ -65,7 +65,7 @@ CoroTask CmdZAdd(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -97,7 +97,7 @@ CoroTask CmdZCard(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -134,7 +134,7 @@ CoroTask CmdZScore(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(result.value());
+        conn->SendString(result.value());
     } else if (result.status() == OpStatus::KEY_NOTFOUND) {
         conn->SendStatus("(nil)");
     } else {
@@ -179,7 +179,7 @@ CoroTask CmdZRem(CommandContext* cmd_cntx, CmdArgList args) {
     auto conn = cmd_cntx->conn_cntx()->owner();
 
     if (result.status() == OpStatus::OK) {
-        conn->Send(static_cast<int64_t>(result.value()));
+        conn->SendInteger(static_cast<int64_t>(result.value()));
     } else {
         conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
@@ -213,7 +213,7 @@ CoroTask CmdZRank(CommandContext* cmd_cntx, CmdArgList args) {
 
     if (result.status() == OpStatus::OK) {
         if (result.value() >= 0) {
-            conn->Send(result.value());
+            conn->SendInteger(result.value());
         } else {
             conn->SendStatus("(nil)");
         }
@@ -250,7 +250,7 @@ CoroTask CmdZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
 
     if (result.status() == OpStatus::OK) {
         if (result.value() >= 0) {
-            conn->Send(result.value());
+            conn->SendInteger(result.value());
         } else {
             conn->SendStatus("(nil)");
         }
