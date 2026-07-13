@@ -17,11 +17,45 @@ using facade::kInvalidKeysOffset;
 std::atomic<uint64_t> txid_counter_{1};
 
 inline uint64_t Fingerprint(std::string_view str) {
-  uint64_t hash = 14695981039346656037ULL;
-  for (char c : str) {
-    hash ^= static_cast<uint8_t>(c);
-    hash *= 1099511628211ULL;
-  }
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(str.data());
+    size_t len = str.size();
+    
+    uint64_t hash = 14695981039346656037ULL;
+    const uint64_t prime = 1099511628211ULL;
+    
+    size_t i = 0;
+    
+    // AVX2：一次处理 32 字节
+    if (len >= 32) {
+        __m256i vec = _mm256_setzero_si256();
+        for (; i + 32 <= len; i += 32) {
+            __m256i chunk = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(data + i)
+            );
+            vec = _mm256_xor_si256(vec, chunk);
+        }
+        // 混合 AVX2 结果到 hash
+        alignas(32) uint64_t buffer[4];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(buffer), vec);
+        hash ^= buffer[0] ^ buffer[1] ^ buffer[2] ^ buffer[3];
+        hash *= prime;
+    }
+    
+    // 处理剩余 8 字节块
+    for (; i + 8 <= len; i += 8) {
+        uint64_t chunk;
+        memcpy(&chunk, data + i, 8);
+        hash ^= chunk;
+        hash *= prime;
+    }
+    
+    // 处理尾部
+    if (i < len) {
+        uint64_t tail = 0;
+        memcpy(&tail, data + i, len - i);
+        hash ^= tail;
+        hash *= prime;
+    }
   return hash;
 }
 
@@ -29,7 +63,9 @@ inline uint64_t Fingerprint(std::string_view str) {
 
 
 
-Transaction::Transaction(const CommandId* cid) : cid_(cid) {
+Transaction::Transaction(const CommandId* cid) : cid_(cid),
+  pq_pos_(shard_set->size(), TxQueue::kEnd)
+ {
 }
 
 Transaction::~Transaction() {
@@ -38,10 +74,17 @@ Transaction::~Transaction() {
 
 
 void Transaction::InitByArgs(ConnectionContext* conn_cntx, CmdArgList args) {
+  lock_args_.resize(shard_set->size());
+  lock_mode_ = (cid_->opt_mask() & CO::READABLE) ? 
+      IntentLock::Mode::SHARED : IntentLock::Mode::EXCLUSIVE;
   conn_cntx_ = conn_cntx;
   namespace_ = conn_cntx_->GetNamespace();
   full_args_ = args;
-  db_cntx_ = DbContext(namespace_, conn_cntx_->GetDbIndex(), util::GetCurrentTimeMs());
+  if (cid_->opt_mask() & CO::NEED_TIME) {
+    db_cntx_ = DbContext(namespace_, conn_cntx_->GetDbIndex(), util::GetCurrentTimeMs());
+  }else [[likely]] {
+    db_cntx_ = DbContext(namespace_, conn_cntx_->GetDbIndex(), -1);
+  }
   cmd_cntx_ = CommandContext(conn_cntx_, this, cid_);
   InitSlice();
   return;
@@ -58,7 +101,6 @@ void Transaction::InitSlice() {
     if (slice.keyIds.empty()) {
       ++unique_shard_cnt_;
       unique_shard_id_ = sid;
-      slice.lists = CmdArgList(full_args_.begin(), full_args_.end());
       Slices_[sid].unique_shard_id = sid;
       Slices_[sid].tx = this;
     }
@@ -74,7 +116,7 @@ void Transaction::InitSlice() {
       if (!(slice.local_mask & ACTIVE)) {
         continue;
       }
-      slice.lock_args = GetLockArgs(slice.unique_shard_id);
+      lock_args_[i] = GetLockArgs(slice.unique_shard_id);
     }
   }else {
     auto& slice = Slices_[unique_shard_id_];
@@ -83,7 +125,7 @@ void Transaction::InitSlice() {
     if (shard->shard_id() == unique_shard_id_) {
       coordinator_state_ |= COORD_INLINE;
     }
-    slice.lock_args = GetLockArgs(unique_shard_id_);
+    lock_args_[unique_shard_id_] = GetLockArgs(unique_shard_id_);
   }
 }
 
@@ -172,14 +214,15 @@ void Transaction::DispatchHop() {
 
 
 bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
-  auto& sd = Slices_[SidToId(shard->shard_id())];
+  auto sid = shard->shard_id();
+  auto& sd = Slices_[sid];
 /*
 - 拿到锁了 → 直接入队，排着等执行
 - 没拿到锁，但 txid 比队尾大 → 也可以入队（排到队尾），等前面的事务释放锁后才有机会执行
 - 没拿到锁，且 txid 比队尾小 → 不行，会破坏 FIFO 顺序，返回失败让协调器重试
 */
 
-  if ((!(sd.local_mask & KEYLOCK_ACQUIRED)) && LockMultiShardCb(sd.lock_args, shard)) {
+  if ((!(sd.local_mask & KEYLOCK_ACQUIRED)) && LockMultiShardCb(sid)) {
     sd.local_mask |= KEYLOCK_ACQUIRED;
   }else {
     if (!shard->txq()->Empty() && shard->txq()->Back()->txid() > txid_) {
@@ -194,22 +237,22 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
         (sd.local_mask & OUT_OF_ORDER);
   if (can_execute && RunInShard(shard)) return true; 
   else {
-    sd.pq_pos = shard->txq()->SwapBack(this, sd.pq_pos);
+    pq_pos_[sid] = shard->txq()->SwapBack(this, pq_pos_[sid]);
   }
   return true;
 }
 
 bool Transaction::RunInShard(EngineShard* shard) {
-  auto& sd = Slices_[SidToId(shard->shard_id())];
+  auto sid = shard->shard_id();
+  auto& sd = Slices_[sid];
   if (!(sd.local_mask & KEYLOCK_ACQUIRED)) {
-    if (!LockMultiShardCb(sd.lock_args, shard)) {
+    if (!LockMultiShardCb(sid)) {
       return false;
     }
     sd.local_mask |= KEYLOCK_ACQUIRED;    
   }
-  ShardId sid = shard->shard_id();
   RunCallback(shard);
-  FinishHop();
+  FinishHop(sid);
   return true;
 }
 
@@ -218,30 +261,26 @@ void Transaction::RunCallback(EngineShard* shard) {
   cb_(this, shard);
 }
 
-void Transaction::FinishHop() {
-
+void Transaction::FinishHop(ShardId sid) {
   uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
-
+  auto e = EngineShard::tlocal();
   if (isInline()) {
-      auto e = EngineShard::tlocal();
-      ShardId sid = e->shard_id();
-      auto& sd = Slices_[SidToId(sid)];
-      UnlockMultiShardCb(sd.lock_args, e);
+      auto& sd = Slices_[sid];
+      UnlockMultiShardCb(sid);
       e->AddCommittedTxid(this);
-      if (sd.pq_pos != TxQueue::kEnd) {
-        e->txq()->Remove(sd.pq_pos);
+      if (pq_pos_[sid] != TxQueue::kEnd) {
+        e->txq()->Remove(pq_pos_[sid]);
       }
     return;
   }
   
   if (state_ == State::IDLE) {
     auto e = EngineShard::tlocal();
-    ShardId sid = e->shard_id();
-    auto& sd = Slices_[SidToId(sid)];
-    UnlockMultiShardCb(sd.lock_args, e);
+    auto& sd = Slices_[sid];
+    UnlockMultiShardCb(sid);
     e->AddCommittedTxid(this);
-    if (sd.pq_pos != TxQueue::kEnd) {
-      e->txq()->Remove(sd.pq_pos);
+    if (pq_pos_[sid] != TxQueue::kEnd) {
+      e->txq()->Remove(pq_pos_[sid]);
     }
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;
@@ -255,7 +294,7 @@ void Transaction::FinishHop() {
 }
 
 KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
-  const auto& sd = Slices_[SidToId(sid)];
+  const auto& sd = Slices_[sid];
   std::vector<LockFp> fps;
   for (auto key_id : sd.keyIds)
   {
@@ -268,7 +307,7 @@ KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
 }
 
 bool Transaction::IsActive(ShardId sid) const {
-  return Slices_[SidToId(sid)].local_mask & ACTIVE;
+  return Slices_[sid].local_mask & ACTIVE;
 }
 
 
@@ -277,16 +316,16 @@ DbSlice& Transaction::GetDbSlice(ShardId sid) const {
 }
 
 IntentLock::Mode Transaction::LockMode() const { 
-  return (cid_->opt_mask() & CO::READABLE) ? IntentLock::Mode::SHARED : IntentLock::Mode::EXCLUSIVE;
+  return lock_mode_;
 }
 
 
-bool Transaction::LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard) {
-  return GetDbSlice(shard->shard_id()).Acquire(LockMode(), lock_args);
+bool Transaction::LockMultiShardCb(ShardId sid) {
+  return GetDbSlice(sid).Acquire(LockMode(), lock_args_[sid]);
 }
 
-void Transaction::UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard) {
-  GetDbSlice(shard->shard_id()).Release(LockMode(), lock_args);
+void Transaction::UnlockMultiShardCb(ShardId sid) {
+  GetDbSlice(sid).Release(LockMode(), lock_args_[sid]);
 }
 
 

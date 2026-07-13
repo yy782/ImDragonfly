@@ -24,6 +24,7 @@
 #include "detail/tx_queue.hpp"
 #include "cppcoro/async_task.hpp"
 #include "cppcoro/task.hpp"
+#include "YY/base/synchronization.hpp"
 namespace dfly{
 using ::cmn::CmdArgList;
 
@@ -89,6 +90,13 @@ public:
   ConnectionContext* GetConnectionContext() {
     return conn_cntx_;
   }
+  CmdArgList& GetFullArgs() {
+    return full_args_;
+  }
+
+  const CmdArgList& GetFullArgs() const {
+    return full_args_;
+  }
 
   bool RunInShard(EngineShard* shard);
   bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
@@ -101,14 +109,11 @@ public:
     COORD_INLINE = 1 << 3, // 协调器在本地执行
   };
   void DispatchHop();
-  struct Slice{
+  struct alignas(64) Slice{
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
-    KeyLockArgs lock_args;
-    CmdArgList lists;
     uint16_t local_mask = 0;
-    TxQueue::Iterator pq_pos = TxQueue::kEnd;
     DbSlice& GetDbSlice() {
       return tx->GetDbSlice(unique_shard_id);
     }
@@ -121,6 +126,13 @@ public:
     const DbContext& GetDbContext() const {
       return tx->GetDbContext();
     } 
+    CmdArgList& GetFullArgs() {
+      return tx->full_args_;
+    }
+
+    const CmdArgList& GetFullArgs() const {
+      return tx->full_args_;
+    }
 
     struct Iterator {
       using ArgsIndexPair = std::pair<std::string_view, uint32_t>;
@@ -144,7 +156,7 @@ public:
           return *this;
         }else {
           uint32_t nextId = slice->keyIds[++idx];
-          std::string_view key = slice->lists[nextId];
+          std::string_view key = slice->GetFullArgs()[nextId];
           pa = ArgsIndexPair(key, nextId);
           return *this;                    
         }
@@ -156,13 +168,13 @@ public:
         return cend();
       }else {
         uint32_t keyId = keyIds[0];
-        std::string_view key = lists[keyId]; 
+        std::string_view key = GetFullArgs()[keyId]; 
         return Iterator(key, keyId, this, 0);
       }
     }
 
     Iterator cend() const {
-      uint32_t keyId = lists.size();
+      uint32_t keyId = keyIds.size();
       std::string_view key;
       return Iterator(key, keyId, this, keyIds.size());
     }
@@ -175,7 +187,7 @@ public:
       return cend();
     }   
   };
-
+  static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
     return Slices_[id];
@@ -234,7 +246,7 @@ private:
 
   cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
-  void FinishHop();
+  void FinishHop(ShardId sid);
   cppcoro::AsyncTask Finish();
   void RunCallback(EngineShard* shard);
 
@@ -245,8 +257,8 @@ private:
   void EnableAllShards();
 
 
-  bool LockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
-  void UnlockMultiShardCb(const KeyLockArgs& lock_args, EngineShard* shard);
+  bool LockMultiShardCb(ShardId sid);
+  void UnlockMultiShardCb(ShardId sid);
 
   unsigned SidToId(ShardId sid) const {
     return sid < Slices_.size() ? sid : 0;
@@ -254,7 +266,7 @@ private:
 
   template<typename F>
   cppcoro::task<void> IterateActiveShards(F&& f) {
-    util::BlockingCounter counter(unique_shard_cnt_);
+    base::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
       co_await f(sd, i);
       counter->Dec();
@@ -279,17 +291,18 @@ private:
     co_return;
   }
 
-
   std::atomic_uint32_t run_barrier_{0};
-  std::vector<Slice> Slices_;
-  CmdArgList full_args_;
+  absl::InlinedVector<Slice, 16> Slices_;
+  absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
+  absl::InlinedVector<KeyLockArgs, 16> lock_args_;
+  CmdArgList full_args_;  
+  IntentLock::Mode lock_mode_;
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
   const CommandId* cid_ = nullptr;
   MultiData multi_;
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
-  std::atomic_uint32_t use_count_{0};
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
   uint8_t coordinator_state_ = COORD_CANCELLED;

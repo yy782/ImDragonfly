@@ -7,7 +7,6 @@
 #include "detail/common.hpp"
 #include "cppcoro/task.hpp"
 #include <atomic>
-#include "util/synchronization.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/db_slice.hpp"
 #include <assert.h>

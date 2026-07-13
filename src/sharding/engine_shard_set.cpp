@@ -43,6 +43,7 @@ void EngineShardSet::InitThreadLocal(yy::net::EventLoop* pb) {
     EngineShard::InitThreadLocal(pb);
     EngineShard* es = EngineShard::tlocal();
     shards_[es->shard_id()] = es;
+    base::Thread::set_cpu_affinity(es->shard_id());
 }
 
 

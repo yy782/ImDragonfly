@@ -18,7 +18,7 @@
 #include <memory>
 #include <cstring>
 #include <exception>
-
+#include "YY/net/OneAccSer.h"
 namespace dfly{
 
 inline CommandRegistry* CIs = nullptr;
@@ -80,31 +80,27 @@ public:
             return;
             
         args_ = ::cmn::CmdArgList(com);
-        
-        std::string cmd_name(args_[0]);
-        std::transform(cmd_name.begin(), cmd_name.end(), cmd_name.begin(), ::toupper);
-        
-        auto ci = CIs->Find(cmd_name);
+        auto ci = CIs->Find(args_[0]);
         if (!ci) {
             LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << client_fd;
             SendERROR("unknown command:" + std::string(args_[0]));
             return;
         }
-        
-        is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
-                                cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH");
-
         if (transaction_.GetState() == Transaction::State::IDLE) {
             std::destroy_at(&transaction_);                
             std::construct_at(&transaction_, ci);         
             transaction_.InitByArgs(&context_, args_);
-        } else {
-            if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
-                transaction_.QueueCommand(ci, args_);
-                SendStatus("QUEUED");
-                return;
-            }               
         }
+        // } else {
+        //     bool is_multi_command = false; 
+        //             is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC" || 
+        //                        cmd_name == "DISCARD" || cmd_name == "WATCH" || cmd_name == "UNWATCH"); 
+        //     if (transaction_.GetState() == Transaction::State::MULTI && !is_multi_command) {
+        //         transaction_.QueueCommand(ci, args_);
+        //         SendStatus("QUEUED");
+        //         return;
+        //     }               
+        // }
         
         ci->Invoke(&transaction_.GetCommandContext(), args_);
         
@@ -130,13 +126,13 @@ private:
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
     Transaction transaction_;   
-    bool is_multi_command = false;
+    
 };
 
 class RedisServer {
 public:
-    RedisServer(uint16_t port, int acceptorNum, int workThreadNum)
-        : server_(yy::net::Address(port), acceptorNum, workThreadNum)
+    RedisServer(uint16_t port, yy::net::EventLoop* loop, int workThreadNum)
+        : server_(yy::net::Address(port), loop, workThreadNum)
     {
         CIs = new CommandRegistry();
         RegisterStringFamily(CIs);
@@ -185,7 +181,6 @@ public:
         server_.loop();
         shard_set = new EngineShardSet(server_.getWorkThreadPool());
         shard_set->Init(server_.getWorkThreadPool()->size());         
-        server_.wait();
     }
     
     void Stop() {
@@ -197,7 +192,7 @@ public:
     }
     
 private:
-    yy::net::TcpServer server_;
+    yy::net::Server server_;
     bool isRuning = false;
 };
 

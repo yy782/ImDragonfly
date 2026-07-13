@@ -50,13 +50,11 @@ mimalloc: warning: mi_usable_size: pointer might not point to a valid heap regio
 // ./imdragonfly
 
 int main(int argc, char *argv[]) {
-
     int ret = mkdir("./logs", 0755);
     if (ret != 0 && errno != EEXIST) {
         fprintf(stderr, "Failed to create logs directory: %s\n", strerror(errno));
         return 1;
     }
-    
     FLAGS_log_dir = "./logs";
     FLAGS_logtostderr = false;
     FLAGS_alsologtostderr = false;
@@ -65,21 +63,18 @@ int main(int argc, char *argv[]) {
 #ifndef NDEBUG
     FLAGS_logbufsecs = 0;
 #endif
-
     google::InitGoogleLogging(argv[0]);
-    
     LOG(INFO) << "ImDragonfly server starting...";
-
     int num = 4;
     if (argc > 1) {
         num = std::atoi(argv[1]);
     }
-    RedisServer server(6379, 1, num);
+    yy::net::EventLoop loop;
+    RedisServer server(6379, &loop, num);
     std::string str = "RedisServer initialized with  " + std::to_string(num) + " shards";
     LOG(INFO) << str;
-
     server.Start();
-    
+    loop.loop();
     LOG(INFO) << "ImDragonfly server shutting down...";
     google::ShutdownGoogleLogging();
     return 0;

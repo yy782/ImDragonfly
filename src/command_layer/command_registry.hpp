@@ -19,7 +19,7 @@ namespace CO {
 
 enum CommandOpt : uint32_t { // 命令选项枚举
   READABLE = 1 << 0,  // 命令只读，不修改数据
-  
+  NEED_TIME = 1 << 1, // 命令需要时间戳
 };
 
 
