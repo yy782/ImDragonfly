@@ -166,6 +166,22 @@ bool Transaction::isInline() {
 
 cppcoro::AsyncTask Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
+
+  auto cb = [this] () {
+    for (int i = 0; i < shard_set->size(); ++i) {
+      auto sid = Slices_[i].unique_shard_id;
+      auto& sd = Slices_[i];
+      if (sd.local_mask & ACTIVE) {
+        shard_set->Add(i, [this, sid] () mutable {
+          UnlockMultiShardCb(sid);
+          auto* e = EngineShard::tlocal();
+          e->txq()->Remove(pq_pos_[sid]);          
+        });
+      }
+    }
+  };
+
+
  while(true) {
     txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
     std::atomic<bool> done{true};
@@ -181,6 +197,7 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
     if (done.load(std::memory_order_relaxed)) {
       break;
     }
+    cb();
   }
   co_return;
 }
@@ -222,7 +239,8 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
 - 没拿到锁，且 txid 比队尾小 → 不行，会破坏 FIFO 顺序，返回失败让协调器重试
 */
 
-  if ((!(sd.local_mask & KEYLOCK_ACQUIRED)) && LockMultiShardCb(sid)) {
+  assert(!(sd.local_mask & KEYLOCK_ACQUIRED));
+  if (LockMultiShardCb(sid)) {
     sd.local_mask |= KEYLOCK_ACQUIRED;
   }else {
     if (!shard->txq()->Empty() && shard->txq()->Back()->txid() > txid_) {
@@ -237,7 +255,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
         (sd.local_mask & OUT_OF_ORDER);
   if (can_execute && RunInShard(shard)) return true; 
   else {
-    pq_pos_[sid] = shard->txq()->SwapBack(this, pq_pos_[sid]);
+    pq_pos_[sid] = shard->txq()->Insert(pq_pos_[sid], this);
   }
   return true;
 }

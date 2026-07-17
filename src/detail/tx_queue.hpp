@@ -13,37 +13,19 @@ class TxQueue {
   enum { kEnd = Iterator(-1) };
 
   TxQueue() = default;
-
-  // 在头部插入
-  Iterator PushFront(Transaction* t);
-  
-  // 在尾部插入
-  Iterator PushBack(Transaction* t);
   
 
-  Iterator InsertBefore(Iterator it, Transaction* t);
-  
-  Iterator InsertAfter(Iterator it, Transaction* t);
-  
+  Iterator Insert(Iterator it, Transaction* t);
   void Remove(Iterator it);
-
-  Iterator SwapBack(Transaction* t, Iterator it);
-
-
-
   Transaction* At(Iterator it) const {
     return vec_[it].trans;
   }
-
   Transaction* Front() const { return At(head_); }
   Transaction* Back() const { return At(tail_); }
-  
   void PopFront() { Remove(head_); }
   void PopBack() { Remove(tail_); }
-
   size_t Size() const { return size_; }
   bool Empty() const { return size_ == 0; }
-
   Iterator Head() const { return head_; }
   Iterator Tail() const { return tail_; }
   Iterator Next(Iterator it) const { return vec_[it].next; }

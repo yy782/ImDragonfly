@@ -43,7 +43,8 @@ void TxQueue::FreeNode(Iterator it) {
   next_free_ = it;
 }
 
-TxQueue::Iterator TxQueue::PushFront(Transaction* t) {
+TxQueue::Iterator TxQueue::Insert(Iterator it, Transaction* t) {
+  assert(it == kEnd);
   Iterator new_node = AllocateNode();
   vec_[new_node].trans = t;
 
@@ -61,71 +62,11 @@ TxQueue::Iterator TxQueue::PushFront(Transaction* t) {
   return new_node;
 }
 
-TxQueue::Iterator TxQueue::PushBack(Transaction* t) {
-  Iterator new_node = AllocateNode();
-  vec_[new_node].trans = t;
 
-  if (tail_ == kEnd) {
-    // 空链表
-    head_ = tail_ = new_node;
-  } else {
-    // 链接到尾部
-    vec_[new_node].prev = tail_;
-    vec_[tail_].next = new_node;
-    tail_ = new_node;
-  }
 
-  ++size_;
-  return new_node;
-}
 
-TxQueue::Iterator TxQueue::InsertBefore(Iterator it, Transaction* t) {
-  if (it == kEnd || !vec_[it].used) {
-    return kEnd;
-  }
 
-  Iterator new_node = AllocateNode();
-  vec_[new_node].trans = t;
 
-  // 链接新节点
-  vec_[new_node].next = it;
-  vec_[new_node].prev = vec_[it].prev;
-
-  if (vec_[it].prev != kEnd) {
-    vec_[vec_[it].prev].next = new_node;
-  } else {
-    head_ = new_node;  // 插入到头部之前
-  }
-
-  vec_[it].prev = new_node;
-
-  ++size_;
-  return new_node;
-}
-
-TxQueue::Iterator TxQueue::InsertAfter(Iterator it, Transaction* t) {
-  if (it == kEnd || !vec_[it].used) {
-    return kEnd;
-  }
-
-  Iterator new_node = AllocateNode();
-  vec_[new_node].trans = t;
-
-  // 链接新节点
-  vec_[new_node].prev = it;
-  vec_[new_node].next = vec_[it].next;
-
-  if (vec_[it].next != kEnd) {
-    vec_[vec_[it].next].prev = new_node;
-  } else {
-    tail_ = new_node;  // 插入到尾部之后
-  }
-
-  vec_[it].next = new_node;
-
-  ++size_;
-  return new_node;
-}
 
 void TxQueue::Remove(Iterator it) {
   if (it == kEnd || !vec_[it].used) {
@@ -149,12 +90,6 @@ void TxQueue::Remove(Iterator it) {
   --size_;
 }
 
-TxQueue::Iterator TxQueue::SwapBack(Transaction* t, Iterator it) {
-  if (it != kEnd) {
-     Remove(it);
-  }
-  PushBack(t);
-  return Tail();
-}
+
 
 }  // namespace dfly
