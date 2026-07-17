@@ -274,7 +274,7 @@ void GenericFamily::Register(CommandRegistry* registry) {
       << CI{"EXISTS", 1, kInvalidKeysNum, 1, CO::READABLE | CO::NEED_TIME}.SetHandler(&GenericFamily::Exists)
       << CI{"EXPIRE", 1, 1, kInvalidKeysOffset, CO::NEED_TIME}.SetHandler(&GenericFamily::Expire)
       << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset, CO::READABLE | CO::NEED_TIME}.SetHandler(&GenericFamily::ExpireTime)
-      << CI{"TTL", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Ttl)
+      << CI{"TTL", 1, 1, kInvalidKeysOffset, CO::READABLE | CO::NEED_TIME}.SetHandler(&GenericFamily::Ttl)
       << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)
       << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}.SetHandler(&GenericFamily::Client_Info)
       << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(&GenericFamily::ShutDown)
