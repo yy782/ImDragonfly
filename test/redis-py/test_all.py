@@ -1,25 +1,25 @@
 """ImDragonfly 全部测试 —— 一个文件，通过命令行选择运行哪些测试.
 
 一键运行全部:
-    python3 -m pytest test/redis-py/test_all.py -v
+    python3 -m pytest test_all.py -v
 
 按类别运行:
-    python3 -m pytest test/redis-py/test_all.py -v -m basic
-    python3 -m pytest test/redis-py/test_all.py -v -m expire
-    python3 -m pytest test/redis-py/test_all.py -v -m list
-    python3 -m pytest test/redis-py/test_all.py -v -m hash
-    python3 -m pytest test/redis-py/test_all.py -v -m set
-    python3 -m pytest test/redis-py/test_all.py -v -m zset
-    python3 -m pytest test/redis-py/test_all.py -v -m transaction
-    python3 -m pytest test/redis-py/test_all.py -v -m concurrent
-    python3 -m pytest test/redis-py/test_all.py -v -m benchmark
+    python3 -m pytest test_all.py -v -m basic
+    python3 -m pytest test_all.py -v -m expire
+    python3 -m pytest test_all.py -v -m list
+    python3 -m pytest test_all.py -v -m hash
+    python3 -m pytest test_all.py -v -m set
+    python3 -m pytest test_all.py -v -m zset
+    python3 -m pytest test_all.py -v -m transaction
+    python3 -m pytest test_all.py -v -m concurrent
+    python3 -m pytest test_all.py -v -m benchmark
 
 按名称运行单个测试:
-    python3 -m pytest test/redis-py/test_all.py::test_set_and_get -v
-    python3 -m pytest test/redis-py/test_all.py::test_concurrent_connections -v
+    python3 -m pytest test_all.py::test_set_and_get -v
+    python3 -m pytest test_all.py::test_concurrent_connections -v
 
 运行 benchmark:
-    python3 -m pytest test/redis-py/test_all.py -v --benchmark
+    python3 -m pytest test_all.py -v --benchmark
 """
 
 import threading
