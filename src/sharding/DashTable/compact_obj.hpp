@@ -196,12 +196,15 @@ protected:
             break;
         case STR_TAG:
             new (&u_.str_) std::string(std::move(o.u_.str_));
+            o.u_.str_.~basic_string();   
             break;
         case TTL_STR_TAG:
             new (&u_.ttl_) TtlString(std::move(o.u_.ttl_));
+            o.u_.ttl_.~TtlString();      
             break;
         case ROBJ_TAG:
-            u_.robj_ = o.u_.robj_;   
+            u_.robj_ = o.u_.robj_;
+            o.u_.robj_.ptr = nullptr;     
             break;
         }
         tag_ = o.tag_;
@@ -244,6 +247,9 @@ protected:
         case OBJ_SET:
             return static_cast<const SetObject*>(a.ptr)->Data()
                 == static_cast<const SetObject*>(b.ptr)->Data();
+        case OBJ_ZSET:
+            return static_cast<const ZSetObject*>(a.ptr)->Range(0, -1)
+                == static_cast<const ZSetObject*>(b.ptr)->Range(0, -1);
         default:
             LOG(FATAL) << "Invalid robj type: " << a.type;
             return false;
