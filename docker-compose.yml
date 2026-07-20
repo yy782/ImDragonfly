@@ -1,0 +1,17 @@
+services:
+  imdragonfly:
+    build: .
+    image: imdragonfly:latest
+    container_name: imdragonfly
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./logs:/app/logs
+    # 可以通过环境变量调整分片数量
+    # command: ["8"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 3

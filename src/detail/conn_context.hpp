@@ -76,15 +76,12 @@ class  CommandContext{
 public:
     CommandContext() = default;
 
-    CommandContext(ConnectionContext* conn_cntx, Transaction* transaction, const CommandId* cid) : 
-    conn_cntx_(conn_cntx), 
+    CommandContext(Transaction* transaction, const CommandId* cid) : 
     transaction_(transaction),
     cid_(cid) 
     {
 
     }
-    ConnectionContext* conn_cntx() const { return conn_cntx_; }
-
     const CommandId* cid() const {
       return cid_;
     }
@@ -92,7 +89,6 @@ public:
         return transaction_;
     }
 private:
-    ConnectionContext* conn_cntx_;
     Transaction* transaction_;
     const CommandId* cid_;
 };

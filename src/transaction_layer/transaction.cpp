@@ -73,23 +73,41 @@ Transaction::~Transaction() {
 }
 
 
-void Transaction::InitByArgs(ConnectionContext* conn_cntx, CmdArgList args) {
+void Transaction::InitByArgs(const Namespace* namespaces, DbIndex db_index, CmdArgList args) {
   lock_args_.resize(shard_set->size());
   lock_mode_ = (cid_->opt_mask() & CO::READABLE) ? 
       IntentLock::Mode::SHARED : IntentLock::Mode::EXCLUSIVE;
-  conn_cntx_ = conn_cntx;
-  namespace_ = conn_cntx_->GetNamespace();
+  namespace_ = namespaces;
   full_args_ = args;
   if (cid_->opt_mask() & CO::NEED_TIME) {
-    db_cntx_ = DbContext(namespace_, conn_cntx_->GetDbIndex(), util::GetCurrentTimeMs());
+    db_cntx_ = DbContext(namespace_, db_index, util::GetCurrentTimeMs());
   }else [[likely]] {
-    db_cntx_ = DbContext(namespace_, conn_cntx_->GetDbIndex(), -1);
+    db_cntx_ = DbContext(namespace_, db_index, -1);
   }
-  cmd_cntx_ = CommandContext(conn_cntx_, this, cid_);
+  cmd_cntx_ = CommandContext(this, cid_);
   InitSlice();
   return;
 }
 
+void Transaction::CollectedResult(std::string&& res) {
+  Res_ = std::move(res);
+  if (Res_handle_) {
+    Res_handle_.resume();
+    Res_.clear();    
+  }
+}
+
+cppcoro::task<std::string> Transaction::GetRes() {
+  if (!Res_.empty()) co_return std::move(Res_);
+  struct ResAwaiter {
+    std::coroutine_handle<>& handle;
+    bool await_ready() noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept { handle = h; }
+    void await_resume() noexcept {}
+  };
+  co_await ResAwaiter{Res_handle_};
+  co_return std::move(Res_);
+}
 
 void Transaction::InitSlice() {
   Slices_.resize(shard_set->size());

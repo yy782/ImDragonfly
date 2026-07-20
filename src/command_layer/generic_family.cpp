@@ -46,11 +46,11 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
     uint32_t del_cnt = result.load(std::memory_order_relaxed);
 
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
     if ( res.status() == OpStatus::OK)
-        conn->SendInteger(del_cnt);
+        t->CollectedResult(BuildInteger(del_cnt));
     else 
-        conn->SendERROR();
+        t->CollectedResult(BuildError("ERR"));
     co_return;
 }
 
@@ -60,17 +60,16 @@ void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
     return;
 }
 
-
 void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx();
     if (args.size() > 1) {
-        return conn->SendERROR();
+        t->CollectedResult(BuildError("ERR"));
+        return;
     }
-    std::string msg = "PONG";
-    
-    
-    conn->SendStatus(msg);
+    t->CollectedResult(BuildSimpleString("PONG"));
+    return;    
 }
+
 
 
 
@@ -98,15 +97,15 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
     facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx();
     if(res.status() == OpStatus::OK)
     {
         
-        conn->SendInteger(result.load());  // FIXME
+        t->CollectedResult(BuildInteger(result.load()));
     }
     else 
     {
-        conn->SendInteger(0);
+        t->CollectedResult(BuildInteger(0));
     }
 
     co_return;
@@ -133,15 +132,15 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key, int64_t sec) 
     };
     auto res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx();
     if(res.status() == OpStatus::OK)    
     {
         
-        conn->SendInteger(1);
+        t->CollectedResult(BuildInteger(1));
     }
     else 
     {
-        conn->SendInteger(0);
+        t->CollectedResult(BuildInteger(0));
     }
 
     co_return;
@@ -179,19 +178,19 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
 
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner();  
+    auto* t = cmd_cntx->tx();
     if(res.status() == OpStatus::OK)
     {
-        conn->SendInteger(res.value());
+        t->CollectedResult(BuildInteger(res.value()));
     }
     else 
     {
         if (res.status() == OpStatus::KEY_NOTFOUND) {
-            conn->SendInteger(-2);
+            t->CollectedResult(BuildInteger(-2));
         }else if (res.status() == OpStatus::SKIPPED) {
-            conn->SendInteger(-1);
+            t->CollectedResult(BuildInteger(-1));
         }else {
-            conn->SendERROR();
+            t->CollectedResult(BuildError("ERR"));
         }
     }
     co_return;    
@@ -222,21 +221,21 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
   
     facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx();
 
     if(res.status() == OpStatus::OK)
     {
         
-        conn->SendInteger(res.value());
+        t->CollectedResult(BuildInteger(res.value()));
     }
     else 
     {
         if (res.status() == OpStatus::KEY_NOTFOUND) {
-            conn->SendInteger(-2);
+            t->CollectedResult(BuildInteger(-2));
         }else if (res.status() == OpStatus::SKIPPED) {
-            conn->SendInteger(-1);
+            t->CollectedResult(BuildInteger(-1));
         }else {
-            conn->SendERROR();
+            t->CollectedResult(BuildError("ERR"));
         }
     }
     co_return;      
@@ -248,9 +247,9 @@ void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
 
 void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
 
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx(); 
 
-    conn->SendStatus("OK");
+    t->CollectedResult((BuildSimpleString("OK")));
     
 }
 

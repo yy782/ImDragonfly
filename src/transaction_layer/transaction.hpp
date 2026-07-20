@@ -57,9 +57,12 @@ public:
 
   Transaction(const CommandId* cid = nullptr);
 
-  void InitByArgs(ConnectionContext* conn_cntx, CmdArgList args);
-
+  void InitByArgs(const Namespace* namespaces, DbIndex db_index, CmdArgList args);
+  void CollectedResult(std::string&& res);
+  cppcoro::task<std::string> GetRes();
   KeyLockArgs GetLockArgs(ShardId sid) const;
+
+
 
   bool IsActive(ShardId sid) const;
 
@@ -86,9 +89,6 @@ public:
   }
   const CommandContext& GetCommandContext() const {
     return cmd_cntx_;
-  }
-  ConnectionContext* GetConnectionContext() {
-    return conn_cntx_;
   }
   CmdArgList& GetFullArgs() {
     return full_args_;
@@ -299,6 +299,7 @@ private:
   IntentLock::Mode lock_mode_;
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
+  std::coroutine_handle<> Res_handle_;
   const CommandId* cid_ = nullptr;
   MultiData multi_;
   uint64_t txid_{0};
@@ -308,9 +309,10 @@ private:
   uint8_t coordinator_state_ = COORD_CANCELLED;
   State state_ = State::IDLE;
   uint32_t key_num_ = 0;
-  ConnectionContext* conn_cntx_;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
+
+  std::string Res_;
 };
 
 }

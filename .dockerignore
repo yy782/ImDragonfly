@@ -1,0 +1,35 @@
+# 构建产物
+build/
+build-release/
+_deps/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+
+# 日志
+logs/
+
+# 测试
+test/
+
+# 文档
+*.md
+LICENSE
+
+# Git
+.git/
+.gitmodules
+.github/
+
+# 其他
+tmp/
+perf.data*
+*.svg
