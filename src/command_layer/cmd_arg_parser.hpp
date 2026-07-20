@@ -12,6 +12,7 @@
 
 #include "util/Strings.hpp"
 #include "cmn_types.hpp"
+
 namespace cmd {
 using ::cmn::ArgSlice;
 class CmdArgParser {
