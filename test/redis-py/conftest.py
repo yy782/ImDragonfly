@@ -83,9 +83,9 @@ def clean_redis(redis_client):
 
     yield redis_client, _track
 
-    # 自动清理
-    for key in keys:
+    # 自动清理：批量删除，避免逐个 DELETE 大量 key 时阻塞
+    if keys:
         try:
-            redis_client.delete(key)
+            redis_client.delete(*keys)
         except Exception:
             pass
