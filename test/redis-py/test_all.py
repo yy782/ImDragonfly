@@ -319,3 +319,46 @@ def test_zrem(clean_redis):
 #     assert pipe.execute() == [True]
 #     assert r.get(key) == "watched_value"
 #     r.unwatch()
+
+
+# ═══════════════════════════════════════════════════════════
+# 并发命令
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.concurrent
+def test_concurrent_mset_mget(clean_redis, pytestconfig):
+    """多线程并发 MSET/MGET 测试.
+
+    3 个线程, 各用独立连接, 各执行 100 轮:
+      MSET 写入 10 个键 → MGET 读出 → 断言一致
+    共 3×100=300 轮, 每轮 10 个键, 合计 3000 次读写.
+    """
+    _, track = clean_redis
+    host = pytestconfig.getoption("--redis-host")
+    port = pytestconfig.getoption("--redis-port")
+    db = pytestconfig.getoption("--redis-db")
+
+    errors = []
+
+    def worker(tid):
+        try:
+            c = redis.Redis(host=host, port=port, db=db, protocol=2,
+                            decode_responses=True, socket_connect_timeout=5)
+            c.ping()
+            for round_i in range(100):
+                kv = {}
+                for k in range(10):
+                    key = f"test:c:{tid}_{round_i}_{k}"
+                    kv[key] = f"v{tid}{round_i}{k}"
+                    track(key)
+                assert c.mset(kv)
+                assert c.mget(kv.keys()) == list(kv.values())
+            c.close()
+        except Exception as e:
+            errors.append(e)
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+
+    assert not errors, f"并发测试异常: {errors}"
