@@ -337,13 +337,12 @@ def test_concurrent_mset_mget(clean_redis, pytestconfig):
     host = pytestconfig.getoption("--redis-host")
     port = pytestconfig.getoption("--redis-port")
     db = pytestconfig.getoption("--redis-db")
-
     errors = []
-
     def worker(tid):
         try:
             c = redis.Redis(host=host, port=port, db=db, protocol=2,
-                            decode_responses=True, socket_connect_timeout=5)
+                            decode_responses=True,
+                            socket_connect_timeout=5, socket_timeout=10)
             c.ping()
             for round_i in range(100):
                 kv = {}
@@ -356,9 +355,13 @@ def test_concurrent_mset_mget(clean_redis, pytestconfig):
             c.close()
         except Exception as e:
             errors.append(e)
-
     ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
     for t in ts: t.start()
-    for t in ts: t.join()
-
+    deadline = time.time() + 60
+    for t in ts:
+        remaining = deadline - time.time()
+        if remaining > 0:
+            t.join(timeout=remaining)
+    alive = [t for t in ts if t.is_alive()]
+    assert not alive, f"并发测试超时({60}s)，仍有 {len(alive)} 个线程未结束"
     assert not errors, f"并发测试异常: {errors}"
