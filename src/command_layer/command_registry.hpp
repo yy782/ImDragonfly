@@ -10,7 +10,7 @@
 
 #include "command_layer/command_id.hpp"
 #include "command_layer/cmn_types.hpp"
-#include "util/function.hpp"
+#include "function.hpp"
 
 
 namespace dfly {
@@ -44,7 +44,7 @@ public:
     [[nodiscard]] CommandId Clone(std::string_view name) const;
 
 
-    using Handler = util::function_base<true, true, fu2::capacity_default, false, false,
+    using Handler = base::function_base<true, true, fu2::capacity_default, false, false,
                                       void(CommandContext*, CmdArgList) const>;
     void Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
         handler_(cmd_cntx, args);

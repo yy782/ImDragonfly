@@ -1,10 +1,7 @@
 
 #pragma once
-#include <string_view>
-#include <vector>
-#include <string>
-#include "util/task_queue.hpp"
-#include "util/thread.hpp"
+#include "task_queue.hpp"
+#include "thread.hpp"
 
 
 
@@ -26,7 +23,7 @@ public:
     }
 
     void Start(std::string_view base_name){
-        worker_ = util::Thread(base_name.data(), [this]()mutable{
+        worker_ = base::Thread(base_name.data(), [this]()mutable{
                     queue_.Run();
                 });
     }
@@ -38,8 +35,8 @@ public:
     }
 
 private:
-    util::TaskQueue queue_;
-    util::Thread worker_;
+    base::TaskQueue queue_;
+    base::Thread worker_;
 };
 
 }  // namespace dfly

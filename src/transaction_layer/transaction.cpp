@@ -80,7 +80,7 @@ void Transaction::InitByArgs(const Namespace* namespaces, DbIndex db_index, CmdA
   namespace_ = namespaces;
   full_args_ = args;
   if (cid_->opt_mask() & CO::NEED_TIME) {
-    db_cntx_ = DbContext(namespace_, db_index, util::GetCurrentTimeMs());
+    db_cntx_ = DbContext(namespace_, db_index, base::GetCurrentTimeMs());
   }else [[likely]] {
     db_cntx_ = DbContext(namespace_, db_index, -1);
   }

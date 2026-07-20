@@ -10,7 +10,7 @@
 #include <coroutine>
 #include <variant>
 #include "command_layer/cmn_types.hpp"
-#include "util/function.hpp"
+#include "function.hpp"
 #include "sharding/op_status.hpp"
 #include "detail/conn_context.hpp"
 #include "sharding/engine_shard.hpp"
@@ -20,7 +20,7 @@
 namespace dfly::cmd {
 using ::cmn::CmdArgList;
 template <typename RT> 
-using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, EngineShard*)>;
+using SingleHopSentinelT = base::FunctionRef<RT(Transaction*, EngineShard*)>;
 
 
 auto SingleHopT(const auto& f) -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {

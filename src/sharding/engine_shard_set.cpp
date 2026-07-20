@@ -3,7 +3,7 @@
 #include "namespaces.hpp"
 
 #include <functional>
-#include "util/maths.hpp"
+#include "maths.hpp"
 #include <glog/logging.h>
 
 namespace dfly{
