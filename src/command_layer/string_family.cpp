@@ -165,8 +165,8 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
         return {};       
     };
     co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
-    conn->SendStatus("OK");
+    auto* t = cmd_cntx->tx();
+    t->CollectedResult(BuildSimpleString("OK"));
     co_return;
 }
 
@@ -191,12 +191,12 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto result = co_await cmd::SingleHopT(cb);
 
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendStatus("OK"); 
+        t->CollectedResult(BuildSimpleString("OK")); 
     } else {
-        conn->SendERROR();
+        t->CollectedResult(BuildError("ERR"));
     }
  
     co_return;
@@ -220,8 +220,8 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
         return {};        
     };
     co_await cmd::SingleHopT(cb); 
-    auto conn = cmd_cntx->conn_cntx()->owner();
-    conn->SendVec(std::move(vec));        
+    auto* t = cmd_cntx->tx();
+    t->CollectedResult(BuildArray(std::move(vec)));       
 
 
     co_return;
@@ -241,11 +241,11 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
         return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
     };
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner(); 
+    auto* t = cmd_cntx->tx(); 
     if (result.status() == OpStatus::OK) {   
-        conn->SendString(result.value());
+        t->CollectedResult(BuildBulkString(result.value()));
     } else {
-        conn->SendString(std::string());
+        t->CollectedResult(BuildBulkString(std::string()));
     }    
     
     co_return;

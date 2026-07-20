@@ -39,57 +39,55 @@ public:
     Transaction* GetTransaction() { return &transaction_; }
     yy::net::EventLoop* GetProactor() { return loop(); }
 
-    void SendERROR(std::string err = "NULL") {
-        SendImp(BuildError(err));
-    }
+    // void SendERROR(std::string err = "NULL") {
+    //     SendImp(BuildError(err));
+    // }
 
-    void SendString(const std::string& s){
-        SendImp(BuildBulkString(s));
-    }
-    void SendViewStr(const std::string_view& s){
-        SendImp(std::string(s));
-    }
-    void SendVec(const std::vector<std::string>& v) {
-        SendImp(BuildArray(v));
-    }
-    void SendStatus(const std::string& s){
-        SendImp(BuildSimpleString(s));
-    }
-    void SendStatus(const std::string_view& s){
-        SendStatus(std::string(s)); 
-    }
-    void SendStatus(const char* s){
-        SendStatus(std::string(s)); 
-    }
-    void SendInteger(int64_t n) {
-        SendImp(BuildInteger(n));
-    }
-    void SendNULL() {
-        SendString(std::string());
-    }
-    void OnMessage() {
+    // void SendString(const std::string& s){
+    //     SendImp(BuildBulkString(s));
+    // }
+    // void SendViewStr(const std::string_view& s){
+    //     SendImp(std::string(s));
+    // }
+    // void SendVec(const std::vector<std::string>& v) {
+    //     SendImp(BuildArray(v));
+    // }
+    // void SendStatus(const std::string& s){
+    //     SendImp(BuildSimpleString(s));
+    // }
+    // void SendStatus(const std::string_view& s){
+    //     SendStatus(std::string(s)); 
+    // }
+    // void SendStatus(const char* s){
+    //     SendStatus(std::string(s)); 
+    // }
+    // void SendInteger(int64_t n) {
+    //     SendImp(BuildInteger(n));
+    // }
+    // void SendNULL() {
+    //     SendString(std::string());
+    // }
+    cppcoro::AsyncTask OnMessage() {
         int client_fd = this->fd();
-        
-
         auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
         context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
-        
         auto& com = parser_.ParseRESP(recvBuffer());
         
         if (com.empty())
-            return;
+            co_return;
             
         args_ = ::cmn::CmdArgList(com);
         auto ci = CIs->Find(args_[0]);
         if (!ci) {
             LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << client_fd;
-            SendERROR("unknown command:" + std::string(args_[0]));
-            return;
+            auto s = BuildError("unknown command:" + std::string(args_[0]));
+            yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+            co_return;
         }
         if (transaction_.GetState() == Transaction::State::IDLE) {
             std::destroy_at(&transaction_);                
             std::construct_at(&transaction_, ci);         
-            transaction_.InitByArgs(&context_, args_);
+            transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(), args_);
         }
         // } else {
         //     bool is_multi_command = false; 
@@ -103,7 +101,9 @@ public:
         // }
         
         ci->Invoke(&transaction_.GetCommandContext(), args_);
-        
+        auto s = co_await transaction_.GetRes();
+        yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+        co_return;
     }
 
     void OnClose() {
@@ -117,16 +117,13 @@ public:
     int fd() const noexcept { return fd_; }
 private:
     void SendImp(std::string&& s) {
-        yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+        
     }
-
     friend class ConnectionContext;
-    
     RESP_Buf parser_;
     ::cmn::CmdArgList args_;
     ConnectionContext context_;
     Transaction transaction_;   
-    
 };
 
 class RedisServer {

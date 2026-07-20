@@ -39,8 +39,8 @@ ZSetObject* GetOrCreateZSet(Transaction* tx, EngineShard* es, std::string_view k
 
 CoroTask CmdZAdd(CommandContext* cmd_cntx, CmdArgList args) {
     if (args.size() < 4) {
-        auto conn = cmd_cntx->conn_cntx()->owner();
-        conn->SendERROR("wrong number of arguments for 'zadd' command");
+        auto* t = cmd_cntx->tx();
+        t->CollectedResult(BuildError("wrong number of arguments for 'zadd' command"));
         co_return;
     }
 
@@ -62,12 +62,12 @@ CoroTask CmdZAdd(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -94,12 +94,12 @@ CoroTask CmdZCard(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -131,14 +131,14 @@ CoroTask CmdZScore(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendString(result.value());
+        t->CollectedResult(BuildBulkString(result.value()));
     } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-        conn->SendStatus("(nil)");
+        t->CollectedResult(BuildSimpleString("(nil)"));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -146,8 +146,8 @@ CoroTask CmdZScore(CommandContext* cmd_cntx, CmdArgList args) {
 
 CoroTask CmdZRem(CommandContext* cmd_cntx, CmdArgList args) {
     if (args.size() < 3) {
-        auto conn = cmd_cntx->conn_cntx()->owner();
-        conn->SendERROR("wrong number of arguments for 'zrem' command");
+        auto* t = cmd_cntx->tx();
+        t->CollectedResult(BuildError("wrong number of arguments for 'zrem' command"));
         co_return;
     }
 
@@ -176,12 +176,12 @@ CoroTask CmdZRem(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -209,16 +209,16 @@ CoroTask CmdZRank(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
         if (result.value() >= 0) {
-            conn->SendInteger(result.value());
+            t->CollectedResult(BuildInteger(result.value()));
         } else {
-            conn->SendStatus("(nil)");
+            t->CollectedResult(BuildSimpleString("(nil)"));
         }
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -246,16 +246,16 @@ CoroTask CmdZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
         if (result.value() >= 0) {
-            conn->SendInteger(result.value());
+            t->CollectedResult(BuildInteger(result.value()));
         } else {
-            conn->SendStatus("(nil)");
+            t->CollectedResult(BuildSimpleString("(nil)"));
         }
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -289,7 +289,7 @@ CoroTask CmdZRange(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
         std::vector<std::string> resp;
@@ -299,9 +299,9 @@ CoroTask CmdZRange(CommandContext* cmd_cntx, CmdArgList args) {
                 resp.push_back(std::to_string(pair.second));
             }
         }
-        conn->SendVec(resp);
+        t->CollectedResult(BuildArray(resp));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -335,7 +335,7 @@ CoroTask CmdZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
         std::vector<std::string> resp;
@@ -345,9 +345,9 @@ CoroTask CmdZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
                 resp.push_back(std::to_string(pair.second));
             }
         }
-        conn->SendVec(resp);
+        t->CollectedResult(BuildArray(resp));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;

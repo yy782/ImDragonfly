@@ -56,12 +56,12 @@ CoroTask CmdSAdd(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -94,12 +94,12 @@ CoroTask CmdSRem(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -131,12 +131,12 @@ CoroTask CmdSMembers(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendVec(std::move(members));
+        t->CollectedResult(BuildArray(std::move(members)));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -164,12 +164,12 @@ CoroTask CmdSCard(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
@@ -198,12 +198,12 @@ CoroTask CmdSIsMember(CommandContext* cmd_cntx, CmdArgList args) {
     };
 
     auto result = co_await cmd::SingleHopT(cb);
-    auto conn = cmd_cntx->conn_cntx()->owner();
+    auto* t = cmd_cntx->tx();
 
     if (result.status() == OpStatus::OK) {
-        conn->SendInteger(static_cast<int64_t>(result.value()));
+        t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
     } else {
-        conn->SendERROR("WRONGTYPE Operation against a key holding the wrong kind of value");
+        t->CollectedResult(BuildError("WRONGTYPE Operation against a key holding the wrong kind of value"));
     }
 
     co_return;
