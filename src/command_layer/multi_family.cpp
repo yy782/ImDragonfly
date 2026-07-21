@@ -5,7 +5,7 @@
 // #include "transaction_layer/transaction.hpp"
 // #include "network/redis_server.hpp"
 // #include "cmd_support.hpp"
-// #include "util/synchronization.hpp"
+// #include "synchronization.hpp"
 // #include "cppcoro/async_task.hpp"
 // #include <assert.h>
 // namespace dfly {

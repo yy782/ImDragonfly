@@ -1,7 +1,7 @@
 #include "db_slice.hpp"
 #include <optional>
 #include "engine_shard.hpp"
-#include "util/Time.hpp"
+#include "Time.hpp"
 #include "detail/conn_context.hpp"
 #include <assert.h>
 #include <exception>
@@ -247,7 +247,7 @@ void DbSlice::ExpireAllIfNeeded() {
 
         auto cb = [&](PrimeTable::iterator prime_it) {
             if (prime_it->first.HasExpire()) {
-                ExpireIfNeeded(Context(nullptr, db_index, util::GetCurrentTimeMs()), prime_it);
+                ExpireIfNeeded(Context(nullptr, db_index, base::GetCurrentTimeMs()), prime_it);
             }
         };
 

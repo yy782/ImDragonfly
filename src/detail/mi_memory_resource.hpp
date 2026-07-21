@@ -6,7 +6,7 @@
 
 #include <mimalloc.h>
 
-#include "util/pmr/memory_resource.h"
+#include "pmr/memory_resource.h"
 
 namespace dfly {
 

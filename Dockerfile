@@ -25,10 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# 先复制 YY 子模块、cmake 和 util 头文件（依赖层，利用 Docker 缓存）
+# 先复制 YY 子模块和 cmake 配置（依赖层，利用 Docker 缓存）
 COPY YY/ ./YY/
 COPY cmake/ ./cmake/
-COPY util/ ./util/
 COPY CMakeLists.txt ./
 
 # 复制源代码

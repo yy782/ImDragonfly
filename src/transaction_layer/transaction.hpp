@@ -15,7 +15,7 @@
 
 #include "detail/tx_base.hpp"
 #include "detail/common_types.hpp"
-#include "util/function.hpp"
+#include "function.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/cmn_types.hpp"
 #include "detail/conn_context.hpp"
@@ -46,7 +46,7 @@ public:
 
   ~Transaction();
 
-  using RunnableType = util::FunctionRef<void(Transaction*, EngineShard*)>;
+  using RunnableType = base::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
     ACTIVE = 1 << 0, // shard上有活跃的slice

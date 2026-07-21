@@ -10,7 +10,7 @@
 #include <utility>
 #include <charconv>
 
-#include "util/Strings.hpp"
+#include "Strings.hpp"
 #include "cmn_types.hpp"
 
 namespace cmd {
@@ -84,7 +84,7 @@ public:
             return false;
 
         std::string_view arg = SafeSV(cur_i_);
-        if (!util::EqualsIgnoreCaseStd(arg, tag))
+        if (!base::EqualsIgnoreCaseStd(arg, tag))
             return false;
 
         ++cur_i_;
@@ -135,7 +135,7 @@ private:
     template <class T, class... Cases>
     std::optional<std::decay_t<T>> MapImpl(std::string_view arg, std::string_view tag, T&& value,
                                           Cases&&... cases) {
-        if (util::EqualsIgnoreCaseStd(arg, tag))
+        if (base::EqualsIgnoreCaseStd(arg, tag))
             return std::forward<T>(value);
 
         if constexpr (sizeof...(cases) > 0)

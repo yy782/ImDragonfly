@@ -5,7 +5,7 @@
 #include "command_registry.hpp"
 
 
-#include "util/Strings.hpp"
+#include "Strings.hpp"
 
 namespace dfly {
 
