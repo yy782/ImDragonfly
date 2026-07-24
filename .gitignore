@@ -52,6 +52,7 @@ install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
 tmp/
+logs/
 
 # Python / pytest 缓存
 test/redis-py/__pycache__/
