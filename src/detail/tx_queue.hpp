@@ -13,13 +13,10 @@ class TxQueue {
   enum { kEnd = Iterator(-1) };
 
   TxQueue() = default;
-  
 
   Iterator Insert(Iterator it, Transaction* t);
   void Remove(Iterator it);
-  Transaction* At(Iterator it) const {
-    return vec_[it].trans;
-  }
+  Transaction* At(Iterator it) const { return vec_[it].trans; }
   Transaction* Front() const { return At(head_); }
   Transaction* Back() const { return At(tail_); }
   void PopFront() { Remove(head_); }

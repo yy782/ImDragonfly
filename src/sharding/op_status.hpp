@@ -1,101 +1,74 @@
 #pragma once
 
-namespace facade  {
+namespace facade {
 
 enum class OpStatus : uint16_t {
-    OK,
-    KEY_NOTFOUND,
-    WRONG_TYPE,
-    SKIPPED,
-    NO_KEY,
-    OUT_OF_RANGE,
-    SYNTAX_ERROR,
+  OK,
+  KEY_NOTFOUND,
+  WRONG_TYPE,
+  SKIPPED,
+  NO_KEY,
+  OUT_OF_RANGE,
+  SYNTAX_ERROR,
 };
 
 class OpResultBase {
  public:
-    OpResultBase(OpStatus st = OpStatus::OK) : st_(st) {
-    }
+  OpResultBase(OpStatus st = OpStatus::OK) : st_(st) {}
 
-    constexpr explicit operator bool() const {
-        return st_ == OpStatus::OK;
-    }
+  constexpr explicit operator bool() const { return st_ == OpStatus::OK; }
 
-    OpStatus status() const {
-        return st_;
-    }
+  OpStatus status() const { return st_; }
 
-    bool operator==(OpStatus st) const {
-        return st_ == st;
-    }
+  bool operator==(OpStatus st) const { return st_ == st; }
 
-    bool ok() const {
-        return st_ == OpStatus::OK;
-    }
+  bool ok() const { return st_ == OpStatus::OK; }
 
-    const char* DebugFormat() const;
+  const char* DebugFormat() const;
 
-private:
-    OpStatus st_;
+ private:
+  OpStatus st_;
 };
 
-template <typename V> 
+template <typename V>
 class OpResult : public OpResultBase {
-public:
-    using Type = V;
+ public:
+  using Type = V;
 
-    OpResult(V&& v) : v_(std::move(v)) {
-    }
+  OpResult(V&& v) : v_(std::move(v)) {}
 
-    OpResult(const V& v) : v_(v) {
-    }
+  OpResult(const V& v) : v_(v) {}
 
-    using OpResultBase::OpResultBase;
+  using OpResultBase::OpResultBase;
 
-    const V& value() const {
-        return v_;
-    }
+  const V& value() const { return v_; }
 
-    V& value() {
-        return v_;
-    }
+  V& value() { return v_; }
 
-    V value_or(V v) const {
-        return status() == OpStatus::OK ? v_ : v;
-    }
+  V value_or(V v) const { return status() == OpStatus::OK ? v_ : v; }
 
-    V* operator->() {
-        return &v_;
-    }
+  V* operator->() { return &v_; }
 
-    V& operator*() & {
-        return v_;
-    }
+  V& operator*() & { return v_; }
 
-    V&& operator*() && {
-        return std::move(v_);
-    }
+  V&& operator*() && { return std::move(v_); }
 
-    const V* operator->() const {
-        return &v_;
-    }
+  const V* operator->() const { return &v_; }
 
-    const V& operator*() const& {
-        return v_;
-    }
+  const V& operator*() const& { return v_; }
 
-private:
-    V v_{};
+ private:
+  V v_{};
 };
 
 template <>
 class OpResult<void> : public OpResultBase {
-public:
-    using OpResultBase::OpResultBase;
+ public:
+  using OpResultBase::OpResultBase;
 };
 
 inline bool operator==(OpStatus st, const OpResultBase& ob) {
-    return ob.operator==(st);
+  return ob.operator==(st);
 }
 
 std::string_view StatusToMsg(OpStatus status);
