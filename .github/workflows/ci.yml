@@ -8,7 +8,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  clang-format-check:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format
+
+      - name: Check code formatting
+        run: |
+          find src YY test main.cpp \
+            -type f \( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \) \
+            -print0 | xargs -0 clang-format --dry-run --Werror --style=file
+
   build-and-test:
+    needs: clang-format-check
     runs-on: ubuntu-24.04
 
     env:

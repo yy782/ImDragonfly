@@ -1,4 +1,5 @@
 #include "tx_queue.hpp"
+
 #include <cassert>
 namespace dfly {
 
@@ -62,12 +63,6 @@ TxQueue::Iterator TxQueue::Insert(Iterator it, Transaction* t) {
   return new_node;
 }
 
-
-
-
-
-
-
 void TxQueue::Remove(Iterator it) {
   if (it == kEnd || !vec_[it].used) {
     return;
@@ -89,7 +84,5 @@ void TxQueue::Remove(Iterator it) {
   FreeNode(it);
   --size_;
 }
-
-
 
 }  // namespace dfly
