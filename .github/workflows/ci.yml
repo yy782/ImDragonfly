@@ -20,7 +20,8 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-format
+          sudo apt-get install -y --no-install-recommends clang-format-16
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-16 100
 
       - name: Check code formatting
         run: bash scripts/check_format.sh
@@ -33,8 +34,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      CC: clang
-      CXX: clang++
+      CC: clang-16
+      CXX: clang++-16
 
     steps:
       - name: Checkout
@@ -47,7 +48,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang \
+            clang-16 \
             cmake \
             make \
             ninja-build \
