@@ -34,12 +34,19 @@ fi
 
 echo "Checking ${#SOURCE_FILES[@]} file(s)..."
 
+# 优先使用 clang-format-16 (与本地开发环境一致)
+if command -v clang-format-16 &>/dev/null; then
+    CLANG_FORMAT="clang-format-16"
+else
+    CLANG_FORMAT="clang-format"
+fi
+
 # 运行 clang-format 检查
-if ! clang-format --dry-run --Werror --style=file "${SOURCE_FILES[@]}" 2>&1; then
+if ! $CLANG_FORMAT --dry-run --Werror --style=file "${SOURCE_FILES[@]}" 2>&1; then
     echo ""
     echo "ERROR: Some files are not properly formatted."
     echo "Run the following command to fix:"
-    echo "  clang-format -i --style=file \$(find src test -type f \\( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \\)) main.cpp"
+    echo "  $CLANG_FORMAT -i --style=file \$(find src test -type f \\( -name '*.cpp' -o -name '*.hpp' -o -name '*.h' \\)) main.cpp"
     exit 1
 fi
 
