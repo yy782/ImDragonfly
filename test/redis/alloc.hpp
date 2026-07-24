@@ -70,9 +70,7 @@ static inline char* hi_strdup(const char* str) {
   return hiredisAllocFns.strdupFn(str);
 }
 
-static inline void hi_free(void* ptr) {
-  hiredisAllocFns.freeFn(ptr);
-}
+static inline void hi_free(void* ptr) { hiredisAllocFns.freeFn(ptr); }
 
 #else
 

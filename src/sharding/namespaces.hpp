@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <absl/container/flat_hash_map.h>
+
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <vector>
-#include <shared_mutex>
-#include <absl/container/flat_hash_map.h>
+
 #include "detail/common_types.hpp"
 
 namespace dfly {
@@ -29,25 +31,26 @@ class Namespace {
 
  private:
   std::vector<std::unique_ptr<DbSlice>> shard_db_slices_;
-  // std::vector<std::unique_ptr<BlockingController>> shard_blocking_controller_;
+  // std::vector<std::unique_ptr<BlockingController>>
+  // shard_blocking_controller_;
 
   friend class Namespaces;
 };
 
 class Namespaces {
-public:
-    Namespaces();
-    ~Namespaces();
+ public:
+  Namespaces();
+  ~Namespaces();
 
-    void Clear();  
+  void Clear();
 
-    Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
-    Namespace& GetOrInsert(std::string_view ns); // 方式2：用空字符串获取
+  Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
+  Namespace& GetOrInsert(std::string_view ns);  // 方式2：用空字符串获取
 
-private:
-    std::shared_mutex rw_mutex_;
-    absl::flat_hash_map<std::string, Namespace> namespaces_ ;
-    Namespace* default_namespace_ = nullptr;
+ private:
+  std::shared_mutex rw_mutex_;
+  absl::flat_hash_map<std::string, Namespace> namespaces_;
+  Namespace* default_namespace_ = nullptr;
 };
 
 }  // namespace dfly
