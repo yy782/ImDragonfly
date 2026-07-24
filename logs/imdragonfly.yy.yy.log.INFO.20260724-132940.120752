@@ -1,0 +1,26 @@
+Log file created at: 2026/07/24 13:29:40
+Running on machine: yy
+Running duration (h:mm:ss): 0:00:00
+Log line format: [IWEF]yyyymmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I20260724 13:29:40.496105 135875286736512 main.cpp:71] ImDragonfly server starting...
+I20260724 13:29:40.496907 135875286736512 main.cpp:80] RedisServer initialized with  4 shards
+I20260724 13:29:40.496933 135875286736512 redis_server.hpp:170] Starting RedisServer...
+I20260724 13:29:40.497735 135875286736512 engine_shard_set.cpp:16] Initializing EngineShardSet with 4 shards
+I20260724 13:29:40.599411 135875274995264 engine_shard.cpp:14] Initializing EngineShard thread local for proactor 0
+I20260724 13:29:40.599499 135875266602560 engine_shard.cpp:14] Initializing EngineShard thread local for proactor 1
+I20260724 13:29:40.599580 135875274995264 engine_shard.cpp:21] EngineShard thread local initialized, shard_id=0
+I20260724 13:29:40.599599 135875266602560 engine_shard.cpp:21] EngineShard thread local initialized, shard_id=1
+I20260724 13:29:40.599499 135875249817152 engine_shard.cpp:14] Initializing EngineShard thread local for proactor 3
+I20260724 13:29:40.599443 135875258209856 engine_shard.cpp:14] Initializing EngineShard thread local for proactor 2
+I20260724 13:29:40.599653 135875249817152 engine_shard.cpp:21] EngineShard thread local initialized, shard_id=3
+I20260724 13:29:40.599662 135875258209856 engine_shard.cpp:21] EngineShard thread local initialized, shard_id=2
+I20260724 13:29:40.713238 135875286736512 engine_shard_set.cpp:23] EngineShardSet initialized with 4 shards and namespace support
+I20260724 13:29:40.713434 135875274995264 redis_server.hpp:145] New connection from IP: 127.0.0.1 Port: 54118, fd: 16
+I20260724 13:29:40.713576 135875274995264 redis_server.hpp:110] Connection closed by client, fd: 16
+I20260724 13:29:44.810836 135875266602560 redis_server.hpp:145] New connection from IP: 127.0.0.1 Port: 54124, fd: 17
+I20260724 13:29:52.855302 135875258209856 redis_server.hpp:145] New connection from IP: 127.0.0.1 Port: 60114, fd: 18
+I20260724 13:29:52.855841 135875249817152 redis_server.hpp:145] New connection from IP: 127.0.0.1 Port: 60126, fd: 19
+I20260724 13:29:52.855845 135875274995264 redis_server.hpp:145] New connection from IP: 127.0.0.1 Port: 60138, fd: 21
+I20260724 13:30:14.847790 135875258209856 redis_server.hpp:110] Connection closed by client, fd: 18
+I20260724 13:30:14.948745 135875274995264 redis_server.hpp:110] Connection closed by client, fd: 21
+I20260724 13:30:14.956402 135875249817152 redis_server.hpp:110] Connection closed by client, fd: 19

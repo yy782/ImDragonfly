@@ -69,7 +69,7 @@ fi
 VENV_DIR="/tmp/imdragonfly_integration_venv"
 echo "Setting up Python virtual environment..."
 python3 -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install -q redis pytest
+"$VENV_DIR/bin/pip" install -q redis pytest pytest-timeout
 
 # ── 运行集成测试 ─────────────────────────────────────────
 echo ""
