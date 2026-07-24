@@ -41,8 +41,8 @@ void EngineShard::Shutdown() {
 
 void EngineShard::PollExecution(Transaction* trans) {
     (void)trans;
-    while (!txq_.Empty()) {
-        auto tx = txq_.Front();
+    Transaction* tx = nullptr;
+    while ((tx = txq_.Front()) != nullptr) {
         bool concluded = tx->RunInShard(this);
         if (!concluded) {
             break;
