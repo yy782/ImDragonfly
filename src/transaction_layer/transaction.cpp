@@ -91,6 +91,10 @@ void Transaction::InitByArgs(const Namespace* namespaces, DbIndex db_index, CmdA
 
 void Transaction::CollectedResult(std::string&& res) {
   Res_ = std::move(res);
+#ifdef TX_DEBUG
+  HasRes_ = true;
+#endif
+
   if (Res_handle_) {
     Res_handle_.resume();
     Res_.clear();    
@@ -193,7 +197,7 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
         shard_set->Add(i, [this, sid] () mutable {
           UnlockMultiShardCb(sid);
           auto* e = EngineShard::tlocal();
-          e->txq()->Remove(pq_pos_[sid]);          
+          e->txq()->Pop(pq_pos_[sid]);          
         });
       }
     }

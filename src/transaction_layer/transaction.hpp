@@ -239,8 +239,17 @@ public:
   // void CollectCommands(const CommandId* cid, CmdArgList args);
 
 
-
-
+#ifdef TX_DEBUG
+  void set_txid(uint64_t txid) {
+    txid_ = txid;
+  }
+  bool HasFininsh() {
+    return HasRes_.load();
+  }
+  std::string GetResWithOutBlock() {
+    return Res_;
+  }
+#endif 
 
 private:
 
@@ -313,6 +322,9 @@ private:
   CommandContext cmd_cntx_;
 
   std::string Res_;
+#ifdef TX_DEBUG
+  std::atimic<bool> HasRes_ = false;
+#endif
 };
 
 }

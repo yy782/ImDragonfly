@@ -15,8 +15,9 @@ public:
     TxQueue() = default;
     
 
-    Iterator Insert(Transaction* t);
-    void Remove(Iterator it);
+    Iterator Push(Transaction* t);
+    void Pop(Iterator it);
+    void Pop() {Pop(head_);}
     Transaction* Front();
     Transaction* Back();
     size_t Size() const;
@@ -34,7 +35,7 @@ public:
   std::vector<Node, PMR_NS::polymorphic_allocator<Node>> vec_;
   uint32_t tail_ = kEnd;
   uint32_t head_ = kEnd;
-  uint32_t free_head_ = kEnd;      
+  uint32_t free_head_ = kEnd;
   TxQueue(const TxQueue&) = delete;
 };
 

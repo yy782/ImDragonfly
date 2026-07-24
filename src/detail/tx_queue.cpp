@@ -1,5 +1,6 @@
 #include "tx_queue.hpp"
 #include <cassert>
+#include "transaction_layer/transaction.hpp"
 namespace dfly {
 
 void TxQueue::Grow() {
@@ -26,25 +27,40 @@ TxQueue::Iterator TxQueue::AllocateNode() {
     return idx;
 }
 
-TxQueue::Iterator TxQueue::Insert(Transaction* t) {
-  assert(it == kEnd);
+TxQueue::Iterator TxQueue::Push(Transaction* t) {
   Iterator new_node = AllocateNode();
   vec_[new_node].trans = t;
-  if (tail_ == kEnd) {
-    tail_ = new_node;
-  } else {
-    vec_[tail_].next = new_node;
-    vec_[new_node].prev = tail_;
-    tail_ = new_node;
+  Iterator it = tail_;
+  while (it != kEnd) {
+    if (vec_[it].trans->txid() <= t->txid()) {
+      break;
+    }
+    it = vec_[it].prev;
   }
-#ifndef NDEBUG 
-
-#endif
-  ++size_;
+  if (it == kEnd) {
+    if (head_ == kEnd) {
+      head_ = new_node;
+      tail_ = new_node;
+    } else {
+      vec_[head_].prev = new_node;
+      vec_[new_node].next = head_;
+      head_ = new_node;
+    }
+  } else {
+    Iterator next = vec_[it].next;
+    vec_[it].next = new_node;
+    vec_[new_node].prev = it;
+    vec_[new_node].next = next;
+    if (next != kEnd) {
+      vec_[next].prev = new_node;
+    } else {
+      tail_ = new_node;
+    }
+  }
   return new_node;
 }
 
-void TxQueue::Remove(Iterator it) {
+void TxQueue::Pop(Iterator it) {
   if (it == kEnd) {
     return;
   }
@@ -61,8 +77,8 @@ void TxQueue::Remove(Iterator it) {
   }
   vec_[it].next = free_head_;
   vec_[it].prev = kEnd;
+  vec_[it].trans = nullptr;
   free_head_ = it;
-  --size_;
 }
 
 Transaction* TxQueue::Front() {

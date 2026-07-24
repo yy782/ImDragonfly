@@ -37,3 +37,18 @@ target_include_directories(db_table_perf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/redis
 )
 target_compile_options(db_table_perf PRIVATE ${CXX_WARNING_OPTIONS})
+
+add_executable(tx_queue_test tx_queue_test.cpp)
+target_link_libraries(tx_queue_test PRIVATE
+    incomplete-imdragonfly
+    net
+    third_party_deps
+    GTest::gtest_main
+    GTest::gtest
+)
+target_include_directories(tx_queue_test PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/net
+)
+target_compile_options(tx_queue_test PRIVATE ${CXX_WARNING_OPTIONS})
+gtest_discover_tests(tx_queue_test)
