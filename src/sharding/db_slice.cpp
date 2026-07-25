@@ -315,8 +315,10 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
     }
   }
   if (!all_locked) {
-    for (; i > 0; i--) {
-      lt.Release(lock_args.fps[i - 1], mode);
+    // i 是失败位置的下标，需要回滚范围 [0, i]（含失败位）
+    // 因为 IntentLock::Acquire 总是先 ++cnt 再判断，失败时计数已 +1
+    for (int j = 0; j <= i; j++) {
+      lt.Release(lock_args.fps[j], mode);
     }
   }
   return all_locked;
