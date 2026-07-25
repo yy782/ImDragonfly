@@ -319,8 +319,8 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
     }
   }
   if (!all_locked) {
-    for (; i > 0; i--) {
-      lt.Release(lock_args.fps[i - 1], mode);
+    for (int j = 0; j <= i; j++) {
+      lt.Release(lock_args.fps[j], mode);
     }
   }
 
