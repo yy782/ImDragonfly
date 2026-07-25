@@ -8,16 +8,36 @@
 #include "detail/tx_queue.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "redis/facade/reply_builder.hpp"
+#include "network/redis_server.hpp"
+
+using namespace dfly;
 using namespace yy::net;
-using namespace cmn;
-namespace dfly {
+using namespace dfly::cmn;
+using namespace ::cmn;
 class TxQueueTest : public ::testing::Test {
  protected:
-  void SetUp() override { q_ = new TxQueue(); }
-  void TearDown() override { delete q_; }
-
+  void SetUp() override {
+    loop_ = new EventLoop();
+    server_ = new RedisServer(6379, loop_, shardNum);
+    server_->Start();
+    q_ = new TxQueue();
+  }
+  void TearDown() override {
+    server_->Stop();
+    sleep(1);
+    delete server_;
+    delete loop_;
+    delete q_;
+  }
+  EventLoop* loop_;
+  RedisServer* server_;
   TxQueue* q_;
+  const int shardNum = 4;
 };
+
+
+
+
 
 TEST_F(TxQueueTest, BasicFIFO) {
   // 1. 空队列行为
@@ -35,11 +55,15 @@ TEST_F(TxQueueTest, BasicFIFO) {
   q_->Push(&tx2);
   q_->Push(&tx3);
 
+  
   EXPECT_FALSE(q_->Empty());
+  std::cout << "PAST EMPTY" << std::endl;
   EXPECT_EQ(q_->Size(), 3u);
+  std::cout << "PAST SIZE" << std::endl;
   EXPECT_EQ(q_->Front(), &tx1);
+  std::cout << "PAST FRONT" << std::endl;
   EXPECT_EQ(q_->Back(), &tx3);
-
+  std::cout << "PAST BACK" << std::endl;
   EXPECT_EQ(q_->Front(), &tx1);
   q_->Pop();
   EXPECT_EQ(q_->Size(), 2u);
@@ -160,25 +184,9 @@ TEST_F(TxQueueTest, PushPopAlternating) {
   EXPECT_TRUE(q_->Empty());
 }
 
-class TxQueueConcurrentTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    loop_ = new EventLoop();
-    server_ = new RedisServer(6379, loop_, shardNum);
-    server_->Start();
-  }
-  void TearDown() override {
-    server_->Stop();
-    sleep(1);
-    delete server_;
-    delete loop_;
-  }
-  EventLoop* loop_;
-  RedisServer* server_;
-  const int shardNum = 4;
-};
 
-TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
+
+TEST_F(TxQueueTest, MultiConcurrent) {
     const int Count = 100;
     const int KeyCount = 10;
     const int P = Count/shardNum;
@@ -226,7 +234,7 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
     txs.resize(Count);
     auto* cid = CIs->Find("MSET");
     // 断言cid != nullptr
-    auto* Namespace = namespaces->GetDefaultNamespace();
+    auto* Namespace = &namespaces->GetDefaultNamespace();
     auto db_index = 0;
 
     for (int i = 0; i < shardNum; ++i) {
@@ -235,7 +243,7 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
                 auto* tx = new Transaction();
                 txs[start] = std::unique_ptr<Transaction>(tx);
                 tx->InitByArgs(Namespace, db_index, args[start]);
-                cid->Invoke(tx->GetCommandContext(), args[start]);
+                cid->Invoke(&tx->GetCommandContext(), args[start]);
             }
         });
     }
@@ -272,7 +280,7 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
     CmdArgList mget_args{mget_views};
 
     t.InitByArgs(Namespace, db_index, mget_args);
-    mget_cid->Invoke(t.GetCommandContext(), mget_args);
+    mget_cid->Invoke(&t.GetCommandContext(), mget_args);
 
     while (!t.HasFininsh()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -290,7 +298,5 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
     EXPECT_TRUE(found) << "MGET result does not match any expected value set."
                        << "\nResult: " << res;
 }
-
-}  // namespace dfly
 
 

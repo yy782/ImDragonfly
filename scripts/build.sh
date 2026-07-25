@@ -8,7 +8,7 @@
 #   -a, --asan           启用 AddressSanitizer
 #   -b, --build-dir DIR  指定构建目录 (默认: build)
 #   -j, --jobs N         并行编译线程数 (默认: nproc)
-#   -t, --targets LIST   指定构建目标 (默认: imdragonfly db_table_test)
+#   -t, --targets LIST   指定构建目标 (默认: imdragonfly unit_tests)
 #   -h, --help           显示帮助
 #
 # 示例:
@@ -25,7 +25,7 @@ BUILD_TYPE="Debug"
 USE_ASAN="OFF"
 BUILD_DIR="build"
 JOBS=$(nproc)
-TARGETS="imdragonfly db_table_test"
+TARGETS="imdragonfly unit_tests"
 
 # ── 解析参数 ───────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
