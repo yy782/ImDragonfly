@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 // ./db_table_test
-namespace dfly {
+using namespace dfly;
 
 class DbTableTest : public ::testing::Test {
  protected:
@@ -111,11 +111,4 @@ TEST_F(DbTableTest, MultipleOperations) {
     auto it = table_->prime().Find("key" + std::to_string(i));
     EXPECT_TRUE(it.is_done());
   }
-}
-
-}  // namespace dfly
-
-int main(int argc, char** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
 }

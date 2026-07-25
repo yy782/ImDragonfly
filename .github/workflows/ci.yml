@@ -146,7 +146,7 @@ jobs:
         run: chmod +x build/imdragonfly build/test/db_table_test
 
       # ── 运行 C++ 单元测试 ────────────────────────────────
-      - name: Run db_table_test
+      - name: Run C++ unit tests
         run: |
           mkdir -p test-results
           ./build/test/db_table_test \
@@ -199,3 +199,58 @@ jobs:
       # ── 运行集成测试 ─────────────────────────────────────
       - name: Run integration tests
         run: bash scripts/run_integration_tests.sh
+
+  # ═══════════════════════════════════════════════════════════
+  # memtier_benchmark 压力测试
+  # ═══════════════════════════════════════════════════════════
+  benchmark:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 安装运行时依赖 ───────────────────────────────────
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            liburing-dev \
+            libmimalloc-dev \
+            libboost-dev \
+            libgoogle-glog-dev \
+            libabsl-dev \
+            libprotobuf-dev \
+            libevent-2.1-7 \
+            python3
+
+      # ── 安装 memtier_benchmark ────────────────────────────
+      - name: Install memtier_benchmark
+        run: |
+          wget -q https://github.com/redis/memtier_benchmark/releases/download/2.5.0/memtier-benchmark_2.5.0.jammy_amd64.deb
+          sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb
+          memtier_benchmark --version
+
+      # ── 下载构建产物 ─────────────────────────────────────
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build
+
+      - name: Make binaries executable
+        run: chmod +x build/imdragonfly
+
+      # ── 运行压力测试 ─────────────────────────────────────
+      - name: Run memtier_benchmark
+        run: bash scripts/run_benchmark.sh
+
+      # ── 上传压测结果 ─────────────────────────────────────
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results/
+          retention-days: 7

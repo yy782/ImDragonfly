@@ -40,7 +40,18 @@ class Transaction {
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
-  ~Transaction();
+  ~Transaction();  // 事务通过 intrusive_ptr 进行引用计数管理
+
+  friend void intrusive_ptr_add_ref(Transaction* trans) noexcept {
+    trans->use_count_.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  friend void intrusive_ptr_release(Transaction* trans) noexcept {
+    if (1 == trans->use_count_.fetch_sub(1, std::memory_order_release)) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      delete trans;
+    }
+  }
 
   using RunnableType = base::FunctionRef<void(Transaction*, EngineShard*)>;
 
@@ -62,18 +73,7 @@ class Transaction {
 
   bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
-  const DbContext& GetDbContext() const { return db_cntx_; }
-  DbContext& GetDbContext() { return db_cntx_; }
 
-  const Namespace& GetNamespace() const { return *namespace_; }
-
-  DbSlice& GetDbSlice(ShardId sid) const;
-
-  CommandContext& GetCommandContext() { return cmd_cntx_; }
-  const CommandContext& GetCommandContext() const { return cmd_cntx_; }
-  CmdArgList& GetFullArgs() { return full_args_; }
-
-  const CmdArgList& GetFullArgs() const { return full_args_; }
 
   bool RunInShard(EngineShard* shard);
   bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
@@ -86,11 +86,12 @@ class Transaction {
     COORD_INLINE = 1 << 3,      // 协调器在本地执行
   };
   void DispatchHop();
-  struct alignas(64) Slice {
+  struct Slice {
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
     uint16_t local_mask = 0;
+    TxQueue::Iterator it = TxQueue::kEnd;
     DbSlice& GetDbSlice() { return tx->GetDbSlice(unique_shard_id); }
     DbContext& GetDbContext() { return tx->GetDbContext(); }
     const DbSlice& GetDbSlice() const {
@@ -152,7 +153,7 @@ class Transaction {
 
     Iterator end() const { return cend(); }
   };
-  static_assert(sizeof(Slice) == 64);
+  //static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
     return Slices_[id];
@@ -165,35 +166,38 @@ class Transaction {
 
   uint64_t txid() const { return txid_; }
 
+  bool is_armed() { return is_armed_.load(std::memory_order_acquire); }
+  TxQueue::Iterator& GetPos(ShardId sid)  { return Slices_[sid].it; }
+  KeyLockArgs& GetLockArgs(ShardId sid) { return lock_args_[sid]; }
   IntentLock::Mode LockMode() const;
 
   std::string_view Name() const;
   State GetState() const { return state_; }
   uint8_t GetCoordinatorState() const { return coordinator_state_; }
+  const DbContext& GetDbContext() const { return db_cntx_; }
+  DbContext& GetDbContext() { return db_cntx_; }
+  const Namespace& GetNamespace() const { return *namespace_; }
+  DbSlice& GetDbSlice(ShardId sid) const;
+  CommandContext& GetCommandContext() { return cmd_cntx_; }
+  const CommandContext& GetCommandContext() const { return cmd_cntx_; }
+  CmdArgList& GetFullArgs() { return full_args_; }
+  const CmdArgList& GetFullArgs() const { return full_args_; }
 
-  struct SlicesArgs {
-    std::vector<Slice> slices;
-    ShardId unique_shard_id;
-    uint32_t unique_shard_cnt;
-    uint32_t key_num;
-  };
+  std::string PrintLock(ShardId sid) const ;
 
-  struct MultiData {
-    using ComPair = std::pair<const CommandId*, std::vector<std::string_view>>;
-    std::vector<ComPair> Commmends;
-    std::vector<SlicesArgs> slices_args;
-    std::vector<std::string> Res;
-  };
-  // void startMulti();
-  // auto& StartExec() -> MultiData::Commends&;
-  // template<typename Cb>
-  // void AddWatchKey(std::string_view key, Cb&& cb) { return
-  // conn_cntx_->AddWatchKey(key, std::move(cb)); } auto ClearWatchKeys() {
-  // conn_cntx_->ClearWatchKeys(); } const auto& GetWatchKeys() const { return
-  // conn_cntx_->GetWatchKeys(); } bool HasWatchKeys() const { return
-  // conn_cntx_->HasWatchKeys(); } bool IsDirty() const { return
-  // conn_cntx_->IsDirty(); } void FinishOrDiscardMulti(); void
-  // CollectCommands(const CommandId* cid, CmdArgList args);
+
+#ifdef UNIT_TESTS
+  void set_txid(uint64_t txid) {
+    txid_ = txid;
+  }
+  bool HasFininsh() {
+    return HasRes_.load();
+  }
+  std::string GetResWithOutBlock() {
+    return Res_;
+  }
+  int id;
+#endif 
 
  private:
   cppcoro::AsyncTask ScheduleInternal();
@@ -213,8 +217,18 @@ class Transaction {
 
   unsigned SidToId(ShardId sid) const { return sid < Slices_.size() ? sid : 0; }
 
+  struct ResumeOnShard {
+    ShardId sid;
+    bool await_ready() noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+      shard_set->Add(sid, [h]() mutable { h.resume(); });
+    }
+    void await_resume() noexcept {}
+  };
+
   template <typename F>
   cppcoro::task<void> IterateActiveShards(F&& f) {
+    ShardId coordinator = EngineShard::tlocal()->shard_id();
     base::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
       co_await f(sd, i);
@@ -237,12 +251,14 @@ class Transaction {
       }
     }
     co_await counter->Wait();
+
+    // // 挂起协程，投回协调线程继续执行
+    // co_await ResumeOnShard{coordinator};
     co_return;
   }
-
   std::atomic_uint32_t run_barrier_{0};
   absl::InlinedVector<Slice, 16> Slices_;
-  absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
+  //absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
   absl::InlinedVector<KeyLockArgs, 16> lock_args_;
   CmdArgList full_args_;
   IntentLock::Mode lock_mode_;
@@ -250,7 +266,7 @@ class Transaction {
   std::coroutine_handle<> coro_handle_;
   std::coroutine_handle<> Res_handle_;
   const CommandId* cid_ = nullptr;
-  MultiData multi_;
+
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
   uint32_t unique_shard_cnt_{0};
@@ -261,7 +277,13 @@ class Transaction {
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
 
+  std::atomic_uint32_t use_count_{0};  // intrusive_ptr 引用计数
+  std::atomic<bool> is_armed_ = false;
+
   std::string Res_;
+#ifdef UNIT_TESTS
+  std::atomic<bool> HasRes_ = false;
+#endif
 };
 
 }  // namespace dfly

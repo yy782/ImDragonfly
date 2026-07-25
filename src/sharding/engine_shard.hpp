@@ -30,6 +30,7 @@ class EngineShard {
   ShardId shard_id() const { return shard_id_; }
   PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
   base::TaskQueue* GetQueue() { return proactor_->GetTaskQueue(); }
+  yy::net::EventLoop* GetLoop() { return proactor_; }
 
   void PollExecution(Transaction* trans);
 

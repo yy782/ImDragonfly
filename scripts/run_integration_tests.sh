@@ -1,20 +1,28 @@
 #!/bin/bash
 # 启动 ImDragonfly 服务并运行 Redis 协议集成测试
-# 用法: bash scripts/run_integration_tests.sh [二进制路径] [线程数] [端口]
+# 用法: bash scripts/run_integration_tests.sh [二进制路径] [端口]
 #
-# 默认:
+# 示例:
 #   bash scripts/run_integration_tests.sh
-#
-# 自定义:
-#   bash scripts/run_integration_tests.sh ./build/imdragonfly 4 6379
+#   bash scripts/run_integration_tests.sh ./build/imdragonfly 6379
 
 set -euo pipefail
 
 IMDRAGONFLY_BIN="${1:-./build/imdragonfly}"
-THREADS="${2:-4}"
-PORT="${3:-6379}"
-TEST_DIR="${4:-test/redis-py}"
+PORT="${2:-6379}"
+TEST_DIR="${3:-test/redis-py}"
 LOG_DIR="./logs"
+
+# ── 检查端口占用 ────────────────────────────────────────
+if ss -tlnp | grep -q ":${PORT} "; then
+    echo "ERROR: Port $PORT is already in use."
+    echo "Please free port $PORT before running tests."
+    exit 1
+fi
+
+# ── 自动检测 CPU 核心数 ────────────────────────────────────
+THREADS=$(nproc)
+echo "Detected CPU cores: $THREADS"
 
 # ── 检查二进制是否存在 ────────────────────────────────────
 if [ ! -x "$IMDRAGONFLY_BIN" ]; then
@@ -69,7 +77,7 @@ fi
 VENV_DIR="/tmp/imdragonfly_integration_venv"
 echo "Setting up Python virtual environment..."
 python3 -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install -q redis pytest
+"$VENV_DIR/bin/pip" install -q redis pytest pytest-timeout
 
 # ── 运行集成测试 ─────────────────────────────────────────
 echo ""
