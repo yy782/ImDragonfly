@@ -5,7 +5,7 @@
 #include "db_slice.hpp"
 #include "detail/stateless_alloceator.hpp"
 #include "transaction_layer/transaction.hpp"
-
+#include "YY/net/TimerQueue.h"
 namespace dfly {
 thread_local mi_heap_t* data_heap = nullptr;
 thread_local EngineShard* EngineShard::shard_ = nullptr;
@@ -23,7 +23,12 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {}
+    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {
+        // pb->runTimer<yy::LowPrecision>([this]() {
+        //     PollExecution(nullptr);
+        //     LOG(INFO) << txq()->PrintTxLock();
+        // }, std::chrono::seconds(5), -1);
+    }
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
@@ -41,7 +46,13 @@ void EngineShard::Shutdown() {}
 void EngineShard::PollExecution(Transaction* trans) {
     (void)trans;
     Transaction* tx = nullptr;
+
+#ifdef UNIT_TESTS
+    LOG(INFO) << txq()->PrintTxLock();
+#endif
+
     while ((tx = txq_.Front()) != nullptr) {
+        if (!tx->is_armed()) break;
         bool concluded = tx->RunInShard(this);
         if (!concluded) {
             break;

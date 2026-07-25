@@ -107,4 +107,34 @@ size_t TxQueue::Size() const {
   return sz;
 }
 
+std::string TxQueue::PrintTxLock() const {
+    std::string str;
+    auto* e = EngineShard::tlocal();
+    auto sid = e->shard_id();
+    str += "\n====== TxQueue ======\n";
+    str += "shard_id: " + std::to_string(sid) + "\n";
+    str += "size: " + std::to_string(Size()) + "\n";
+    str += "head: " + std::to_string(head_) + "\n";
+    str += "tail: " + std::to_string(tail_) + "\n";
+    str += "free_list: " + std::to_string(free_head_) + "\n";
+    str += "detail for used list:\n";
+
+    uint32_t it = head_;
+    std::string lock_str;
+    while(it != kEnd) {
+        auto* t = vec_[it].trans;
+#ifdef UNIT_TESTS
+        lock_str += "事务: ";
+        lock_str += std::to_string(t->id);
+#endif
+        lock_str += t->PrintLock(sid);
+        it = vec_[it].next;
+    }
+    str += lock_str;
+    str += "=====================\n";
+    return str;
+}
+
+
+
 }  // namespace dfly

@@ -36,7 +36,7 @@ class LockTable {
 
   void Release(LockFp fp, IntentLock::Mode mode) {
     auto it = locks_.find(fp);
-    assert(it != locks_.end());
+    assert(it != locks_.end()); 
     it->second.Release(mode);
     if (it->second.IsFree()) locks_.erase(it);
   }

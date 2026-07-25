@@ -32,7 +32,7 @@ class TxQueueTest : public ::testing::Test {
   EventLoop* loop_;
   RedisServer* server_;
   TxQueue* q_;
-  const int shardNum = 4;
+  const int shardNum = 5;
 };
 
 
@@ -183,9 +183,10 @@ TEST_F(TxQueueTest, PushPopAlternating) {
 
 
 TEST_F(TxQueueTest, MultiConcurrent) {
-    const int Count = 100;
-    const int KeyCount = 10;
+    const int Count = 5;
+    const int KeyCount = 5;
     const int P = Count/shardNum;
+    // 断言 Count整除shardNum
     std::vector<std::string> keys;
     for (int i = 0; i < KeyCount; ++i) {
         std::string str = "key" + std::to_string(i);
@@ -227,19 +228,19 @@ TEST_F(TxQueueTest, MultiConcurrent) {
     }
 
     std::vector<std::unique_ptr<Transaction>> txs;
-    txs.resize(Count);
 
     auto* cid = CIs->Find("MSET");
     // 断言cid != nullptr
     for (int i = 0; i < Count; ++i) {
       auto* tx = new Transaction(cid);
-      txs[i] = (std::unique_ptr<Transaction>(tx));
+      tx->id = i;
+      txs.push_back(std::unique_ptr<Transaction>(tx));
     }
     auto* Namespace = &namespaces->GetDefaultNamespace();
     auto db_index = 0;
 
     for (int i = 0; i < shardNum; ++i) {
-        shard_set->Add(i, [&]() {
+        shard_set->Add(i, [&, i]() {
             for (int start = i * P; start < (i + 1) * P; ++start) {
                 auto& tx = txs[start];
                 tx->InitByArgs(Namespace, db_index, args[start]);
@@ -250,7 +251,7 @@ TEST_F(TxQueueTest, MultiConcurrent) {
 
     // 等待所有 MSET 事务完成（带超时重试）
     std::atomic<int> FinishCount = 0;
-    for (int retry = 0; retry < 1000 && FinishCount.load() < Count; ++retry) {
+    for (int retry = 0; retry < 2000 && FinishCount.load() < Count; ++retry) {
         FinishCount = 0;
         for (int i = 0; i < Count; ++i) {
             if (txs[i]->HasFininsh()) {

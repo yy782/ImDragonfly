@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include "stateless_alloceator.hpp"
+#include <string>
 namespace dfly {
 
 class Transaction;
@@ -22,6 +23,8 @@ public:
     Transaction* Back();
     size_t Size() const;
     bool Empty() const { return head_ == kEnd; }
+    //friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);
+    std::string PrintTxLock() const;
  private:
   void Grow();
   Iterator AllocateNode();
@@ -38,5 +41,9 @@ public:
   uint32_t free_head_ = kEnd;
   TxQueue(const TxQueue&) = delete;
 };
+
+
+
+
 
 }  // namespace dfly

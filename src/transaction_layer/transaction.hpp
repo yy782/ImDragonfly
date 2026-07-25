@@ -165,6 +165,7 @@ class Transaction {
 
   uint64_t txid() const { return txid_; }
 
+  bool is_armed() { return is_armed_.load(std::memory_order_acquire); }
   IntentLock::Mode LockMode() const;
 
   std::string_view Name() const;
@@ -196,6 +197,9 @@ class Transaction {
   // void CollectCommands(const CommandId* cid, CmdArgList args);
 
 
+  std::string PrintLock(ShardId sid) const ;
+
+
 #ifdef UNIT_TESTS
   void set_txid(uint64_t txid) {
     txid_ = txid;
@@ -206,9 +210,8 @@ class Transaction {
   std::string GetResWithOutBlock() {
     return Res_;
   }
+  int id;
 #endif 
-
-private:
 
  private:
   cppcoro::AsyncTask ScheduleInternal();
@@ -254,7 +257,7 @@ private:
     co_await counter->Wait();
     co_return;
   }
-
+  void CancelScheduledTx();
   std::atomic_uint32_t run_barrier_{0};
   absl::InlinedVector<Slice, 16> Slices_;
   absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
@@ -275,6 +278,8 @@ private:
   uint32_t key_num_ = 0;
   DbContext db_cntx_;
   CommandContext cmd_cntx_;
+
+  std::atomic<bool> is_armed_ = false;
 
   std::string Res_;
 #ifdef UNIT_TESTS
