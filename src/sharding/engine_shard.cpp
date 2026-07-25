@@ -47,8 +47,8 @@ void EngineShard::PollExecution(Transaction* trans) {
             break;
         }
     }
-  }
 }
+
 
 DbSlice* EngineShard::GetDbSlice(ShardId sid) { return nullptr; }
 

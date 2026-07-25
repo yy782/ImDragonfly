@@ -196,7 +196,7 @@ class Transaction {
   // void CollectCommands(const CommandId* cid, CmdArgList args);
 
 
-#ifdef TX_DEBUG
+#ifdef UNIT_TESTS
   void set_txid(uint64_t txid) {
     txid_ = txid;
   }
@@ -277,8 +277,8 @@ private:
   CommandContext cmd_cntx_;
 
   std::string Res_;
-#ifdef TX_DEBUG
-  std::atimic<bool> HasRes_ = false;
+#ifdef UNIT_TESTS
+  std::atomic<bool> HasRes_ = false;
 #endif
 };
 

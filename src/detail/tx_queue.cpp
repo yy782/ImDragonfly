@@ -14,6 +14,7 @@ void TxQueue::Grow() {
       vec_[i].prev = i - 1;
     }
     vec_[new_size - 1].next = kEnd;
+    free_head_ = old_size;
 }
 
 TxQueue::Iterator TxQueue::AllocateNode() {

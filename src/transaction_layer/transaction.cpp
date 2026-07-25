@@ -83,7 +83,7 @@ void Transaction::InitByArgs(const Namespace* namespaces, DbIndex db_index,
 
 void Transaction::CollectedResult(std::string&& res) {
   Res_ = std::move(res);
-#ifdef TX_DEBUG
+#ifdef UNIT_TESTS
   HasRes_ = true;
 #endif
 

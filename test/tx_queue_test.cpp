@@ -57,13 +57,9 @@ TEST_F(TxQueueTest, BasicFIFO) {
 
   
   EXPECT_FALSE(q_->Empty());
-  std::cout << "PAST EMPTY" << std::endl;
   EXPECT_EQ(q_->Size(), 3u);
-  std::cout << "PAST SIZE" << std::endl;
   EXPECT_EQ(q_->Front(), &tx1);
-  std::cout << "PAST FRONT" << std::endl;
   EXPECT_EQ(q_->Back(), &tx3);
-  std::cout << "PAST BACK" << std::endl;
   EXPECT_EQ(q_->Front(), &tx1);
   q_->Pop();
   EXPECT_EQ(q_->Size(), 2u);
@@ -232,16 +228,20 @@ TEST_F(TxQueueTest, MultiConcurrent) {
 
     std::vector<std::unique_ptr<Transaction>> txs;
     txs.resize(Count);
+
     auto* cid = CIs->Find("MSET");
     // 断言cid != nullptr
+    for (int i = 0; i < Count; ++i) {
+      auto* tx = new Transaction(cid);
+      txs[i] = (std::unique_ptr<Transaction>(tx));
+    }
     auto* Namespace = &namespaces->GetDefaultNamespace();
     auto db_index = 0;
 
     for (int i = 0; i < shardNum; ++i) {
         shard_set->Add(i, [&]() {
             for (int start = i * P; start < (i + 1) * P; ++start) {
-                auto* tx = new Transaction();
-                txs[start] = std::unique_ptr<Transaction>(tx);
+                auto& tx = txs[start];
                 tx->InitByArgs(Namespace, db_index, args[start]);
                 cid->Invoke(&tx->GetCommandContext(), args[start]);
             }
