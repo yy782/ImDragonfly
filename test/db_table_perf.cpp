@@ -1,3 +1,4 @@
+#include <gtest/gtest.h>
 #include <sys/resource.h>
 
 #include <chrono>
@@ -9,13 +10,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "redis/dict.hpp"
 #include "src/sharding/db_table.hpp"
-// ./db_table_perf
+
 using namespace std::chrono;
-
-namespace dfly {
-
+using namespace dfly;
 struct BasicDashPolicy {
   enum : uint8_t { kSlotNum = 14, kBucketNum = 56 };
   static constexpr bool kUseVersion = false;
@@ -35,20 +33,6 @@ struct BasicDashPolicy {
 
 using Dash64 = DashTable<uint64_t, uint64_t, BasicDashPolicy>;
 
-unsigned int dictUint64Hash(const void* key) {
-  return static_cast<unsigned int>(
-      std::hash<uint64_t>{}(*static_cast<const uint64_t*>(key)));
-}
-
-int dictUint64Compare(void* privdata, const void* key1, const void* key2) {
-  (void)privdata;
-  return *static_cast<const uint64_t*>(key1) ==
-         *static_cast<const uint64_t*>(key2);
-}
-
-static dictType dictTypeUint64 = {dictUint64Hash,    NULL, NULL,
-                                  dictUint64Compare, NULL, NULL};
-
 std::vector<uint64_t> GenerateRandomKeys(size_t count) {
   std::vector<uint64_t> keys;
   keys.reserve(count);
@@ -66,7 +50,7 @@ std::vector<uint64_t> GenerateRandomKeys(size_t count) {
 size_t GetMemoryUsageKB() {
   struct rusage usage;
   if (getrusage(RUSAGE_SELF, &usage) == 0) {
-    return static_cast<size_t>(usage.ru_maxrss);  // ru_maxrss in KB
+    return static_cast<size_t>(usage.ru_maxrss);
   }
   return 0;
 }
@@ -95,8 +79,8 @@ void RunPerformanceTest(size_t num_elements) {
   auto keys = GenerateRandomKeys(num_elements);
 
   size_t base_memory = GetMemoryUsageKB();
-  double dt_insert, redis_insert, std_insert;
-  size_t dt_memory, redis_memory, std_memory;
+  double dt_insert, std_insert;
+  size_t dt_memory, std_memory;
 
   std::cout << "\n--- Insert Performance ---" << std::endl;
 
@@ -115,37 +99,6 @@ void RunPerformanceTest(size_t num_elements) {
     std::cout << std::setw(25) << "DashTable Memory"
               << ": " << std::fixed << std::setprecision(1)
               << (dt_memory / 1024.0) << " MB" << std::endl;
-  }
-
-  // Test Redis dict
-  {
-    size_t redis_base = GetMemoryUsageKB();
-    dict* redis_dict = dictCreate(&dictTypeUint64, NULL);
-
-    redis_insert = MeasureTime(
-        [&]() {
-          for (size_t i = 0; i < num_elements; ++i) {
-            uint64_t* k_ptr = new uint64_t(keys[i]);
-            uint64_t* v_ptr = new uint64_t(i);
-            dictAdd(redis_dict, k_ptr, v_ptr);
-          }
-        },
-        "Redis dict Insert", num_elements);
-
-    redis_memory = GetMemoryUsageKB() - redis_base;
-    std::cout << std::setw(25) << "Redis dict Memory"
-              << ": " << std::fixed << std::setprecision(1)
-              << (redis_memory / 1024.0) << " MB" << std::endl;
-
-    // Cleanup Redis dict
-    dictIterator* di = dictGetIterator(redis_dict);
-    dictEntry* de;
-    while ((de = dictNext(di)) != NULL) {
-      delete static_cast<uint64_t*>(de->key);
-      delete static_cast<uint64_t*>(de->val);
-    }
-    dictReleaseIterator(di);
-    dictRelease(redis_dict);
   }
 
   // Test std::unordered_map
@@ -176,13 +129,6 @@ void RunPerformanceTest(size_t num_elements) {
     dt.InsertNew(keys[i], i);
   }
 
-  dict* redis_dict = dictCreate(&dictTypeUint64, NULL);
-  for (size_t i = 0; i < num_elements; ++i) {
-    uint64_t* k_ptr = new uint64_t(keys[i]);
-    uint64_t* v_ptr = new uint64_t(i);
-    dictAdd(redis_dict, k_ptr, v_ptr);
-  }
-
   std::unordered_map<uint64_t, uint64_t> std_map;
   for (size_t i = 0; i < num_elements; ++i) {
     std_map[keys[i]] = i;
@@ -198,15 +144,6 @@ void RunPerformanceTest(size_t num_elements) {
         }
       },
       "DashTable Find", num_elements);
-
-  double redis_find = MeasureTime(
-      [&]() {
-        for (size_t i = 0; i < num_elements; ++i) {
-          void* result = dictFind(redis_dict, &keys[i]);
-          asm volatile("" : : "r"(result) : "memory");
-        }
-      },
-      "Redis dict Find", num_elements);
 
   double std_find = MeasureTime(
       [&]() {
@@ -232,15 +169,6 @@ void RunPerformanceTest(size_t num_elements) {
       },
       "DashTable Erase", num_elements);
 
-  double redis_erase = MeasureTime(
-      [&]() {
-        for (size_t i = 0; i < num_elements; ++i) {
-          int result = dictDelete(redis_dict, &keys[i]);
-          asm volatile("" : : "r"(result) : "memory");
-        }
-      },
-      "Redis dict Erase", num_elements);
-
   double std_erase = MeasureTime(
       [&]() {
         for (size_t i = 0; i < num_elements; ++i) {
@@ -252,54 +180,35 @@ void RunPerformanceTest(size_t num_elements) {
 
   std::cout << "\n--- Comparison Summary ---" << std::endl;
   std::cout << std::setw(25) << "Operation" << std::setw(18) << "DashTable"
-            << std::setw(18) << "Redis dict" << std::setw(22)
-            << "std::unordered_map" << std::endl;
+            << std::setw(22) << "std::unordered_map" << std::endl;
   std::cout << "---------------------------------------------------------------"
-               "---------"
+               "------"
             << std::endl;
   std::cout << std::setw(25) << "Insert" << std::setw(18) << std::fixed
-            << std::setprecision(2) << dt_insert << " ms" << std::setw(18)
-            << std::fixed << std::setprecision(2) << redis_insert << " ms"
-            << std::setw(22) << std::fixed << std::setprecision(2) << std_insert
-            << " ms" << std::endl;
+            << std::setprecision(2) << dt_insert << " ms" << std::setw(22)
+            << std::fixed << std::setprecision(2) << std_insert << " ms"
+            << std::endl;
   std::cout << std::setw(25) << "Find" << std::setw(18) << std::fixed
-            << std::setprecision(2) << dt_find << " ms" << std::setw(18)
-            << std::fixed << std::setprecision(2) << redis_find << " ms"
-            << std::setw(22) << std::fixed << std::setprecision(2) << std_find
-            << " ms" << std::endl;
+            << std::setprecision(2) << dt_find << " ms" << std::setw(22)
+            << std::fixed << std::setprecision(2) << std_find << " ms"
+            << std::endl;
   std::cout << std::setw(25) << "Erase" << std::setw(18) << std::fixed
-            << std::setprecision(2) << dt_erase << " ms" << std::setw(18)
-            << std::fixed << std::setprecision(2) << redis_erase << " ms"
-            << std::setw(22) << std::fixed << std::setprecision(2) << std_erase
-            << " ms" << std::endl;
+            << std::setprecision(2) << dt_erase << " ms" << std::setw(22)
+            << std::fixed << std::setprecision(2) << std_erase << " ms"
+            << std::endl;
   std::cout << std::setw(25) << "Memory Usage" << std::setw(18) << std::fixed
             << std::setprecision(1) << (dt_memory / 1024.0) << " MB"
-            << std::setw(18) << std::fixed << std::setprecision(1)
-            << (redis_memory / 1024.0) << " MB" << std::setw(22) << std::fixed
-            << std::setprecision(1) << (std_memory / 1024.0) << " MB"
-            << std::endl;
-
-  // Cleanup Redis dict
-  dictIterator* di = dictGetIterator(redis_dict);
-  dictEntry* de;
-  while ((de = dictNext(di)) != NULL) {
-    delete static_cast<uint64_t*>(de->key);
-    delete static_cast<uint64_t*>(de->val);
-  }
-  dictReleaseIterator(di);
-  dictRelease(redis_dict);
+            << std::setw(22) << std::fixed << std::setprecision(1)
+            << (std_memory / 1024.0) << " MB" << std::endl;
 }
 
-}  // namespace dfly
-
-int main() {
+TEST(DbTablePerf, Benchmark) {
   std::cout << "=== DbTable Performance Benchmark ===" << std::endl;
-  std::cout << "Comparing DashTable vs Redis dict vs std::unordered_map"
-            << std::endl;
+  std::cout << "Comparing DashTable vs std::unordered_map" << std::endl;
 
-  dfly::RunPerformanceTest(10000);
-  dfly::RunPerformanceTest(100000);
-  dfly::RunPerformanceTest(1000000);
+  RunPerformanceTest(10000);
+  RunPerformanceTest(100000);
+  RunPerformanceTest(1000000);
 
-  return 0;
+  SUCCEED();
 }

@@ -23,6 +23,9 @@ class Namespace {
  public:
   Namespace();
 
+
+
+
   DbSlice& GetCurrentDbSlice() const;
 
   DbSlice& GetDbSlice(ShardId sid) const;

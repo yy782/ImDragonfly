@@ -17,6 +17,9 @@ Namespace::Namespace() {
   });
 }
 
+
+
+
 DbSlice& Namespace::GetCurrentDbSlice() const {
   EngineShard* es = EngineShard::tlocal();
   return GetDbSlice(es->shard_id());
