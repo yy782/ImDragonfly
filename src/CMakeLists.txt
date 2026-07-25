@@ -6,6 +6,10 @@ file(GLOB_RECURSE STORAGE_SOURCES
 
 add_library(incomplete-imdragonfly STATIC ${STORAGE_SOURCES} )
 
+if(BUILD_TESTS)
+    target_compile_definitions(incomplete-imdragonfly PUBLIC UNIT_TESTS)
+endif()
+
 target_include_directories(incomplete-imdragonfly PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/YY
