@@ -4,8 +4,9 @@
 
 #pragma once
 
-// Included by family object files that implement only their respective registration function.
-// Self-registration would require updating the build process to fix linking issues.
+// Included by family object files that implement only their respective
+// registration function. Self-registration would require updating the build
+// process to fix linking issues.
 namespace dfly {
 
 class CommandRegistry;
@@ -16,6 +17,5 @@ void RegisterListFamily(CommandRegistry*);
 void RegisterHashFamily(CommandRegistry*);
 void RegisterSetFamily(CommandRegistry*);
 void RegisterZSetFamily(CommandRegistry*);
-
 
 }  // namespace dfly

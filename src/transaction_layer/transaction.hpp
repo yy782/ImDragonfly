@@ -1,31 +1,31 @@
 #pragma once
-#include <cstdint>
-#include <shared_mutex>
-#include <vector>
-#include <string>
-#include <span> 
-#include <utility>
-#include <coroutine>
-#include <variant>
 #include <gtest/gtest.h>
+
 #include <atomic>
+#include <coroutine>
+#include <cstdint>
 #include <functional>
 #include <optional>
+#include <shared_mutex>
 #include <span>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "detail/tx_base.hpp"
-#include "detail/common_types.hpp"
-#include "function.hpp"
-#include "command_layer/command_registry.hpp"
+#include "YY/base/synchronization.hpp"
 #include "command_layer/cmn_types.hpp"
-#include "detail/conn_context.hpp"
-#include "sharding/op_status.hpp"
-#include "detail/intent_lock.hpp"
-#include "detail/tx_queue.hpp"
+#include "command_layer/command_registry.hpp"
 #include "cppcoro/async_task.hpp"
 #include "cppcoro/task.hpp"
-#include "YY/base/synchronization.hpp"
-namespace dfly{
+#include "detail/common_types.hpp"
+#include "detail/conn_context.hpp"
+#include "detail/intent_lock.hpp"
+#include "detail/tx_base.hpp"
+#include "detail/tx_queue.hpp"
+#include "function.hpp"
+#include "sharding/op_status.hpp"
+namespace dfly {
 using ::cmn::CmdArgList;
 
 class CommandId;
@@ -33,13 +33,9 @@ class Namespace;
 class RedisSession;
 class EngineShard;
 
-class Transaction{
-public:
-  enum class State {
-    IDLE,
-    MULTI,
-    EXEC
-  };
+class Transaction {
+ public:
+  enum class State { IDLE, MULTI, EXEC };
 
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
@@ -49,90 +45,61 @@ public:
   using RunnableType = base::FunctionRef<void(Transaction*, EngineShard*)>;
 
   enum LocalMask : uint16_t {
-    ACTIVE = 1 << 0, // shard上有活跃的slice
-    OUT_OF_ORDER = 1 << 1,  // 乱序执行
-    KEYLOCK_ACQUIRED = 1 << 2, // 锁已获取
+    ACTIVE = 1 << 0,            // shard上有活跃的slice
+    OUT_OF_ORDER = 1 << 1,      // 乱序执行
+    KEYLOCK_ACQUIRED = 1 << 2,  // 锁已获取
   };
-
 
   Transaction(const CommandId* cid = nullptr);
 
-  void InitByArgs(const Namespace* namespaces, DbIndex db_index, CmdArgList args);
+  void InitByArgs(const Namespace* namespaces, DbIndex db_index,
+                  CmdArgList args);
   void CollectedResult(std::string&& res);
   cppcoro::task<std::string> GetRes();
   KeyLockArgs GetLockArgs(ShardId sid) const;
 
-
-
   bool IsActive(ShardId sid) const;
 
-  bool IsScheduled() const {
-    return coordinator_state_ & COORD_SCHED;
-  }
+  bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
+  const DbContext& GetDbContext() const { return db_cntx_; }
+  DbContext& GetDbContext() { return db_cntx_; }
 
-  const DbContext& GetDbContext() const {
-    return db_cntx_;
-  }
-  DbContext& GetDbContext() {
-    return db_cntx_;
-  }
-
-  const Namespace& GetNamespace() const {
-    return *namespace_;
-  }
+  const Namespace& GetNamespace() const { return *namespace_; }
 
   DbSlice& GetDbSlice(ShardId sid) const;
 
-  CommandContext& GetCommandContext() {
-    return cmd_cntx_;
-  }
-  const CommandContext& GetCommandContext() const {
-    return cmd_cntx_;
-  }
-  CmdArgList& GetFullArgs() {
-    return full_args_;
-  }
+  CommandContext& GetCommandContext() { return cmd_cntx_; }
+  const CommandContext& GetCommandContext() const { return cmd_cntx_; }
+  CmdArgList& GetFullArgs() { return full_args_; }
 
-  const CmdArgList& GetFullArgs() const {
-    return full_args_;
-  }
+  const CmdArgList& GetFullArgs() const { return full_args_; }
 
   bool RunInShard(EngineShard* shard);
   bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
   // 协调器状态
   enum CoordinatorState : uint8_t {
-    COORD_SCHED = 1, // 协调器已调度
-    COORD_CONCLUDING = 1 << 1, // 协调器正在结束
-    COORD_CANCELLED = 1 << 2, // 协调器已取消
-    COORD_INLINE = 1 << 3, // 协调器在本地执行
+    COORD_SCHED = 1,            // 协调器已调度
+    COORD_CONCLUDING = 1 << 1,  // 协调器正在结束
+    COORD_CANCELLED = 1 << 2,   // 协调器已取消
+    COORD_INLINE = 1 << 3,      // 协调器在本地执行
   };
   void DispatchHop();
-  struct alignas(64) Slice{
+  struct alignas(64) Slice {
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
     uint16_t local_mask = 0;
-    DbSlice& GetDbSlice() {
-      return tx->GetDbSlice(unique_shard_id);
-    }
-    DbContext& GetDbContext() {
-      return tx->GetDbContext();
-    } 
+    DbSlice& GetDbSlice() { return tx->GetDbSlice(unique_shard_id); }
+    DbContext& GetDbContext() { return tx->GetDbContext(); }
     const DbSlice& GetDbSlice() const {
       return tx->GetDbSlice(unique_shard_id);
     }
-    const DbContext& GetDbContext() const {
-      return tx->GetDbContext();
-    } 
-    CmdArgList& GetFullArgs() {
-      return tx->full_args_;
-    }
+    const DbContext& GetDbContext() const { return tx->GetDbContext(); }
+    CmdArgList& GetFullArgs() { return tx->full_args_; }
 
-    const CmdArgList& GetFullArgs() const {
-      return tx->full_args_;
-    }
+    const CmdArgList& GetFullArgs() const { return tx->full_args_; }
 
     struct Iterator {
       using ArgsIndexPair = std::pair<std::string_view, uint32_t>;
@@ -145,30 +112,32 @@ public:
       ArgsIndexPair pa;
       const Slice* slice;
       uint32_t idx;
-      Iterator(std::string_view key, uint32_t keyId, const Slice* sl, uint32_t id) : pa(key, keyId), slice(sl), idx(id) {}
+      Iterator(std::string_view key, uint32_t keyId, const Slice* sl,
+               uint32_t id)
+          : pa(key, keyId), slice(sl), idx(id) {}
       bool operator==(const Iterator& o) const { return pa == o.pa; }
       bool operator!=(const Iterator& o) const { return !(*this == o); }
-      ArgsIndexPair& operator*() { return pa; }            
+      ArgsIndexPair& operator*() { return pa; }
       ArgsIndexPair* operator->() { return &pa; }
       Iterator& operator++() {
         if (idx + 1 >= slice->keyIds.size()) {
           *this = slice->cend();
           return *this;
-        }else {
+        } else {
           uint32_t nextId = slice->keyIds[++idx];
           std::string_view key = slice->GetFullArgs()[nextId];
           pa = ArgsIndexPair(key, nextId);
-          return *this;                    
+          return *this;
         }
-      }      
+      }
     };
 
     Iterator cbegin() const {
       if (keyIds.empty()) {
         return cend();
-      }else {
+      } else {
         uint32_t keyId = keyIds[0];
-        std::string_view key = GetFullArgs()[keyId]; 
+        std::string_view key = GetFullArgs()[keyId];
         return Iterator(key, keyId, this, 0);
       }
     }
@@ -179,13 +148,9 @@ public:
       return Iterator(key, keyId, this, keyIds.size());
     }
 
-    Iterator begin() const {
-      return cbegin();
-    }
+    Iterator begin() const { return cbegin(); }
 
-    Iterator end() const {
-      return cend();
-    }   
+    Iterator end() const { return cend(); }
   };
   static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
@@ -193,20 +158,12 @@ public:
     return Slices_[id];
   }
 
-  DbIndex GetDbIndex() const {
-    return db_cntx_.GetDbIndex();
-  }
-  uint32_t GetKeyNum() {
-    return key_num_;
-  }
+  DbIndex GetDbIndex() const { return db_cntx_.GetDbIndex(); }
+  uint32_t GetKeyNum() { return key_num_; }
 
-  const CommandId* GetCId() const {
-    return cid_;
-  }
+  const CommandId* GetCId() const { return cid_; }
 
-  uint64_t txid() const {
-    return txid_;
-  }
+  uint64_t txid() const { return txid_; }
 
   IntentLock::Mode LockMode() const;
 
@@ -253,6 +210,7 @@ public:
 
 private:
 
+ private:
   cppcoro::AsyncTask ScheduleInternal();
   bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
   void FinishHop(ShardId sid);
@@ -265,15 +223,12 @@ private:
 
   void EnableAllShards();
 
-
   bool LockMultiShardCb(ShardId sid);
   void UnlockMultiShardCb(ShardId sid);
 
-  unsigned SidToId(ShardId sid) const {
-    return sid < Slices_.size() ? sid : 0;
-  }
+  unsigned SidToId(ShardId sid) const { return sid < Slices_.size() ? sid : 0; }
 
-  template<typename F>
+  template <typename F>
   cppcoro::task<void> IterateActiveShards(F&& f) {
     base::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
@@ -304,7 +259,7 @@ private:
   absl::InlinedVector<Slice, 16> Slices_;
   absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
   absl::InlinedVector<KeyLockArgs, 16> lock_args_;
-  CmdArgList full_args_;  
+  CmdArgList full_args_;
   IntentLock::Mode lock_mode_;
   RunnableType cb_;
   std::coroutine_handle<> coro_handle_;
@@ -327,4 +282,4 @@ private:
 #endif
 };
 
-}
+}  // namespace dfly

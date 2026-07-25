@@ -1,10 +1,10 @@
 
 #pragma once
 
-#include <span>
-#include <utility> 
 #include <cstdint>
+#include <span>
 #include <string_view>
+#include <utility>
 namespace dfly {
 
 using DbIndex = uint16_t;
@@ -12,21 +12,11 @@ using ShardId = uint16_t;
 
 using SlotId = std::uint16_t;
 
-using ArgSlice = std::span<const std::string>; // from arg_range.h
-using IndexSlice = uint32_t; // not same
-
-
+using ArgSlice = std::span<const std::string>;  // from arg_range.h
+using IndexSlice = uint32_t;                    // not same
 
 constexpr DbIndex kInvalidDbId = DbIndex(-1);
 constexpr ShardId kInvalidSid = ShardId(-1);
-
-
-
-
-
-
-
-
 
 class EngineShard;
 class Transaction;

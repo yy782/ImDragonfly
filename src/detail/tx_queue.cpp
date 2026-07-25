@@ -1,4 +1,5 @@
 #include "tx_queue.hpp"
+
 #include <cassert>
 #include "transaction_layer/transaction.hpp"
 namespace dfly {
@@ -104,6 +105,5 @@ size_t TxQueue::Size() const {
   }
   return sz;
 }
-
 
 }  // namespace dfly

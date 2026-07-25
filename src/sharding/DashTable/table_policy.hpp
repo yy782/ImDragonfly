@@ -2,7 +2,6 @@
 
 #include "dash_table.hpp"
 
-
 namespace dfly {
 
 namespace detail {
@@ -13,20 +12,16 @@ using PrimeValue = CompactValue;
 struct PrimeTablePolicy {
   enum : uint8_t { kSlotNum = 14, kBucketNum = 56 };
 
-  static uint64_t HashFn(const PrimeKey& s) {
-    return s.HashCode();
-  }
+  static uint64_t HashFn(const PrimeKey& s) { return s.HashCode(); }
 
-  static uint64_t HashFn(std::string_view u) {
-    return CompactObj::HashCode(u);
-  }
+  static uint64_t HashFn(std::string_view u) { return CompactObj::HashCode(u); }
 
   static void DestroyKey(PrimeKey& cs) {
-    //cs.Reset();
+    // cs.Reset();
   }
 
   static void DestroyValue(PrimeValue& o) {
-    //o.Reset();
+    // o.Reset();
   }
 
   static bool Equal(const PrimeKey& s1, std::string_view s2) {
@@ -34,6 +29,5 @@ struct PrimeTablePolicy {
   }
 };
 
-
-}
-}
+}  // namespace detail
+}  // namespace dfly
