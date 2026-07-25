@@ -225,8 +225,9 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
     std::vector<std::unique_ptr<Transaction>> txs;
     txs.resize(Count);
     auto* cid = CIs->Find("MSET");
+    // 断言cid != nullptr
     auto* Namespace = namespaces->GetDefaultNamespace();
-    auto* db_index = 0;
+    auto db_index = 0;
 
     for (int i = 0; i < shardNum; ++i) {
         shard_set->Add(i, [&]() {
@@ -292,7 +293,4 @@ TEST_F(TxQueueConcurrentTest, MultiConcurrent) {
 
 }  // namespace dfly
 
-int main(int argc, char** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
+

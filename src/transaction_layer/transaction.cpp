@@ -277,7 +277,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
         (sd.local_mask & OUT_OF_ORDER);
   if (can_execute && RunInShard(shard)) return true; 
   else {
-    pq_pos_[sid] = shard->txq()->Insert(pq_pos_[sid], this);
+    pq_pos_[sid] = shard->txq()->Push(this);
   }
   return true;
 }
@@ -309,7 +309,7 @@ void Transaction::FinishHop(ShardId sid) {
       UnlockMultiShardCb(sid);
       e->AddCommittedTxid(this);
       if (pq_pos_[sid] != TxQueue::kEnd) {
-        e->txq()->Remove(pq_pos_[sid]);
+        e->txq()->Pop(pq_pos_[sid]);
       }
     return;
   }
@@ -320,7 +320,7 @@ void Transaction::FinishHop(ShardId sid) {
     UnlockMultiShardCb(sid);
     e->AddCommittedTxid(this);
     if (pq_pos_[sid] != TxQueue::kEnd) {
-      e->txq()->Remove(pq_pos_[sid]);
+      e->txq()->Pop(pq_pos_[sid]);
     }
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;
