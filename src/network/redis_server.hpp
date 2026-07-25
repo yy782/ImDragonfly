@@ -34,35 +34,6 @@ class RedisSession : public yy::net::TcpConnection {
 
   Transaction* GetTransaction() { return &transaction_; }
   yy::net::EventLoop* GetProactor() { return loop(); }
-
-  // void SendERROR(std::string err = "NULL") {
-  //     SendImp(BuildError(err));
-  // }
-
-  // void SendString(const std::string& s){
-  //     SendImp(BuildBulkString(s));
-  // }
-  // void SendViewStr(const std::string_view& s){
-  //     SendImp(std::string(s));
-  // }
-  // void SendVec(const std::vector<std::string>& v) {
-  //     SendImp(BuildArray(v));
-  // }
-  // void SendStatus(const std::string& s){
-  //     SendImp(BuildSimpleString(s));
-  // }
-  // void SendStatus(const std::string_view& s){
-  //     SendStatus(std::string(s));
-  // }
-  // void SendStatus(const char* s){
-  //     SendStatus(std::string(s));
-  // }
-  // void SendInteger(int64_t n) {
-  //     SendImp(BuildInteger(n));
-  // }
-  // void SendNULL() {
-  //     SendString(std::string());
-  // }
   cppcoro::AsyncTask OnMessage() {
     int client_fd = this->fd();
     auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
@@ -112,7 +83,10 @@ class RedisSession : public yy::net::TcpConnection {
   }
 
   void OnError() {
+    if (errno == 0) return;
     LOG(ERROR) << "Error on connection, fd: " << fd() << " errno:" << errno;
+    context_.owner().reset(); // 可能有问题，如果当前事务没有结束
+    disconnect();
   }
   int fd() const noexcept { return fd_; }
 
