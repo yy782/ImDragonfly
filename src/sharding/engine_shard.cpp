@@ -23,7 +23,9 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {}
+    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {
+      
+    }
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
