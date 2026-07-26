@@ -30,6 +30,20 @@ TxQueue::Iterator TxQueue::AllocateNode() {
 }
 
 TxQueue::Iterator TxQueue::Push(Transaction* t) {
+   //auto* e = EngineShard::tlocal();
+  //  auto sid = e->shard_id();
+  //  auto& tx_it = t->GetPos(sid); 
+  //  assert(tx_it == kEnd);
+  //  if (IsInUsedList(tx_it)) {
+  //   LOG(INFO) << PrintUsedList();
+  //   LOG(INFO) << PrintFreeList();
+  //   assert(false);
+  //  }
+  //  if (!IsInFreeList(tx_it)) {
+  //   LOG(INFO) << PrintFreeList();
+  //   LOG(INFO) << PrintUsedList();
+  //   assert(false);
+  //  }
   Iterator new_node = AllocateNode();
   vec_[new_node].trans = t;
   Iterator it = tail_;
@@ -62,10 +76,25 @@ TxQueue::Iterator TxQueue::Push(Transaction* t) {
   return new_node;
 }
 
-void TxQueue::Pop(Iterator it) {
+void TxQueue::Pop(Iterator& it) {
   if (it == kEnd) {
     return;
   }
+
+   if (!IsInUsedList(it)) {
+    LOG(INFO) << "Pop: " << it << " is not in used list";
+    LOG(INFO) << PrintUsedList();
+    LOG(INFO) << PrintFreeList();
+    it = kEnd;
+    return;
+   }
+   if (IsInFreeList(it)) {
+    LOG(INFO) << "Pop: " << it << " is not in free list";
+    LOG(INFO) << PrintFreeList();
+    LOG(INFO) << PrintUsedList();
+    return;
+   }
+
   if (vec_[it].prev != kEnd) {
       vec_[vec_[it].prev].next = vec_[it].next;
   } else {
@@ -81,20 +110,25 @@ void TxQueue::Pop(Iterator it) {
   vec_[it].prev = kEnd;
   vec_[it].trans = nullptr;
   free_head_ = it;
+  it = kEnd;
 }
 
 Transaction* TxQueue::Front() {
   if (head_ == kEnd) {
       return nullptr;
   }
-  return vec_[head_].trans;
+  auto* t = vec_[head_].trans;
+  assert(t);
+  return t;
 }
 
 Transaction* TxQueue::Back() {
   if (tail_ == kEnd) {
       return nullptr;
   }
-  return vec_[tail_].trans;
+  auto *t = vec_[tail_].trans;
+  assert(t);
+  return t;
 }
 
 size_t TxQueue::Size() const {
@@ -105,6 +139,50 @@ size_t TxQueue::Size() const {
     it = vec_[it].next;
   }
   return sz;
+}
+
+bool TxQueue::IsInFreeList(Iterator it) const {
+    if (it == kEnd) return true; // 这里kEnd是空闲链表的哨兵，所以kEnd在空闲链表中,还是要留意一下
+    Iterator cur = free_head_;
+    while (cur != kEnd) {
+        if (cur == it) return true;
+        cur = vec_[cur].next;
+    }
+    return false;
+}
+
+std::string TxQueue::PrintFreeList() const {
+    std::string str;
+    str += "free_list: ";
+    uint32_t it = free_head_;
+    while(it != kEnd) {
+        str += std::to_string(it) + " ";
+        it = vec_[it].next;
+    }
+    str += "\n";
+    return str;
+}
+
+std::string TxQueue::PrintUsedList() const {
+    std::string str;
+    str += "used_list: ";
+    uint32_t it = head_;
+    while(it != kEnd) {
+        str += std::to_string(it) + " ";
+        it = vec_[it].next;
+    }
+    str += "\n";
+    return str;
+}
+
+bool TxQueue::IsInUsedList(Iterator it) const {
+    if (it == kEnd) return false;
+    Iterator cur = head_;
+    while (cur != kEnd) {
+        if (cur == it) return true;
+        cur = vec_[cur].next;
+    }
+    return false;
 }
 
 std::string TxQueue::PrintTxLock() const {

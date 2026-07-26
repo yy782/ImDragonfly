@@ -333,9 +333,9 @@ void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args
 #endif
 ) {
 
-//#ifdef UNIT_TESTS
+#ifdef UNIT_TESTS
   LOG(INFO)<< " 事务: " << id << " 释放锁 "<<" shard:" <<  shard_id_;
-//#endif
+#endif
   assert(!lock_args.fps.empty());
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
   for (LockFp fp : lock_args.fps) {

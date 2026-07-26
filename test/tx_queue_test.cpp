@@ -229,14 +229,14 @@ TEST_F(TxQueueTest, MultiConcurrent) {
           args.push_back(CmdArgList{all_views[i]});
       }
 
-      std::vector<std::unique_ptr<Transaction>> txs;
+      std::vector<boost::intrusive_ptr<Transaction>> txs;
 
       auto* cid = CIs->Find("MSET");
       // 断言cid != nullptr
       for (int i = 0; i < Count; ++i) {
         auto* tx = new Transaction(cid);
         tx->id = i;
-        txs.push_back(std::unique_ptr<Transaction>(tx));
+        txs.push_back(boost::intrusive_ptr<Transaction>(tx));
       }
       auto* Namespace = &namespaces->GetDefaultNamespace();
       auto db_index = 0;
@@ -252,27 +252,26 @@ TEST_F(TxQueueTest, MultiConcurrent) {
       }
 
       // 等待所有 MSET 事务完成（带超时重试）
-      std::atomic<int> FinishCount = 0;
-      for (int retry = 0; retry < 1000 && FinishCount.load() < Count; ++retry) {
+      int FinishCount = 0;
+      for (int retry = 0; retry < 1000 && FinishCount < Count; ++retry) {
           FinishCount = 0;
           for (int i = 0; i < Count; ++i) {
               if (txs[i]->HasFininsh()) {
                   ++FinishCount;
-                  retry = 0;
               }
           }
-          if (FinishCount.load() < Count) {
+          if (FinishCount < Count) {
               std::this_thread::sleep_for(std::chrono::milliseconds(10));
           }
       }
 
-      ASSERT_EQ(FinishCount.load(), Count) << "Not all MSET transactions finished";
+      ASSERT_EQ(FinishCount, Count) << "Not all MSET transactions finished";
 
       LOG(INFO) << "All MSET transactions finished";
       // MGET 验证
       auto* mget_cid = CIs->Find("MGET");
       Transaction t(mget_cid);
-      t->id = Count;
+      t.id = Count;
 
       std::vector<std::string> mget_strings;
       mget_strings.push_back("MGET");

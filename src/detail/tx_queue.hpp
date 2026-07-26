@@ -17,14 +17,18 @@ public:
     
 
     Iterator Push(Transaction* t);
-    void Pop(Iterator it);
-    void Pop() {Pop(head_);}
+    __attribute__((noinline)) void Pop(Iterator& it);
+    void Pop() { Iterator it = head_; Pop(it); }
     Transaction* Front();
     Transaction* Back();
     size_t Size() const;
     bool Empty() const { return head_ == kEnd; }
+    bool IsInFreeList(Iterator it) const;
+    bool IsInUsedList(Iterator it) const;
     //friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);
     std::string PrintTxLock() const;
+    std::string PrintFreeList() const;
+    std::string PrintUsedList() const;
  private:
   void Grow();
   Iterator AllocateNode();
