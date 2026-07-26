@@ -12,6 +12,13 @@ IMDRAGONFLY_BIN="${1:-./build/imdragonfly}"
 PORT="${2:-6379}"
 BENCH_DURATION="${BENCH_DURATION:-60}"
 
+# ── 检查端口占用 ────────────────────────────────────────
+if ss -tlnp | grep -q ":${PORT} "; then
+    echo "ERROR: Port $PORT is already in use."
+    echo "Please free port $PORT before running tests."
+    exit 1
+fi
+
 # ── 自动检测 CPU 核心数 ────────────────────────────────────
 THREADS=$(nproc)
 echo "Detected CPU cores: $THREADS"
