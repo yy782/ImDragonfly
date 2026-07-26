@@ -198,45 +198,24 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
     if (done.load(std::memory_order_relaxed)) {
       break;
     }
-    CancelScheduledTx();
-    // co_await IterateActiveShards(
-    //     [this](auto& sd, ShardId sid)
-    //         -> cppcoro::task<
-    //             void> {
-    //           EngineShard* shard = EngineShard::tlocal();
-    //           if (sd.local_mask & KEYLOCK_ACQUIRED) {
-    //             UnlockMultiShardCb(sid);
-    //             sd.local_mask &= ~KEYLOCK_ACQUIRED;
-    //           }
-    //           if (sd.it != TxQueue::kEnd) {
-    //             shard->txq()->Pop(sd.it);
-    //             sd.it = TxQueue::kEnd;
-    //           }
-    //     });
+
+    co_await IterateActiveShards(// 直接Add()不行，为什么
+        [this](auto& sd, ShardId sid)
+            -> cppcoro::task<
+                void> {
+              EngineShard* shard = EngineShard::tlocal();
+              if (sd.local_mask & KEYLOCK_ACQUIRED) {
+                UnlockMultiShardCb(sid);
+                sd.local_mask &= ~KEYLOCK_ACQUIRED;
+              }
+              shard->txq()->Pop(sd.it);
+              sd.it = TxQueue::kEnd;
+              co_return;
+        });
+
   }
 
   co_return;
-}
-
-void Transaction::CancelScheduledTx() { // 直接Add()不行，为什么
-  for (ShardId i = 0; i < Slices_.size(); ++i) {
-    if (!(Slices_[i].local_mask & ACTIVE)) {
-      continue;
-    }
-    shard_set->Add(i, [this, i]() mutable {
-        auto& sd = Slices_[i];
-        if (sd.local_mask & KEYLOCK_ACQUIRED) {
-          UnlockMultiShardCb(i);
-          sd.local_mask &= ~KEYLOCK_ACQUIRED;
-        }
-        if (sd.it != TxQueue::kEnd) {
-          EngineShard* shard = EngineShard::tlocal();
-          shard->txq()->Pop(sd.it);
-        }   
-    });    
-  }
-
-
 }
 
 

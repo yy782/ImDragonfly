@@ -265,7 +265,7 @@ TEST_F(TxQueueTest, MultiConcurrent) {
           }
       }
 
-      ASSERT_EQ(FinishCount, Count) << "Not all MSET transactions finished";
+      ASSERT_EQ(FinishCount, Count) << "Not all MSET transactions finished 当前循环数:" << i;
 
       LOG(INFO) << "All MSET transactions finished";
       // MGET 验证
@@ -284,9 +284,11 @@ TEST_F(TxQueueTest, MultiConcurrent) {
       }
       CmdArgList mget_args{mget_views};
 
-      t.InitByArgs(Namespace, db_index, mget_args);
-      mget_cid->Invoke(&t.GetCommandContext(), mget_args);
-
+      
+      shard_set->Add(0, [&]() {
+          t.InitByArgs(Namespace, db_index, mget_args);
+          mget_cid->Invoke(&t.GetCommandContext(), mget_args);
+      });     
       while (!t.HasFininsh()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }

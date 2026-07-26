@@ -86,7 +86,7 @@ class Transaction {
     COORD_INLINE = 1 << 3,      // 协调器在本地执行
   };
   void DispatchHop();
-  struct alignas(64) Slice {
+  struct Slice {
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
@@ -153,7 +153,7 @@ class Transaction {
 
     Iterator end() const { return cend(); }
   };
-  static_assert(sizeof(Slice) == 64);
+  //static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
     return Slices_[id];
@@ -217,8 +217,18 @@ class Transaction {
 
   unsigned SidToId(ShardId sid) const { return sid < Slices_.size() ? sid : 0; }
 
+  struct ResumeOnShard {
+    ShardId sid;
+    bool await_ready() noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+      shard_set->Add(sid, [h]() mutable { h.resume(); });
+    }
+    void await_resume() noexcept {}
+  };
+
   template <typename F>
   cppcoro::task<void> IterateActiveShards(F&& f) {
+    ShardId coordinator = EngineShard::tlocal()->shard_id();
     base::BlockingCounter counter(unique_shard_cnt_);
     auto cb = [counter, f](auto& sd, auto i) mutable -> cppcoro::AsyncTask {
       co_await f(sd, i);
@@ -241,9 +251,11 @@ class Transaction {
       }
     }
     co_await counter->Wait();
+
+    // 挂起协程，投回协调线程继续执行
+    co_await ResumeOnShard{coordinator};
     co_return;
   }
-  void CancelScheduledTx();
   std::atomic_uint32_t run_barrier_{0};
   absl::InlinedVector<Slice, 16> Slices_;
   //absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
@@ -254,6 +266,7 @@ class Transaction {
   std::coroutine_handle<> coro_handle_;
   std::coroutine_handle<> Res_handle_;
   const CommandId* cid_ = nullptr;
+
   uint64_t txid_{0};
   const Namespace* namespace_{nullptr};
   uint32_t unique_shard_cnt_{0};
