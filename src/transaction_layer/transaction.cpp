@@ -169,8 +169,6 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle,
   }
 
   ScheduleInternal();
-
-  DispatchHop();
   return false;
 }
 
@@ -215,21 +213,17 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
 
   }
 
+  DispatchHop();
   co_return;
 }
 
 
 void Transaction::DispatchHop() {
-
-
-  
   if (isInline()) {
     auto* e = EngineShard::tlocal();
     e->PollExecution(this);
     return;
   }
-
-
   is_armed_.store(true, std::memory_order_release);
 
 #ifdef UNIT_TESTS
@@ -287,7 +281,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   if (can_execute && RunInShard(shard))
     return true;
   else {
+
     sd.it = shard->txq()->Push(this);
+    assert(sd.it != TxQueue::kEnd);
   }
   return true;
 }
@@ -336,7 +332,7 @@ void Transaction::FinishHop(ShardId sid) {
     if (sd.it != TxQueue::kEnd) {
       e->txq()->Pop(sd.it);
     }
-    LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成";
+    LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成, 释放锁并移除队列";
     e->PollExecution(this);
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;

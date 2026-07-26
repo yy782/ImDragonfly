@@ -43,7 +43,8 @@ TxQueue::Iterator TxQueue::Push(Transaction* t) {
   //   LOG(INFO) << PrintFreeList();
   //   LOG(INFO) << PrintUsedList();
   //   assert(false);
-  //  }
+  //  } 
+
   Iterator new_node = AllocateNode();
   vec_[new_node].trans = t;
   Iterator it = tail_;
@@ -85,14 +86,13 @@ void TxQueue::Pop(Iterator& it) {
     LOG(INFO) << "Pop: " << it << " is not in used list";
     LOG(INFO) << PrintUsedList();
     LOG(INFO) << PrintFreeList();
-    it = kEnd;
-    return;
+    assert(false);
    }
    if (IsInFreeList(it)) {
     LOG(INFO) << "Pop: " << it << " is not in free list";
     LOG(INFO) << PrintFreeList();
     LOG(INFO) << PrintUsedList();
-    return;
+    assert(false);
    }
 
   if (vec_[it].prev != kEnd) {

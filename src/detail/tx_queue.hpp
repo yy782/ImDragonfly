@@ -17,7 +17,7 @@ public:
     
 
     Iterator Push(Transaction* t);
-    __attribute__((noinline)) void Pop(Iterator& it);
+    void Pop(Iterator& it);
     void Pop() { Iterator it = head_; Pop(it); }
     Transaction* Front();
     Transaction* Back();

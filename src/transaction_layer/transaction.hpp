@@ -252,8 +252,8 @@ class Transaction {
     }
     co_await counter->Wait();
 
-    // 挂起协程，投回协调线程继续执行
-    co_await ResumeOnShard{coordinator};
+    // // 挂起协程，投回协调线程继续执行
+    // co_await ResumeOnShard{coordinator};
     co_return;
   }
   std::atomic_uint32_t run_barrier_{0};
