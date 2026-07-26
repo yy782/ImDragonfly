@@ -32,9 +32,9 @@ jobs:
         run: bash scripts/check_format.sh
 
   # ═══════════════════════════════════════════════════════════
-  # 构建编译
+  # 构建编译 + C++ 单元测试 (合并为一个 job，保证 CTest 配置可用)
   # ═══════════════════════════════════════════════════════════
-  build:
+  build-and-unit-tests:
     needs: format-check
     runs-on: ubuntu-24.04
 
@@ -77,94 +77,28 @@ jobs:
           sudo make -j$(nproc)
           sudo cmake --install . --prefix /usr/local
 
-      # ── CMake 配置 ───────────────────────────────────────
-      - name: Configure CMake
-        run: |
-          cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTS=ON \
-            -S . -B build
-
-      # ── 编译 ─────────────────────────────────────────────
+      # ── 构建 (走 scripts/build.sh) ────────────────────────
       - name: Build
-        run: |
-          cmake --build build \
-            --target imdragonfly db_table_test \
-            -j$(nproc)
+        run: bash scripts/build.sh -r -j $(nproc)
 
-      # ── 缓存构建产物 ─────────────────────────────────────
+      # ── 运行 C++ 单元测试 (走 scripts/run_unit_tests.sh) ──
+      - name: Run unit tests
+        run: bash scripts/run_unit_tests.sh
+
+      # ── 上传构建产物给后续 job ───────────────────────────
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: |
             build/imdragonfly
-            build/test/db_table_test
           retention-days: 1
-
-  # ═══════════════════════════════════════════════════════════
-  # C++ 单元测试
-  # ═══════════════════════════════════════════════════════════
-  unit-tests:
-    needs: build
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # ── 安装运行时依赖 ───────────────────────────────────
-      - name: Install runtime dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            liburing-dev \
-            libmimalloc-dev \
-            libboost-dev \
-            libgoogle-glog-dev \
-            libabsl-dev \
-            libprotobuf-dev \
-            libgtest-dev \
-            googletest
-
-      - name: Build GTest from source
-        run: |
-          cd /usr/src/googletest
-          sudo cmake -DCMAKE_BUILD_TYPE=Release .
-          sudo make -j$(nproc)
-          sudo cmake --install . --prefix /usr/local
-          sudo ldconfig
-
-      # ── 下载构建产物 ─────────────────────────────────────
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: build
-
-      - name: Make binaries executable
-        run: chmod +x build/imdragonfly build/test/db_table_test
-
-      # ── 运行 C++ 单元测试 ────────────────────────────────
-      - name: Run C++ unit tests
-        run: |
-          mkdir -p test-results
-          ./build/test/db_table_test \
-            --gtest_output=xml:test-results/db_table_test.xml
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-results
-          path: test-results/
-          retention-days: 7
 
   # ═══════════════════════════════════════════════════════════
   # 集成测试 (Redis 协议验证)
   # ═══════════════════════════════════════════════════════════
   integration-tests:
-    needs: build
+    needs: build-and-unit-tests
     runs-on: ubuntu-24.04
 
     steps:
@@ -194,9 +128,9 @@ jobs:
           path: build
 
       - name: Make binaries executable
-        run: chmod +x build/imdragonfly build/test/db_table_test
+        run: chmod +x build/imdragonfly
 
-      # ── 运行集成测试 ─────────────────────────────────────
+      # ── 运行集成测试 (走 scripts/run_integration_tests.sh)
       - name: Run integration tests
         run: bash scripts/run_integration_tests.sh
 
@@ -204,7 +138,7 @@ jobs:
   # memtier_benchmark 压力测试
   # ═══════════════════════════════════════════════════════════
   benchmark:
-    needs: build
+    needs: build-and-unit-tests
     runs-on: ubuntu-24.04
 
     steps:
@@ -242,8 +176,8 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
 
-      # ── 运行压力测试 ─────────────────────────────────────
-      - name: Run memtier_benchmark
+      # ── 运行压力测试 (走 scripts/run_benchmark.sh) ────────
+      - name: Run benchmark
         run: bash scripts/run_benchmark.sh
 
       # ── 上传压测结果 ─────────────────────────────────────
