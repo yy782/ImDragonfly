@@ -85,7 +85,7 @@ class RedisSession : public yy::net::TcpConnection {
   void OnError() {
     if (errno == 0) return;
     LOG(ERROR) << "Error on connection, fd: " << fd() << " errno:" << errno;
-    context_.owner().reset(); // 可能有问题，如果当前事务没有结束
+    context_.owner().reset();  // 可能有问题，如果当前事务没有结束
     disconnect();
   }
   int fd() const noexcept { return fd_; }
