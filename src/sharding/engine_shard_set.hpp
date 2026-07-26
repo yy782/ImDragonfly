@@ -23,6 +23,7 @@ class EngineShardSet {
   auto Add(ShardId sid, F&& f) {
     assert(sid < size_);
     bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
+    // 暂时使用TryAdd, 以后测试了AsyncAdd()函数的准确性，再切换，release下出错，切debug模式就ok了
     assert(success);
     return success;
   }
