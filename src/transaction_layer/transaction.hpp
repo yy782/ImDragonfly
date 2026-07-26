@@ -73,8 +73,6 @@ class Transaction {
 
   bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
-
-
   bool RunInShard(EngineShard* shard);
   bool Scheduling(std::coroutine_handle<> handle, RunnableType&& cb);
 
@@ -153,7 +151,7 @@ class Transaction {
 
     Iterator end() const { return cend(); }
   };
-  //static_assert(sizeof(Slice) == 64);
+  // static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
     return Slices_[id];
@@ -167,7 +165,7 @@ class Transaction {
   uint64_t txid() const { return txid_; }
 
   bool is_armed() { return is_armed_.load(std::memory_order_acquire); }
-  TxQueue::Iterator& GetPos(ShardId sid)  { return Slices_[sid].it; }
+  TxQueue::Iterator& GetPos(ShardId sid) { return Slices_[sid].it; }
   KeyLockArgs& GetLockArgs(ShardId sid) { return lock_args_[sid]; }
   IntentLock::Mode LockMode() const;
 
@@ -183,21 +181,14 @@ class Transaction {
   CmdArgList& GetFullArgs() { return full_args_; }
   const CmdArgList& GetFullArgs() const { return full_args_; }
 
-  std::string PrintLock(ShardId sid) const ;
-
+  std::string PrintLock(ShardId sid) const;
 
 #ifdef UNIT_TESTS
-  void set_txid(uint64_t txid) {
-    txid_ = txid;
-  }
-  bool HasFininsh() {
-    return HasRes_.load();
-  }
-  std::string GetResWithOutBlock() {
-    return Res_;
-  }
+  void set_txid(uint64_t txid) { txid_ = txid; }
+  bool HasFininsh() { return HasRes_.load(); }
+  std::string GetResWithOutBlock() { return Res_; }
   int id;
-#endif 
+#endif
 
  private:
   cppcoro::AsyncTask ScheduleInternal();
@@ -258,7 +249,7 @@ class Transaction {
   }
   std::atomic_uint32_t run_barrier_{0};
   absl::InlinedVector<Slice, 16> Slices_;
-  //absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
+  // absl::InlinedVector<TxQueue::Iterator, 16> pq_pos_;
   absl::InlinedVector<KeyLockArgs, 16> lock_args_;
   CmdArgList full_args_;
   IntentLock::Mode lock_mode_;

@@ -135,12 +135,14 @@ class DbSlice {
 
   bool Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
 #ifdef UNIT_TESTS
-    , int id
+               ,
+               int id
 #endif
   );
   void Release(IntentLock::Mode mode, const KeyLockArgs& lock_args
 #ifdef UNIT_TESTS
-    , int id
+               ,
+               int id
 #endif
   );
 

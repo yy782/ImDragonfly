@@ -59,8 +59,7 @@ inline uint64_t Fingerprint(std::string_view str) {
   return hash;
 }
 
-Transaction::Transaction(const CommandId* cid)
-    : cid_(cid) {}
+Transaction::Transaction(const CommandId* cid) : cid_(cid) {}
 
 Transaction::~Transaction() { assert(std::uncaught_exceptions() == 0); }
 
@@ -85,9 +84,8 @@ void Transaction::CollectedResult(std::string&& res) {
   Res_ = std::move(res);
 #ifdef UNIT_TESTS
   HasRes_ = true;
-  
+
 #endif
-  
 
   if (Res_handle_) {
     Res_handle_.resume();
@@ -134,7 +132,8 @@ void Transaction::InitSlice() {
       if (!(slice.local_mask & ACTIVE)) {
         continue;
       }
-      lock_args_[i] = static_cast<const Transaction*>(this)->GetLockArgs(slice.unique_shard_id);
+      lock_args_[i] = static_cast<const Transaction*>(this)->GetLockArgs(
+          slice.unique_shard_id);
     }
   } else {
     auto& slice = Slices_[unique_shard_id_];
@@ -143,7 +142,8 @@ void Transaction::InitSlice() {
     if (shard->shard_id() == unique_shard_id_) {
       coordinator_state_ |= COORD_INLINE;
     }
-    lock_args_[unique_shard_id_] = static_cast<const Transaction*>(this)->GetLockArgs(unique_shard_id_);
+    lock_args_[unique_shard_id_] =
+        static_cast<const Transaction*>(this)->GetLockArgs(unique_shard_id_);
   }
 }
 
@@ -197,26 +197,22 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
       break;
     }
 
-    co_await IterateActiveShards(// 直接Add()不行，为什么
-        [this](auto& sd, ShardId sid)
-            -> cppcoro::task<
-                void> {
-              EngineShard* shard = EngineShard::tlocal();
-              if (sd.local_mask & KEYLOCK_ACQUIRED) {
-                UnlockMultiShardCb(sid);
-                sd.local_mask &= ~KEYLOCK_ACQUIRED;
-              }
-              shard->txq()->Pop(sd.it);
-              sd.it = TxQueue::kEnd;
-              co_return;
+    co_await IterateActiveShards(  // 直接Add()不行，为什么
+        [this](auto& sd, ShardId sid) -> cppcoro::task<void> {
+          EngineShard* shard = EngineShard::tlocal();
+          if (sd.local_mask & KEYLOCK_ACQUIRED) {
+            UnlockMultiShardCb(sid);
+            sd.local_mask &= ~KEYLOCK_ACQUIRED;
+          }
+          shard->txq()->Pop(sd.it);
+          sd.it = TxQueue::kEnd;
+          co_return;
         });
-
   }
 
   DispatchHop();
   co_return;
 }
-
 
 void Transaction::DispatchHop() {
   if (isInline()) {
@@ -227,20 +223,18 @@ void Transaction::DispatchHop() {
   is_armed_.store(true, std::memory_order_release);
 
 #ifdef UNIT_TESTS
-  LOG(INFO) << " 事务: " << id << " 已武装, 可执行";  
+  LOG(INFO) << " 事务: " << id << " 已武装, 可执行";
 #endif
   auto cb = [this]() {
 #ifdef UNIT_TESTS
-    LOG(INFO) << " 由事务: " << id << " 武装而触发PollExecution 在分片:" << EngineShard::tlocal()->shard_id();
+    LOG(INFO) << " 由事务: " << id << " 武装而触发PollExecution 在分片:"
+              << EngineShard::tlocal()->shard_id();
 #endif
     auto* e = EngineShard::tlocal();
     e->PollExecution(this);
-    
   };
   if (unique_shard_cnt_ == 1) {
-    shard_set->Add(unique_shard_id_, [this, cb]() mutable { 
-      cb(); 
-    });
+    shard_set->Add(unique_shard_id_, [this, cb]() mutable { cb(); });
   } else {
     for (ShardId i = 0; i < Slices_.size(); ++i) {
       auto shard_id = Slices_[i].unique_shard_id;
@@ -253,7 +247,6 @@ void Transaction::DispatchHop() {
 }
 
 bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
-
   auto sid = shard->shard_id();
   auto& sd = Slices_[sid];
   /*
@@ -262,7 +255,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   也可以入队（排到队尾），等前面的事务释放锁后才有机会执行
   - 没拿到锁，且 txid 比队尾小 → 不行，会破坏 FIFO 顺序，返回失败让协调器重试
   */
-  //CancelScheduledTx(sd, sid);
+  // CancelScheduledTx(sd, sid);
 
   assert(!(sd.local_mask & KEYLOCK_ACQUIRED));
   if (LockMultiShardCb(sid)) {
@@ -281,7 +274,6 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   if (can_execute && RunInShard(shard))
     return true;
   else {
-
     sd.it = shard->txq()->Push(this);
     assert(sd.it != TxQueue::kEnd);
   }
@@ -294,7 +286,8 @@ bool Transaction::RunInShard(EngineShard* shard) {
   if (!(sd.local_mask & KEYLOCK_ACQUIRED)) {
     if (!LockMultiShardCb(sid)) {
 #ifdef UNIT_TESTS
-      LOG(INFO) << "事务: " << id << " 在分片: " << sid << " PollExecution阶段获取锁失败";
+      LOG(INFO) << "事务: " << id << " 在分片: " << sid
+                << " PollExecution阶段获取锁失败";
 #endif
       return false;
     }
@@ -332,7 +325,8 @@ void Transaction::FinishHop(ShardId sid) {
     if (sd.it != TxQueue::kEnd) {
       e->txq()->Pop(sd.it);
     }
-    LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成, 释放锁并移除队列";
+    LOG(INFO) << " 事务 " << id << " 在分片: " << sid
+              << " 完成, 释放锁并移除队列";
     e->PollExecution(this);
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;
@@ -365,7 +359,8 @@ IntentLock::Mode Transaction::LockMode() const { return lock_mode_; }
 bool Transaction::LockMultiShardCb(ShardId sid) {
   return GetDbSlice(sid).Acquire(LockMode(), lock_args_[sid]
 #ifdef UNIT_TESTS
-  , id
+                                 ,
+                                 id
 #endif
   );
 }
@@ -373,7 +368,8 @@ bool Transaction::LockMultiShardCb(ShardId sid) {
 void Transaction::UnlockMultiShardCb(ShardId sid) {
   GetDbSlice(sid).Release(LockMode(), lock_args_[sid]
 #ifdef UNIT_TESTS
-  , id
+                          ,
+                          id
 #endif
   );
 }
@@ -406,25 +402,25 @@ void Transaction::UnlockMultiShardCb(ShardId sid) {
 // absl::flat_hash_set<
 // }
 
-
 std::string Transaction::PrintLock(ShardId sid) const {
-    std::string ss;
-    std::string lockGeted = (Slices_[sid].local_mask & KEYLOCK_ACQUIRED) ? "true" : "false";
-    std::string Armed = (is_armed_.load(std::memory_order_acquire)) ? " 可执行 " : " 不可执行 ";
-    ss += Armed;
-    ss += " LOCK: ";
-    ss += lockGeted;
-    ss += " keyNum: ";
-    ss += std::to_string(Slices_[sid].keyIds.size());
-    ss += " keyFps:\n ";
-    const auto& lockargs = lock_args_[sid];
-    for (auto fp : lockargs.fps) {
-        ss += std::to_string(fp);
-        ss += " ";
-    }
-    ss += "\n";
-    return ss;
+  std::string ss;
+  std::string lockGeted =
+      (Slices_[sid].local_mask & KEYLOCK_ACQUIRED) ? "true" : "false";
+  std::string Armed =
+      (is_armed_.load(std::memory_order_acquire)) ? " 可执行 " : " 不可执行 ";
+  ss += Armed;
+  ss += " LOCK: ";
+  ss += lockGeted;
+  ss += " keyNum: ";
+  ss += std::to_string(Slices_[sid].keyIds.size());
+  ss += " keyFps:\n ";
+  const auto& lockargs = lock_args_[sid];
+  for (auto fp : lockargs.fps) {
+    ss += std::to_string(fp);
+    ss += " ";
+  }
+  ss += "\n";
+  return ss;
 }
-
 
 }  // namespace dfly

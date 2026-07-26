@@ -1,14 +1,16 @@
+#include "detail/tx_queue.hpp"
+
 #include <gtest/gtest.h>
+
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 #include <vector>
-#include <chrono>
-#include <mutex>
-#include <condition_variable>
 
-#include "detail/tx_queue.hpp"
-#include "transaction_layer/transaction.hpp"
-#include "redis/facade/reply_builder.hpp"
 #include "network/redis_server.hpp"
+#include "redis/facade/reply_builder.hpp"
+#include "transaction_layer/transaction.hpp"
 
 using namespace dfly;
 using namespace yy::net;
@@ -35,10 +37,6 @@ class TxQueueTest : public ::testing::Test {
   const int shardNum = 5;
 };
 
-
-
-
-
 TEST_F(TxQueueTest, BasicFIFO) {
   // 1. 空队列行为
   EXPECT_TRUE(q_->Empty());
@@ -55,7 +53,6 @@ TEST_F(TxQueueTest, BasicFIFO) {
   q_->Push(&tx2);
   q_->Push(&tx3);
 
-  
   EXPECT_FALSE(q_->Empty());
   EXPECT_EQ(q_->Size(), 3u);
   EXPECT_EQ(q_->Front(), &tx1);
@@ -180,137 +177,134 @@ TEST_F(TxQueueTest, PushPopAlternating) {
   EXPECT_TRUE(q_->Empty());
 }
 
-
-
 TEST_F(TxQueueTest, MultiConcurrent) {
-    const int loopCount = 10;
-    for (int i = 0; i < loopCount; ++i) {
-      const int base = 1;
-      const int Count = base * shardNum;
-      const int KeyCount = 5;
-      const int P = Count/shardNum;
-      std::vector<std::string> keys;
-      for (int i = 0; i < KeyCount; ++i) {
-          std::string str = "key" + std::to_string(i);
-          keys.push_back(std::move(str));
-      }
-      std::vector<std::string> commands;
-      commands.reserve(Count);
+  const int loopCount = 10;
 
-      // 持久化存储 MSET 参数字符串，供 CmdArgList 的 string_view 引用
-      std::vector<std::vector<std::string>> all_cmd_strings(Count);
-      for (int i = 0; i < Count; ++i) {
-          int tid = i / P;  // 每个线程/shard 关联不同的值
-          auto& parts = all_cmd_strings[i];
-          parts.push_back("MSET");
+  for (int i = 0; i < loopCount; ++i) {
+    const int base = 1;
+    const int Count = base * shardNum;
+    const int KeyCount = 5;
+    const int P = Count / shardNum;
+    std::vector<std::string> keys;
+    for (int i = 0; i < KeyCount; ++i) {
+      std::string str = "key" + std::to_string(i);
+      keys.push_back(std::move(str));
+    }
+    std::vector<std::string> commands;
+    commands.reserve(Count);
 
-          std::vector<std::string> expected_vals;
-          for (int k = 0; k < KeyCount; ++k) {
-              parts.push_back("key" + std::to_string(k));
-              std::string val = "val" + std::to_string(k) + "_t" + std::to_string(tid);
-              parts.push_back(val);
-              expected_vals.push_back(val);
-          }
-          commands.push_back(BuildArray(expected_vals));
-      }
+    // 持久化存储 MSET 参数字符串，供 CmdArgList 的 string_view 引用
+    std::vector<std::vector<std::string>> all_cmd_strings(Count);
+    for (int i = 0; i < Count; ++i) {
+      int tid = i / P;  // 每个线程/shard 关联不同的值
+      auto& parts = all_cmd_strings[i];
+      parts.push_back("MSET");
 
-      // 构建 string_view 层
-      std::vector<std::vector<std::string_view>> all_views(Count);
-      for (int i = 0; i < Count; ++i) {
-          for (auto& s : all_cmd_strings[i]) {
-              all_views[i].push_back(s);
-          }
-      }
-
-      // 构建 CmdArgList
-      std::vector<CmdArgList> args;
-      args.reserve(Count);
-      for (int i = 0; i < Count; ++i) {
-          args.push_back(CmdArgList{all_views[i]});
-      }
-
-      std::vector<boost::intrusive_ptr<Transaction>> txs;
-
-      auto* cid = CIs->Find("MSET");
-      // 断言cid != nullptr
-      for (int i = 0; i < Count; ++i) {
-        auto* tx = new Transaction(cid);
-        tx->id = i;
-        txs.push_back(boost::intrusive_ptr<Transaction>(tx));
-      }
-      auto* Namespace = &namespaces->GetDefaultNamespace();
-      auto db_index = 0;
-
-      for (int i = 0; i < shardNum; ++i) {
-          shard_set->Add(i, [&, i]() {
-              for (int start = i * P; start < (i + 1) * P; ++start) {
-                  auto& tx = txs[start];
-                  tx->InitByArgs(Namespace, db_index, args[start]);
-                  cid->Invoke(&tx->GetCommandContext(), args[start]);
-              }
-          });
-      }
-
-      // 等待所有 MSET 事务完成（带超时重试，有进展则重置计数）
-      int FinishCount = 0;
-      int prevCount = 0;
-      for (int retry = 0; retry < 1000 && FinishCount < Count; ++retry) {
-          FinishCount = 0;
-          for (int i = 0; i < Count; ++i) {
-              if (txs[i]->HasFininsh()) {
-                  ++FinishCount;
-              }
-          }
-          if (FinishCount > prevCount) {
-              prevCount = FinishCount;
-              retry = 0;
-          }
-          if (FinishCount < Count) {
-              std::this_thread::sleep_for(std::chrono::milliseconds(10));
-          }
-      }
-
-      ASSERT_EQ(FinishCount, Count) << "Not all MSET transactions finished 当前循环数:" << i;
-
-      LOG(INFO) << "All MSET transactions finished";
-      // MGET 验证
-      auto* mget_cid = CIs->Find("MGET");
-      Transaction t(mget_cid);
-      t.id = Count;
-
-      std::vector<std::string> mget_strings;
-      mget_strings.push_back("MGET");
+      std::vector<std::string> expected_vals;
       for (int k = 0; k < KeyCount; ++k) {
-          mget_strings.push_back("key" + std::to_string(k));
+        parts.push_back("key" + std::to_string(k));
+        std::string val =
+            "val" + std::to_string(k) + "_t" + std::to_string(tid);
+        parts.push_back(val);
+        expected_vals.push_back(val);
       }
-      std::vector<std::string_view> mget_views;
-      for (auto& s : mget_strings) {
-          mget_views.push_back(s);
-      }
-      CmdArgList mget_args{mget_views};
-
-      
-      shard_set->Add(0, [&]() {
-          t.InitByArgs(Namespace, db_index, mget_args);
-          mget_cid->Invoke(&t.GetCommandContext(), mget_args);
-      });     
-      while (!t.HasFininsh()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-
-      auto res = t.GetResWithOutBlock();
-
-      bool found = false;
-      for (int i = 0; i < Count; ++i) {
-          if (res == commands[i]) {
-              found = true;
-              break;
-          }
-      }
-      EXPECT_TRUE(found) << "MGET result does not match any expected value set."
-                        << "\nResult: " << res;      
+      commands.push_back(BuildArray(expected_vals));
     }
 
+    // 构建 string_view 层
+    std::vector<std::vector<std::string_view>> all_views(Count);
+    for (int i = 0; i < Count; ++i) {
+      for (auto& s : all_cmd_strings[i]) {
+        all_views[i].push_back(s);
+      }
+    }
+
+    // 构建 CmdArgList
+    std::vector<CmdArgList> args;
+    args.reserve(Count);
+    for (int i = 0; i < Count; ++i) {
+      args.push_back(CmdArgList{all_views[i]});
+    }
+
+    std::vector<boost::intrusive_ptr<Transaction>> txs;
+
+    auto* cid = CIs->Find("MSET");
+    // 断言cid != nullptr
+    for (int i = 0; i < Count; ++i) {
+      auto* tx = new Transaction(cid);
+      tx->id = i;
+      txs.push_back(boost::intrusive_ptr<Transaction>(tx));
+    }
+    auto* Namespace = &namespaces->GetDefaultNamespace();
+    auto db_index = 0;
+
+    for (int i = 0; i < shardNum; ++i) {
+      shard_set->Add(i, [&, i]() {
+        for (int start = i * P; start < (i + 1) * P; ++start) {
+          auto& tx = txs[start];
+          tx->InitByArgs(Namespace, db_index, args[start]);
+          cid->Invoke(&tx->GetCommandContext(), args[start]);
+        }
+      });
+    }
+
+    // 等待所有 MSET 事务完成（带超时重试，有进展则重置计数）
+    int FinishCount = 0;
+    int prevCount = 0;
+    for (int retry = 0; retry < 1000 && FinishCount < Count; ++retry) {
+      FinishCount = 0;
+      for (int i = 0; i < Count; ++i) {
+        if (txs[i]->HasFininsh()) {
+          ++FinishCount;
+        }
+      }
+      if (FinishCount > prevCount) {
+        prevCount = FinishCount;
+        retry = 0;
+      }
+      if (FinishCount < Count) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    ASSERT_EQ(FinishCount, Count)
+        << "Not all MSET transactions finished 当前循环数:" << i;
+
+    LOG(INFO) << "All MSET transactions finished";
+    // MGET 验证
+    auto* mget_cid = CIs->Find("MGET");
+    Transaction t(mget_cid);
+    t.id = Count;
+
+    std::vector<std::string> mget_strings;
+    mget_strings.push_back("MGET");
+    for (int k = 0; k < KeyCount; ++k) {
+      mget_strings.push_back("key" + std::to_string(k));
+    }
+    std::vector<std::string_view> mget_views;
+    for (auto& s : mget_strings) {
+      mget_views.push_back(s);
+    }
+    CmdArgList mget_args{mget_views};
+
+    shard_set->Add(0, [&]() {
+      t.InitByArgs(Namespace, db_index, mget_args);
+      mget_cid->Invoke(&t.GetCommandContext(), mget_args);
+    });
+    while (!t.HasFininsh()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    auto res = t.GetResWithOutBlock();
+
+    bool found = false;
+    for (int i = 0; i < Count; ++i) {
+      if (res == commands[i]) {
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found) << "MGET result does not match any expected value set."
+                       << "\nResult: " << res;
+  }
 }
-
-
