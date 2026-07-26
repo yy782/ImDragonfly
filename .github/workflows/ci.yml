@@ -32,9 +32,9 @@ jobs:
         run: bash scripts/check_format.sh
 
   # ═══════════════════════════════════════════════════════════
-  # 构建编译 + C++ 单元测试 (合并为一个 job，保证 CTest 配置可用)
+  # 构建编译
   # ═══════════════════════════════════════════════════════════
-  build-and-unit-tests:
+  build:
     needs: format-check
     runs-on: ubuntu-24.04
 
@@ -48,7 +48,6 @@ jobs:
         with:
           submodules: recursive
 
-      # ── 安装系统依赖 ──────────────────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -65,11 +64,8 @@ jobs:
             libprotobuf-dev \
             protobuf-compiler \
             libgtest-dev \
-            googletest \
-            python3 \
-            python3-pip
+            googletest
 
-      # ── 编译 GTest ────────────────────────────────────────
       - name: Build GTest from source
         run: |
           cd /usr/src/googletest
@@ -77,35 +73,73 @@ jobs:
           sudo make -j$(nproc)
           sudo cmake --install . --prefix /usr/local
 
-      # ── 构建 (走 scripts/build.sh) ────────────────────────
       - name: Build
         run: bash scripts/build.sh -r -j $(nproc)
 
-      # ── 运行 C++ 单元测试 (走 scripts/run_unit_tests.sh) ──
-      - name: Run unit tests
-        run: bash scripts/run_unit_tests.sh
-
-      # ── 上传构建产物给后续 job ───────────────────────────
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: |
             build/imdragonfly
+            build/test/db_table_test
           retention-days: 1
 
   # ═══════════════════════════════════════════════════════════
-  # 集成测试 (Redis 协议验证)
+  # C++ 单元测试
   # ═══════════════════════════════════════════════════════════
-  integration-tests:
-    needs: build-and-unit-tests
+  unit-tests:
+    needs: build
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 安装运行时依赖 ───────────────────────────────────
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            liburing-dev \
+            libmimalloc-dev \
+            libboost-dev \
+            libgoogle-glog-dev \
+            libabsl-dev \
+            libprotobuf-dev \
+            libgtest-dev \
+            googletest
+
+      - name: Build GTest from source
+        run: |
+          cd /usr/src/googletest
+          sudo cmake -DCMAKE_BUILD_TYPE=Release .
+          sudo make -j$(nproc)
+          sudo cmake --install . --prefix /usr/local
+          sudo ldconfig
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build
+
+      - name: Make binaries executable
+        run: chmod +x build/test/db_table_test
+
+      - name: Run unit tests
+        run: bash scripts/run_unit_tests.sh build/test/db_table_test
+
+  # ═══════════════════════════════════════════════════════════
+  # 集成测试 (Redis 协议验证)
+  # ═══════════════════════════════════════════════════════════
+  integration-tests:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -120,7 +154,6 @@ jobs:
             python3-pip \
             python3-venv
 
-      # ── 下载构建产物 ─────────────────────────────────────
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -130,7 +163,6 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
 
-      # ── 运行集成测试 (走 scripts/run_integration_tests.sh)
       - name: Run integration tests
         run: bash scripts/run_integration_tests.sh
 
@@ -138,14 +170,13 @@ jobs:
   # memtier_benchmark 压力测试
   # ═══════════════════════════════════════════════════════════
   benchmark:
-    needs: build-and-unit-tests
+    needs: build
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 安装运行时依赖 ───────────────────────────────────
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -159,14 +190,12 @@ jobs:
             libevent-2.1-7 \
             python3
 
-      # ── 安装 memtier_benchmark ────────────────────────────
       - name: Install memtier_benchmark
         run: |
           wget -q https://github.com/redis/memtier_benchmark/releases/download/2.5.0/memtier-benchmark_2.5.0.jammy_amd64.deb
           sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb
           memtier_benchmark --version
 
-      # ── 下载构建产物 ─────────────────────────────────────
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -176,11 +205,9 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
 
-      # ── 运行压力测试 (走 scripts/run_benchmark.sh) ────────
       - name: Run benchmark
         run: bash scripts/run_benchmark.sh
 
-      # ── 上传压测结果 ─────────────────────────────────────
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
