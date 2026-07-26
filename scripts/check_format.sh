@@ -1,6 +1,6 @@
 #!/bin/bash
 # 检查 C++ 代码格式化是否符合 .clang-format 规范
-# 用法: 
+# 用法: bash scripts/check_format.sh
 
 set -euo pipefail
 

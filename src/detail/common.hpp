@@ -39,7 +39,7 @@ inline ShardId Shard(std::string_view key, ssize_t shard_set_size) {
     hash ^= data[i] + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
   }
 
-  return hash % (shard_set_size );
+  return hash % (shard_set_size);
 }
 
 }  // namespace dfly
