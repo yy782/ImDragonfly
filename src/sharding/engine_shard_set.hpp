@@ -22,9 +22,7 @@ class EngineShardSet {
   template <typename F>
   auto Add(ShardId sid, F&& f) {
     assert(sid < size_);
-    bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
-    assert(success);
-    return success;
+    return shards_[sid]->GetQueue()->AsyncAdd(std::forward<F>(f));
   }
   template <typename U>
   void RunBlockingInParallel(U&& func) {

@@ -5,7 +5,7 @@
 #include "db_slice.hpp"
 #include "detail/stateless_alloceator.hpp"
 #include "transaction_layer/transaction.hpp"
-#include "YY/net/TimerQueue.h"
+
 namespace dfly {
 thread_local mi_heap_t* data_heap = nullptr;
 thread_local EngineShard* EngineShard::shard_ = nullptr;
@@ -23,12 +23,7 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {
-        // pb->runTimer<yy::LowPrecision>([this]() {
-        //     PollExecution(nullptr);
-        //     LOG(INFO) << txq()->PrintTxLock();
-        // }, std::chrono::seconds(5), -1);
-    }
+    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {}
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
@@ -43,24 +38,41 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {}
 
+
 void EngineShard::PollExecution(Transaction* trans) {
-    (void)trans;
-    Transaction* tx = nullptr;
+  ShardId sid = shard_id();
+  uint16_t flags = Transaction::OUT_OF_ORDER;
+  auto [trans_mask, disarmed] =
+      trans ? trans->DisarmInShardWhen(sid, flags) : std::make_pair(uint16_t(0), false);
+  if (trans && trans_mask == 0)  
+    return;
 
-#ifdef UNIT_TESTS
-    LOG(INFO) << txq()->PrintTxLock();
-#endif
+  auto run = [this](Transaction* tx) -> bool  {
+    return tx->RunInShard(this);
+  };
 
-    while ((tx = txq_.Front()) != nullptr) {
-        if (!tx->is_armed()) break;
-        bool concluded = tx->RunInShard(this);
-        if (!concluded) {
-            break;
-        }
-    }
+  Transaction* head = nullptr;
+
+  while (!txq_.Empty()) {
+    head = get<Transaction*>(txq_.Front());
+    bool should_run = (head == trans && disarmed) || head->DisarmInShard(sid);
+    if (!should_run)
+      break;
+    if (head == trans)
+      trans = nullptr;
+
+    TxId txid = head->txid();
+ 
+    committed_txid_ = txid;
+    run(head);
+  }
+  if (trans && disarmed) {
+    DCHECK(trans_mask & Transaction::OUT_OF_ORDER);
+    bool concludes = run(trans);
+  }
 }
 
 
-DbSlice* EngineShard::GetDbSlice(ShardId sid) { return nullptr; }
+
 
 }  // namespace dfly

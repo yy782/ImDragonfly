@@ -133,16 +133,8 @@ class DbSlice {
   void UnregisterWatchedKeys(ConnectionContext* conn_cntx,
                              const std::vector<std::string_view>& keys);
 
-  bool Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
-#ifdef UNIT_TESTS
-    , int id
-#endif
-  );
-  void Release(IntentLock::Mode mode, const KeyLockArgs& lock_args
-#ifdef UNIT_TESTS
-    , int id
-#endif
-  );
+  bool Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args);
+  void Release(IntentLock::Mode mode, const KeyLockArgs& lock_args);
 
  private:
   enum class UpdateStatsMode : uint8_t {

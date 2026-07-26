@@ -1,43 +1,99 @@
 // reply_builder.h
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace dfly {
 
-inline std::string BuildNull() { return "$-1\r\n"; }
+class ReplyBuilder {
+ public:
+  using SendCallback = std::function<void(std::string&&)>;
 
-inline std::string BuildSimpleString(const std::string& s) {
-  return "+" + s + "\r\n";
-}
+  void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
 
-inline std::string BuildError(const std::string& err) {
-  return "-ERR " + err + "\r\n";
-}
+  // ---- 每个 Build 末尾自动调 SendCallback ----
 
-inline std::string BuildInteger(int64_t n) {
-  return ":" + std::to_string(n) + "\r\n";
-}
-
-inline std::string BuildBulkString(const std::string& s) {
-  if (s.empty()) return "$-1\r\n";
-  return "$" + std::to_string(s.size()) + "\r\n" + s + "\r\n";
-}
-
-inline std::string BuildArray(const std::vector<std::string>& items) {
-  std::string res = "*" + std::to_string(items.size()) + "\r\n";
-  for (const auto& item : items) {
-    res += BuildBulkString(item);
+  void BuildNull() {
+    reply_ = "$-1\r\n";
+    DoSend();
   }
-  return res;
-}
 
-inline std::string BuildMultiArray(const std::vector<std::string>& items) {
-  std::string res = "*" + std::to_string(items.size()) + "\r\n";
-  for (const auto& item : items) {
-    res += item;
+  void BuildSimpleString(std::string_view s) {
+    reply_.reserve(s.size() + 5);
+    reply_.clear();
+    reply_.append("+");
+    reply_.append(s);
+    reply_.append("\r\n");
+    DoSend();
   }
-  return res;
-}
+
+  void BuildError(std::string_view err) {
+    reply_.reserve(err.size() + 9);
+    reply_.clear();
+    reply_.append("-ERR ");
+    reply_.append(err);
+    reply_.append("\r\n");
+    DoSend();
+  }
+
+  void BuildInteger(long n) {
+    reply_.clear();
+    reply_.append(":");
+    reply_.append(std::to_string(n));
+    reply_.append("\r\n");
+    DoSend();
+  }
+
+  void BuildBulkString(std::string_view s) {
+    reply_.clear();
+    AppendBulkStringRaw(s);
+    DoSend();
+  }
+
+  void BuildNullBulkString() {
+    reply_ = "$-1\r\n";
+    DoSend();
+  }
+
+  void BuildArray(const std::vector<std::string>& items) {
+    reply_.clear();
+    reply_.append("*");
+    reply_.append(std::to_string(items.size()));
+    reply_.append("\r\n");
+    for (const auto& item : items) {
+      AppendBulkStringRaw(item);   // 不触发 send，拼完统一发
+    }
+    DoSend();
+  }
+
+  void BuildMultiArray(const std::vector<std::string>& items) {
+    reply_.clear();
+    reply_.append("*");
+    reply_.append(std::to_string(items.size()));
+    reply_.append("\r\n");
+    for (const auto& item : items) {
+      reply_.append(item);         // 各 item 已是编好的 RESP 片段
+    }
+    DoSend();
+  }
+
+ private:
+  void AppendBulkStringRaw(std::string_view s) {
+    reply_.append("$");
+    reply_.append(std::to_string(s.size()));
+    reply_.append("\r\n");
+    reply_.append(s);
+    reply_.append("\r\n");
+  }
+
+  void DoSend() {
+    if (send_cb_)
+      send_cb_(std::move(reply_)); // TODO try 捕捉
+  }
+
+  std::string reply_;
+  SendCallback send_cb_;
+};
 
 }  // namespace dfly

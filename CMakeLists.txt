@@ -79,6 +79,7 @@ add_subdirectory(YY)
 add_subdirectory(src)
 
 if(BUILD_TESTS)
+    add_subdirectory(test/redis)
     add_subdirectory(test)   
 endif()
 
