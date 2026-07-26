@@ -23,7 +23,7 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_() {
+    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_(&mi_resource_) {
   // pb->runTimer<yy::LowPrecision>([this]() {
   //     PollExecution(nullptr);
   //     LOG(INFO) << txq()->PrintTxLock();
@@ -59,6 +59,9 @@ void EngineShard::PollExecution(Transaction* trans) {
     }
   }
 }
+
+
+
 
 DbSlice* EngineShard::GetDbSlice(ShardId sid) { return nullptr; }
 

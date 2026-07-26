@@ -14,7 +14,8 @@ class TxQueue {
   using Iterator = uint32_t;
   enum { kEnd = Iterator(-1) };
 
-  TxQueue() = default;
+  explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
+      : vec_(mr) {}
 
   Iterator Push(Transaction* t);
   void Pop(Iterator& it);

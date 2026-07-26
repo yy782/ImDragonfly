@@ -84,7 +84,7 @@ class Transaction {
     COORD_INLINE = 1 << 3,      // 协调器在本地执行
   };
   void DispatchHop();
-  struct Slice {
+  struct alignas(64)  Slice {
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;
@@ -151,7 +151,7 @@ class Transaction {
 
     Iterator end() const { return cend(); }
   };
-  // static_assert(sizeof(Slice) == 64);
+  static_assert(sizeof(Slice) == 64);
   Slice& GetSlice(ShardId id) {
     assert(id < Slices_.size());
     return Slices_[id];
