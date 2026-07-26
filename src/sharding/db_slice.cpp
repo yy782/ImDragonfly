@@ -306,9 +306,7 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
                       int id
 #endif
 ) {
-  if (lock_args.fps.empty()) {
-    return true;
-  }
+  assert(!lock_args.fps.empty());
 
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
   bool all_locked = true;
