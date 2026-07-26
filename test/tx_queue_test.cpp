@@ -251,14 +251,19 @@ TEST_F(TxQueueTest, MultiConcurrent) {
           });
       }
 
-      // 等待所有 MSET 事务完成（带超时重试）
+      // 等待所有 MSET 事务完成（带超时重试，有进展则重置计数）
       int FinishCount = 0;
+      int prevCount = 0;
       for (int retry = 0; retry < 1000 && FinishCount < Count; ++retry) {
           FinishCount = 0;
           for (int i = 0; i < Count; ++i) {
               if (txs[i]->HasFininsh()) {
                   ++FinishCount;
               }
+          }
+          if (FinishCount > prevCount) {
+              prevCount = FinishCount;
+              retry = 0;
           }
           if (FinishCount < Count) {
               std::this_thread::sleep_for(std::chrono::milliseconds(10));
