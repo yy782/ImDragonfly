@@ -174,7 +174,6 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle,
 
 bool Transaction::isInline() { return (coordinator_state_ & COORD_INLINE); }
 
-
 cppcoro::AsyncTask Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
   while (true) {
@@ -196,7 +195,6 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
     if (done.load(std::memory_order_relaxed)) {
       break;
     }
-
 
     co_await IterateActiveShards(  // 也许可以直接Add()
         [this](auto& sd, ShardId sid) -> cppcoro::task<void> {
@@ -257,7 +255,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   */
   // CancelScheduledTx(sd, sid);
 
-  assert(!(sd.local_mask & KEYLOCK_ACQUIRED)); // 有可能断言失败，不清楚为什么
+  assert(!(sd.local_mask & KEYLOCK_ACQUIRED));  // 有可能断言失败，不清楚为什么
   if (LockMultiShardCb(sid)) {
     sd.local_mask |= KEYLOCK_ACQUIRED;
   } else {
@@ -310,17 +308,16 @@ void Transaction::FinishHop(ShardId sid) {
     UnlockMultiShardCb(sid);
     return;
   }
-    UnlockMultiShardCb(sid);
+  UnlockMultiShardCb(sid);
 #ifdef UNIT_TESTS
-    LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成";
+  LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成";
 #endif
-    if (prev == 1) {
-      coordinator_state_ |= COORD_CONCLUDING;
-      coordinator_state_ = COORD_CANCELLED;
-      assert(coro_handle_);
-      coro_handle_.resume();
-    }
-
+  if (prev == 1) {
+    coordinator_state_ |= COORD_CONCLUDING;
+    coordinator_state_ = COORD_CANCELLED;
+    assert(coro_handle_);
+    coro_handle_.resume();
+  }
 }
 
 KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {

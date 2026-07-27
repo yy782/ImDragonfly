@@ -300,7 +300,8 @@ void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx,
   }
 }
 
-bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args, Transaction* tx) {
+bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args,
+                      Transaction* tx) {
   assert(!lock_args.fps.empty());
   (void)tx;
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
@@ -321,7 +322,8 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args, Trans
   return all_locked;
 }
 
-void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args, Transaction* tx) {
+void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args,
+                      Transaction* tx) {
   assert(!lock_args.fps.empty());
   (void)tx;
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
