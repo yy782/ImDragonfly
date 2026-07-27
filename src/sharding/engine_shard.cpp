@@ -46,17 +46,19 @@ void EngineShard::Shutdown() {}
 void EngineShard::PollExecution(Transaction* trans) {
   (void)trans;
   Transaction* tx = nullptr;
-
 #ifdef UNIT_TESTS
   LOG(INFO) << txq()->PrintTxLock();
 #endif
-
   while ((tx = txq_.Front()) != nullptr) {
     if (!tx->is_armed()) break;
     bool concluded = tx->RunInShard(this);
     if (!concluded) {
       break;
     }
+    auto& sd = tx->GetSlice(shard_id_);
+    assert(sd.it != TxQueue::kEnd);
+    txq()->Pop(sd.it);
+    AddCommittedTxid();
   }
 }
 

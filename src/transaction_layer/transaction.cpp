@@ -197,7 +197,7 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
       break;
     }
 
-    co_await IterateActiveShards(  // 直接Add()不行，为什么
+    co_await IterateActiveShards(  // 也许可以直接Add()
         [this](auto& sd, ShardId sid) -> cppcoro::task<void> {
           EngineShard* shard = EngineShard::tlocal();
           if (sd.local_mask & KEYLOCK_ACQUIRED) {
@@ -305,29 +305,18 @@ void Transaction::RunCallback(EngineShard* shard) {
 
 void Transaction::FinishHop(ShardId sid) {
   uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
-  auto e = EngineShard::tlocal();
-  // if (isInline()) {
-  //     auto& sd = Slices_[sid];
-  //     UnlockMultiShardCb(sid);
-  //     e->AddCommittedTxid(this);
-  //     if (pq_pos_[sid] != TxQueue::kEnd) {
-  //       e->txq()->Pop(pq_pos_[sid]);
-  //     }
-  //     e->PollExecution(this);
-  //   return;
-  // }
+  if (isInline()) {
+      auto& sd = Slices_[sid];
+      UnlockMultiShardCb(sid);
+      return;
+  }
 
   if (state_ == State::IDLE) {
-    auto e = EngineShard::tlocal();
-    auto& sd = Slices_[sid];
     UnlockMultiShardCb(sid);
-    e->AddCommittedTxid(this);
-    if (sd.it != TxQueue::kEnd) {
-      e->txq()->Pop(sd.it);
-    }
+#ifdef UNIT_TESTS
     LOG(INFO) << " 事务 " << id << " 在分片: " << sid
-              << " 完成, 释放锁并移除队列";
-    e->PollExecution(this);
+              << " 完成";
+#endif
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;
       coordinator_state_ = COORD_CANCELLED;
@@ -373,34 +362,6 @@ void Transaction::UnlockMultiShardCb(ShardId sid) {
 #endif
   );
 }
-
-// void Transaction::startMulti() {
-//   state_ = State::MULTI;
-// }
-
-// void Transaction::FinishOrDiscardMulti() {
-//   // TODO
-//   state_ = State::IDLE;
-// }
-// void Transaction::CollectCommands(const CommandId* cid, CmdArgList args) {
-//   std::vector<std::string_view> ViewArgs(args.begin(), args.end());
-//   multi_.Commmends.push_back({cid, std::move(ViewArgs)});
-// }
-
-// cppcoro::task<bool> Transaction::CollectMutex() {
-//   for (auto& [cid, args] : multi_.Commmends) {
-//     cid_ = cid;
-//     args_ = args;
-//     InitSlice();
-//     SlicesArgs slices_args;
-//     slices_args.unique_shard_id = unique_shard_id_;
-//     slices_args.unique_shard_cnt = unique_shard_cnt_;
-//     slices_args.key_num = key_num_;
-//     slices_args.slices = std::move(Slices_);
-//     multi_.slices_args.push_back(std::move(slices_args));
-//   }
-// absl::flat_hash_set<
-// }
 
 std::string Transaction::PrintLock(ShardId sid) const {
   std::string ss;
