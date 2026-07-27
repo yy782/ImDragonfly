@@ -84,7 +84,7 @@ class Transaction {
     COORD_INLINE = 1 << 3,      // 协调器在本地执行
   };
   void DispatchHop();
-  struct alignas(64)  Slice {
+  struct alignas(64) Slice {
     ShardId unique_shard_id;
     Transaction* tx;
     std::vector<uint32_t> keyIds;

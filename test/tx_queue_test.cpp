@@ -180,7 +180,7 @@ TEST_F(TxQueueTest, PushPopAlternating) {
 TEST_F(TxQueueTest, MultiConcurrent) {
   const int loopCount = 3;
 
-  for (int i = 0; i < loopCount; ++i) { 
+  for (int i = 0; i < loopCount; ++i) {
     // 可能PollExecution不一定会正常消费队列，会测试失败，以后添加定时PollExecution逻辑更好，loopCount设计小点，减少失败可能性
     const int base = 1;
     const int Count = base * shardNum;

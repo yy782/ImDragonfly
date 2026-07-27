@@ -174,9 +174,9 @@ bool Transaction::Scheduling(std::coroutine_handle<> handle,
 
 bool Transaction::isInline() { return (coordinator_state_ & COORD_INLINE); }
 
+
 cppcoro::AsyncTask Transaction::ScheduleInternal() {
   coordinator_state_ |= COORD_SCHED;
-
   while (true) {
     txid_ = txid_counter_.fetch_add(1, std::memory_order_relaxed);
     std::atomic<bool> done{true};
@@ -197,6 +197,7 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
       break;
     }
 
+
     co_await IterateActiveShards(  // 也许可以直接Add()
         [this](auto& sd, ShardId sid) -> cppcoro::task<void> {
           EngineShard* shard = EngineShard::tlocal();
@@ -205,7 +206,6 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
             sd.local_mask &= ~KEYLOCK_ACQUIRED;
           }
           shard->txq()->Pop(sd.it);
-          sd.it = TxQueue::kEnd;
           co_return;
         });
   }
@@ -257,7 +257,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   */
   // CancelScheduledTx(sd, sid);
 
-  assert(!(sd.local_mask & KEYLOCK_ACQUIRED));
+  assert(!(sd.local_mask & KEYLOCK_ACQUIRED)); // 有可能断言失败，不清楚为什么
   if (LockMultiShardCb(sid)) {
     sd.local_mask |= KEYLOCK_ACQUIRED;
   } else {
@@ -306,16 +306,13 @@ void Transaction::RunCallback(EngineShard* shard) {
 void Transaction::FinishHop(ShardId sid) {
   uint32_t prev = run_barrier_.fetch_sub(1, std::memory_order_acq_rel);
   if (isInline()) {
-      auto& sd = Slices_[sid];
-      UnlockMultiShardCb(sid);
-      return;
+    auto& sd = Slices_[sid];
+    UnlockMultiShardCb(sid);
+    return;
   }
-
-  if (state_ == State::IDLE) {
     UnlockMultiShardCb(sid);
 #ifdef UNIT_TESTS
-    LOG(INFO) << " 事务 " << id << " 在分片: " << sid
-              << " 完成";
+    LOG(INFO) << " 事务 " << id << " 在分片: " << sid << " 完成";
 #endif
     if (prev == 1) {
       coordinator_state_ |= COORD_CONCLUDING;
@@ -323,7 +320,7 @@ void Transaction::FinishHop(ShardId sid) {
       assert(coro_handle_);
       coro_handle_.resume();
     }
-  }
+
 }
 
 KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
@@ -346,21 +343,11 @@ DbSlice& Transaction::GetDbSlice(ShardId sid) const {
 IntentLock::Mode Transaction::LockMode() const { return lock_mode_; }
 
 bool Transaction::LockMultiShardCb(ShardId sid) {
-  return GetDbSlice(sid).Acquire(LockMode(), lock_args_[sid]
-#ifdef UNIT_TESTS
-                                 ,
-                                 id
-#endif
-  );
+  return GetDbSlice(sid).Acquire(LockMode(), lock_args_[sid], this);
 }
 
 void Transaction::UnlockMultiShardCb(ShardId sid) {
-  GetDbSlice(sid).Release(LockMode(), lock_args_[sid]
-#ifdef UNIT_TESTS
-                          ,
-                          id
-#endif
-  );
+  GetDbSlice(sid).Release(LockMode(), lock_args_[sid], this);
 }
 
 std::string Transaction::PrintLock(ShardId sid) const {

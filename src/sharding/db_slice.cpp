@@ -300,14 +300,9 @@ void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx,
   }
 }
 
-bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
-#ifdef UNIT_TESTS
-                      ,
-                      int id
-#endif
-) {
+bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args, Transaction* tx) {
   assert(!lock_args.fps.empty());
-
+  (void)tx;
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
   bool all_locked = true;
   int i = 0;
@@ -326,17 +321,9 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args
   return all_locked;
 }
 
-void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args
-#ifdef UNIT_TESTS
-                      ,
-                      int id
-#endif
-) {
-
-  // #ifdef UNIT_TESTS
-  //   LOG(INFO)<< " 事务: " << id << " 释放锁 "<<" shard:" <<  shard_id_;
-  // #endif
+void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args, Transaction* tx) {
   assert(!lock_args.fps.empty());
+  (void)tx;
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
   for (LockFp fp : lock_args.fps) {
     lt.Release(fp, mode);
