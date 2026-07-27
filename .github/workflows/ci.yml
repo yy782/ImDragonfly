@@ -121,6 +121,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
+          path: build
 
       - name: Make binaries executable
         run: chmod +x build/test/unit_tests
@@ -157,6 +158,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
+          path: build
 
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
@@ -201,6 +203,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
+          path: build
 
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
