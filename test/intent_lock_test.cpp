@@ -1,6 +1,7 @@
+#include <gtest/gtest.h>
+
 #include "src/sharding/db_slice.hpp"
 #include "src/sharding/engine_shard.hpp"
-#include <gtest/gtest.h>
 
 using namespace dfly;
 using namespace yy::net;
@@ -14,7 +15,8 @@ class IntentLockTest : public ::testing::Test {
   void TearDown() override { slice_.reset(); }
 
   // 验证：持有方的锁释放后，另一方可以获取同样的锁
-  void ExpectReleaseThenReacquire(IntentLock::Mode mode, const KeyLockArgs& args) {
+  void ExpectReleaseThenReacquire(IntentLock::Mode mode,
+                                  const KeyLockArgs& args) {
     EXPECT_TRUE(slice_->Acquire(mode, args));
     slice_->Release(mode, args);
     EXPECT_TRUE(slice_->Acquire(mode, args));
@@ -230,5 +232,3 @@ TEST_F(IntentLockTest, DifferentFpIsolation) {
   slice_->Release(IntentLock::SHARED, args_b);
   slice_->Release(IntentLock::EXCLUSIVE, args_a);
 }
-
-
