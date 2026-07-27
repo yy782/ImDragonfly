@@ -48,7 +48,6 @@ jobs:
         with:
           submodules: recursive
 
-      # ── 安装系统依赖 ──────────────────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -65,11 +64,8 @@ jobs:
             libprotobuf-dev \
             protobuf-compiler \
             libgtest-dev \
-            googletest \
-            python3 \
-            python3-pip
+            googletest
 
-      # ── 编译 GTest ────────────────────────────────────────
       - name: Build GTest from source
         run: |
           cd /usr/src/googletest
@@ -77,29 +73,16 @@ jobs:
           sudo make -j$(nproc)
           sudo cmake --install . --prefix /usr/local
 
-      # ── CMake 配置 ───────────────────────────────────────
-      - name: Configure CMake
-        run: |
-          cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTS=ON \
-            -S . -B build
-
-      # ── 编译 ─────────────────────────────────────────────
       - name: Build
-        run: |
-          cmake --build build \
-            --target imdragonfly db_table_test \
-            -j$(nproc)
+        run: bash scripts/build.sh -r -j $(nproc)
 
-      # ── 缓存构建产物 ─────────────────────────────────────
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: |
             build/imdragonfly
-            build/test/db_table_test
+            build/test/unit_tests
           retention-days: 1
 
   # ═══════════════════════════════════════════════════════════
@@ -113,7 +96,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 安装运行时依赖 ───────────────────────────────────
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -135,7 +117,6 @@ jobs:
           sudo cmake --install . --prefix /usr/local
           sudo ldconfig
 
-      # ── 下载构建产物 ─────────────────────────────────────
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -143,22 +124,10 @@ jobs:
           path: build
 
       - name: Make binaries executable
-        run: chmod +x build/imdragonfly build/test/db_table_test
+        run: chmod +x build/test/unit_tests
 
-      # ── 运行 C++ 单元测试 ────────────────────────────────
-      - name: Run C++ unit tests
-        run: |
-          mkdir -p test-results
-          ./build/test/db_table_test \
-            --gtest_output=xml:test-results/db_table_test.xml
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-results
-          path: test-results/
-          retention-days: 7
+      - name: Run unit tests
+        run: build/test/unit_tests
 
   # ═══════════════════════════════════════════════════════════
   # 集成测试 (Redis 协议验证)
@@ -171,7 +140,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 安装运行时依赖 ───────────────────────────────────
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -186,7 +154,6 @@ jobs:
             python3-pip \
             python3-venv
 
-      # ── 下载构建产物 ─────────────────────────────────────
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -194,9 +161,8 @@ jobs:
           path: build
 
       - name: Make binaries executable
-        run: chmod +x build/imdragonfly build/test/db_table_test
+        run: chmod +x build/imdragonfly
 
-      # ── 运行集成测试 ─────────────────────────────────────
       - name: Run integration tests
         run: bash scripts/run_integration_tests.sh
 
@@ -211,7 +177,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 安装运行时依赖 ───────────────────────────────────
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
@@ -223,16 +188,17 @@ jobs:
             libabsl-dev \
             libprotobuf-dev \
             libevent-2.1-7 \
+            libevent-extra-2.1-7 \
+            libevent-openssl-2.1-7 \
             python3
 
-      # ── 安装 memtier_benchmark ────────────────────────────
       - name: Install memtier_benchmark
         run: |
           wget -q https://github.com/redis/memtier_benchmark/releases/download/2.5.0/memtier-benchmark_2.5.0.jammy_amd64.deb
-          sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb
+          sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb || true
+          sudo apt-get install -f -y
           memtier_benchmark --version
 
-      # ── 下载构建产物 ─────────────────────────────────────
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -242,11 +208,9 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
 
-      # ── 运行压力测试 ─────────────────────────────────────
-      - name: Run memtier_benchmark
+      - name: Run benchmark
         run: bash scripts/run_benchmark.sh
 
-      # ── 上传压测结果 ─────────────────────────────────────
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4

@@ -13,6 +13,13 @@ PORT="${2:-6379}"
 TEST_DIR="${3:-test/redis-py}"
 LOG_DIR="./logs"
 
+# ── 检查端口占用 ────────────────────────────────────────
+if ss -tlnp | grep -q ":${PORT} "; then
+    echo "ERROR: Port $PORT is already in use."
+    echo "Please free port $PORT before running tests."
+    exit 1
+fi
+
 # ── 自动检测 CPU 核心数 ────────────────────────────────────
 THREADS=$(nproc)
 echo "Detected CPU cores: $THREADS"

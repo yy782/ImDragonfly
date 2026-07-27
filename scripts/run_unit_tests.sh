@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+# ── 检查 6379 端口占用 ────────────────────────────────────
+if ss -tlnp | grep -q ":6379 "; then
+    echo "ERROR: Port 6379 is already in use."
+    echo "Please free port 6379 before running tests."
+    exit 1
+fi
+
 BUILD_DIR="${1:-build}"
 
 if [ ! -f "$BUILD_DIR/CTestTestfile.cmake" ]; then
