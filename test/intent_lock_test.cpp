@@ -12,7 +12,7 @@ class IntentLockTest : public ::testing::Test {
     slice_ = std::make_unique<DbSlice>(0, false, EngineShard::tlocal());
   }
 
-  void TearDown() override { slice_.reset(); }
+  void TearDown() override { EngineShard::DestroyThreadLocal(); }
 
   // 验证：持有方的锁释放后，另一方可以获取同样的锁
   void ExpectReleaseThenReacquire(IntentLock::Mode mode,
@@ -91,47 +91,53 @@ TEST_F(IntentLockTest, SharedExclusiveMutualExclusion) {
   }
 }
 
-// 测试3: 部分锁冲突 —— A 持有部分 key，B 尝试获取有重叠的 key 集合
-//         验证冲突时 Acquire 的 all-or-nothing 语义：失败的 Acquire 不泄漏锁
+// 测试3: 部分锁冲突 —— 验证 Acquire 的 all-or-nothing 语义
+//         关键: B_args 前几个 fp 不与 A 冲突，冲突出现在 i>0 位置，
+//         这样才能真正测试到之前已获取锁的回滚路径。
 TEST_F(IntentLockTest, PartialLockConflict) {
-  // --- 场景1: A:{a,b}排他, B:{b,c}排他 → B失败, c 不能被泄漏 ---
+  // --- 场景1: EXCLUSIVE 冲突在 i=2, 回滚之前已获取的 fp ---
+  //          A 持有 {1, 2} 排他, B 尝试 {3, 4, 2, 5} 排他
+  //          B 先成功获取 3,4，到 2 时冲突(i=2), 需回滚 3,4
   {
-    // A 的 key 集合: {1, 2, 3, 4}   取了 a,b
-    // B 的 key 集合: {3, 4, 5, 6} 和 A 有重叠 3,4
-    KeyLockArgs A_args = {0, {1, 2, 3, 4}};
-    KeyLockArgs B_args = {0, {3, 4, 5, 6}};
+    KeyLockArgs A_args = {0, {1, 2}};
+    KeyLockArgs B_args = {0, {3, 4, 2, 5}};  // 冲突在 index=2
 
     EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, A_args));
     EXPECT_FALSE(slice_->Acquire(IntentLock::EXCLUSIVE, B_args));
 
-    // B 失败后, fp=5,6 不能残留锁: A 可以直接获取它们
-    KeyLockArgs test_5 = {0, {5}};
-    KeyLockArgs test_6 = {0, {6}};
-    EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test_5));
-    EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test_6));
-    slice_->Release(IntentLock::EXCLUSIVE, test_5);
-    slice_->Release(IntentLock::EXCLUSIVE, test_6);
+    // B 失败后, fp=3,4 必须被回滚, fp=5 未被触及: 三者都应可直接获取
+    for (LockFp fp : {3ULL, 4ULL, 5ULL}) {
+      KeyLockArgs test = {0, {fp}};
+      EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test))
+          << "fp=" << fp << " should be free after rollback";
+      slice_->Release(IntentLock::EXCLUSIVE, test);
+    }
 
     slice_->Release(IntentLock::EXCLUSIVE, A_args);
   }
 
-  // --- 场景2: A:{a,b,c}共享, B:{c,d}排他 → B失败, d 不能被泄漏 ---
+  // --- 场景2: SHARED 持有者阻挡 EXCLUSIVE, 冲突在 i=2 ---
+  //          A 持有 {11, 22} 共享, B 尝试 {33, 44, 11} 排他
+  //          B 先成功获取 33,44 的排他锁, 到 11 时冲突(i=2), 需回滚 33,44
   {
-    KeyLockArgs A_args = {0, {10, 20, 30}};
-    KeyLockArgs B_args = {0, {30, 40}};
+    KeyLockArgs A_args = {0, {11, 22}};
+    KeyLockArgs B_args = {0, {33, 44, 11}};  // 冲突在 index=2
 
     EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, A_args));
     EXPECT_FALSE(slice_->Acquire(IntentLock::EXCLUSIVE, B_args));
 
-    // B 失败后, fp=40 不能残留: 应可独立获取
-    KeyLockArgs test_40 = {0, {40}};
-    EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test_40));
-    slice_->Release(IntentLock::EXCLUSIVE, test_40);
+    // fp=33,44 必须被回滚
+    for (LockFp fp : {33ULL, 44ULL}) {
+      KeyLockArgs test = {0, {fp}};
+      EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test))
+          << "fp=" << fp << " should be free after rollback";
+      slice_->Release(IntentLock::EXCLUSIVE, test);
+    }
 
     slice_->Release(IntentLock::SHARED, A_args);
   }
 
-  // --- 场景3: A:{a,b}排他, B:{c,d,e}排他 → 完全不重叠, B 应成功 ---
+  // --- 场景3: 完全不重叠, B 应成功 (无冲突路径) ---
   {
     KeyLockArgs A_args = {0, {100, 200}};
     KeyLockArgs B_args = {0, {300, 400, 500}};
@@ -143,10 +149,10 @@ TEST_F(IntentLockTest, PartialLockConflict) {
     slice_->Release(IntentLock::EXCLUSIVE, A_args);
   }
 
-  // --- 场景4: A:{a,b,c,d}共享, B:{d,e,f}共享 → 全部共享, B 应成功 ---
+  // --- 场景4: 共享锁重叠, 双方都成功 ---
   {
-    KeyLockArgs A_args = {0, {111, 222, 333, 444}};
-    KeyLockArgs B_args = {0, {444, 555, 666}};
+    KeyLockArgs A_args = {0, {111, 222, 333}};
+    KeyLockArgs B_args = {0, {333, 444, 555}};
 
     EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, A_args));
     EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, B_args));
@@ -155,47 +161,55 @@ TEST_F(IntentLockTest, PartialLockConflict) {
     slice_->Release(IntentLock::SHARED, A_args);
   }
 
-  // --- 场景5: A:{a,b}排他, B:{b,c,d}排他 → B失败, 验证 c,d 都不泄漏 ---
-  //          释放A全部后, B 再试应成功
+  // --- 场景5: EXCLUSIVE 冲突在 i=3, 回滚后释放 A, B 重试成功 ---
+  //          A 持有 {50, 60} 排他, B 尝试 {70, 80, 90, 60} 排他
+  //          B 先成功 70,80,90(i=0,1,2), 到 60 冲突(i=3), 回滚 70,80,90
   {
-    KeyLockArgs A_args = {0, {777, 888}};
-    KeyLockArgs B_args = {0, {888, 999, 1111}};
+    KeyLockArgs A_args = {0, {50, 60}};
+    KeyLockArgs B_args = {0, {70, 80, 90, 60}};  // 冲突在 index=3
 
     EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, A_args));
     EXPECT_FALSE(slice_->Acquire(IntentLock::EXCLUSIVE, B_args));
 
-    // 验证 fp=999,1111 未被泄漏
-    KeyLockArgs test_c = {0, {999}};
-    KeyLockArgs test_d = {0, {1111}};
-    EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, test_c));
-    EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, test_d));
-    slice_->Release(IntentLock::SHARED, test_c);
-    slice_->Release(IntentLock::SHARED, test_d);
+    // 验证 70,80,90 全部回滚干净
+    for (LockFp fp : {70ULL, 80ULL, 90ULL}) {
+      KeyLockArgs test = {0, {fp}};
+      EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, test))
+          << "fp=" << fp << " should be free after rollback";
+      slice_->Release(IntentLock::SHARED, test);
+    }
 
-    // A 释放后, B 再试应成功
+    // A 释放后, B 重试应成功
     slice_->Release(IntentLock::EXCLUSIVE, A_args);
     EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, B_args));
     slice_->Release(IntentLock::EXCLUSIVE, B_args);
   }
 
-  // --- 场景6: 单 key 冲突导致整个多 key 集合失败, 且冲突 key 锁计数不膨胀 ---
+  // --- 场景6: 冲突在 i=0, 验证冲突 fp 计数不膨胀 ---
+  //          A 持有 {201, 202, 203} 共享, B 尝试 {201, 204, 205} 排他
+  //          冲突在 index=0, 仅需回滚 fp=201
   {
-    KeyLockArgs A_args = {0, {11, 22, 33}};
+    KeyLockArgs A_args = {0, {201, 202, 203}};
+    KeyLockArgs B_args = {0, {201, 204, 205}};  // 冲突在 index=0
 
-    // A 拿共享锁
     EXPECT_TRUE(slice_->Acquire(IntentLock::SHARED, A_args));
-
-    // B 尝试拿排他锁, 因 11/22/33 均有共享持有者, 应失败
-    KeyLockArgs B_args = {0, {11, 44, 55}};
     EXPECT_FALSE(slice_->Acquire(IntentLock::EXCLUSIVE, B_args));
 
-    // 冲突失败后 11 的锁计数不能膨胀: 释放一次共享就能让 11 的排他锁可获取
+    // fp=204,205 未被触及, 应可直接获取
+    for (LockFp fp : {204ULL, 205ULL}) {
+      KeyLockArgs test = {0, {fp}};
+      EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test))
+          << "fp=" << fp << " should be free";
+      slice_->Release(IntentLock::EXCLUSIVE, test);
+    }
+
+    // fp=201 的共享计数不应膨胀: 释放一次共享后即可获取排他锁
     slice_->Release(IntentLock::SHARED, A_args);
 
-    // 现在 {11} 的排他锁应可直接获取 (证明 B 失败没有在 11 上残留计数)
-    KeyLockArgs test_11 = {0, {11}};
-    EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test_11));
-    slice_->Release(IntentLock::EXCLUSIVE, test_11);
+    KeyLockArgs test_201 = {0, {201}};
+    EXPECT_TRUE(slice_->Acquire(IntentLock::EXCLUSIVE, test_201))
+        << "fp=201 exclusive should succeed after single shared release";
+    slice_->Release(IntentLock::EXCLUSIVE, test_201);
   }
 }
 
