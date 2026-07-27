@@ -81,8 +81,8 @@ jobs:
         with:
           name: build-artifacts
           path: |
-            build/imdragonfly
-            build/test/db_table_test
+          build/imdragonfly
+          build/test/unit_tests
           retention-days: 1
 
   # ═══════════════════════════════════════════════════════════
@@ -121,13 +121,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: build
 
       - name: Make binaries executable
-        run: chmod +x build/test/db_table_test
+        run: chmod +x build/test/unit_tests
 
       - name: Run unit tests
-        run: bash scripts/run_unit_tests.sh build/test/db_table_test
+        run: build/test/unit_tests
 
   # ═══════════════════════════════════════════════════════════
   # 集成测试 (Redis 协议验证)
@@ -158,7 +157,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: build
 
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
@@ -188,19 +186,21 @@ jobs:
             libabsl-dev \
             libprotobuf-dev \
             libevent-2.1-7 \
+            libevent-extra-2.1-7 \
+            libevent-openssl-2.1-7 \
             python3
 
       - name: Install memtier_benchmark
         run: |
           wget -q https://github.com/redis/memtier_benchmark/releases/download/2.5.0/memtier-benchmark_2.5.0.jammy_amd64.deb
-          sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb
+          sudo dpkg -i memtier-benchmark_2.5.0.jammy_amd64.deb || true
+          sudo apt-get install -f -y
           memtier_benchmark --version
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: build-artifacts
-          path: build
 
       - name: Make binaries executable
         run: chmod +x build/imdragonfly
