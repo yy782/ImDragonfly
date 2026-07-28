@@ -19,6 +19,7 @@
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
 #include "transaction_layer/transaction.hpp"
+#include "detail/conn_context.hpp"
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
@@ -28,16 +29,24 @@ inline RedisServer* ser = nullptr;
 class RedisSession : public yy::net::TcpConnection {
  public:
   RedisSession(int fd, const yy::net::Address& addr, yy::net::EventLoop* loop)
-      : TcpConnection(fd, addr, loop) {}
+      : TcpConnection(fd, addr, loop) {
 
+      }
+  void init() {
+    auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
+    rb_.SetSendCallback([self](std::string&& s) {
+      self->RedisSend(std::move(s));
+    });
+
+    context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);    
+  }
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
   Transaction* GetTransaction() { return &transaction_; }
   yy::net::EventLoop* GetProactor() { return loop(); }
   cppcoro::AsyncTask OnMessage() {
     int client_fd = this->fd();
-    auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
-    context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
+
     auto& com = parser_.ParseRESP(recvBuffer());
 
     if (com.empty()) co_return;
@@ -47,33 +56,16 @@ class RedisSession : public yy::net::TcpConnection {
     if (!ci) {
       LOG(WARNING) << "Unknown command: " << args_[0]
                    << " from fd: " << client_fd;
-      auto s = BuildError("unknown command:" + std::string(args_[0]));
-      yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+      rb_.BuildError("unknown command:" + std::string(args_[0]));
       co_return;
     }
-    if (transaction_.GetState() == Transaction::State::IDLE) {
-      std::destroy_at(&transaction_);
-      std::construct_at(&transaction_, ci);
-      transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
-                              args_);
-    }
-    // } else {
-    //     bool is_multi_command = false;
-    //             is_multi_command = (cmd_name == "MULTI" || cmd_name == "EXEC"
-    //             ||
-    //                        cmd_name == "DISCARD" || cmd_name == "WATCH" ||
-    //                        cmd_name == "UNWATCH");
-    //     if (transaction_.GetState() == Transaction::State::MULTI &&
-    //     !is_multi_command) {
-    //         transaction_.QueueCommand(ci, args_);
-    //         SendStatus("QUEUED");
-    //         return;
-    //     }
-    // }
 
-    ci->Invoke(&transaction_.GetCommandContext(), args_);
-    auto s = co_await transaction_.GetRes();
-    yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+    std::destroy_at(&transaction_);
+    std::construct_at(&transaction_, ci);
+    transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
+                            args_);
+    CommandContext cmd_cntx(&transaction_, ci, &rb_, fd_);
+    ci->Invoke(&cmd_cntx, args_);
     co_return;
   }
 
@@ -88,6 +80,10 @@ class RedisSession : public yy::net::TcpConnection {
     context_.owner().reset();  // 可能有问题，如果当前事务没有结束
     disconnect();
   }
+
+  void RedisSend(std::string&& s) {
+    yy::net::sockets::send(fd(), s.data(), s.size(), MSG_NOSIGNAL);
+  }
   int fd() const noexcept { return fd_; }
 
  private:
@@ -97,6 +93,7 @@ class RedisSession : public yy::net::TcpConnection {
   ::cmn::CmdArgList args_;
   ConnectionContext context_;
   Transaction transaction_;
+  ReplyBuilder rb_;
 };
 
 class RedisServer {
@@ -106,16 +103,17 @@ class RedisServer {
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
-    // RegisterMulti(CIs);
-    RegisterListFamily(CIs);
-    RegisterHashFamily(CIs);
-    RegisterSetFamily(CIs);
-    RegisterZSetFamily(CIs);
+    // // RegisterMulti(CIs);
+    // RegisterListFamily(CIs);
+    // RegisterHashFamily(CIs);
+    // RegisterSetFamily(CIs);
+    // RegisterZSetFamily(CIs);
     ser = this;
 
     server_.setConnectCallBack([this](int fd, const yy::net::Address& addr,
                                       yy::net::EventLoop* loop) {
       auto session = std::make_shared<RedisSession>(fd, addr, loop);
+      session->init();
       LOG(INFO) << "New connection from " << addr.sockaddrToString()
                 << ", fd: " << fd;
       session->setTcpNoDelay(true);

@@ -14,46 +14,7 @@
 
 namespace dfly {
 
-namespace CO {
 
-enum CommandOpt : uint32_t {  // 命令选项枚举
-  READABLE = 1 << 0,          // 命令只读，不修改数据
-  NEED_TIME = 1 << 1,         // 命令需要时间戳
-};
-
-}  // namespace CO
-
-class CommandId;
-class CommandContext;
-
-class CommandId : public facade::CommandId {
- public:
-  using CmdArgList = ::cmn::CmdArgList;
-
-  CommandId(const char* name, size_t keys_start, size_t keys_nums,
-            size_t keys_offset, uint32_t opt_mask_ = 0);
-
-  CommandId(CommandId&& o) = default;
-
-  ~CommandId();
-
-  [[nodiscard]] CommandId Clone(std::string_view name) const;
-
-  using Handler =
-      base::function_base<true, true, fu2::capacity_default, false, false,
-                          void(CommandContext*, CmdArgList) const>;
-  void Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
-    handler_(cmd_cntx, args);
-  }
-
-  CommandId&& SetHandler(Handler f) && {
-    handler_ = std::move(f);
-    return std::move(*this);
-  }
-
- private:
-  Handler handler_;
-};
 
 class CommandRegistry {
  public:

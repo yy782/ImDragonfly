@@ -1,49 +1,115 @@
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <variant>
 #include <vector>
 
 namespace dfly {
 
 class Transaction;
 
+// TxQueue implemmented as a circular doubly-linked list.
 class TxQueue {
+  void Link(uint32_t p, uint32_t n) {
+    uint32_t next = vec_[p].next;
+    vec_[n].next = next;
+    vec_[n].prev = p;
+    vec_[p].next = n;
+    vec_[next].prev = n;
+  }
+
  public:
+  // uint64_t is used for unit-tests.
+  using ValueType = std::variant<Transaction*, uint64_t>;
   using Iterator = uint32_t;
   enum { kEnd = Iterator(-1) };
 
-  TxQueue() = default;
+  TxQueue(std::function<uint64_t(const Transaction*)> score_fun = nullptr);
 
-  Iterator Insert(Iterator it, Transaction* t);
-  void Remove(Iterator it);
-  Transaction* At(Iterator it) const { return vec_[it].trans; }
-  Transaction* Front() const { return At(head_); }
-  Transaction* Back() const { return At(tail_); }
-  void PopFront() { Remove(head_); }
-  void PopBack() { Remove(tail_); }
-  size_t Size() const { return size_; }
-  bool Empty() const { return size_ == 0; }
-  Iterator Head() const { return head_; }
-  Iterator Tail() const { return tail_; }
-  Iterator Next(Iterator it) const { return vec_[it].next; }
-  Iterator Prev(Iterator it) const { return vec_[it].prev; }
+  // returns iterator to that item the list
+  Iterator Insert(Transaction* t);
+
+  Iterator Insert(uint64_t val);
+  void Remove(Iterator);
+
+  ValueType At(Iterator it) const {
+    switch (vec_[it].tag) {
+      case TRANS_TAG:
+        return vec_[it].u.trans;
+      case UINT_TAG:
+        return vec_[it].u.uval;
+    }
+    return 0u;
+  }
+
+  ValueType Front() const {
+    return At(head_);
+  }
+
+  void PopFront() {
+    Remove(head_);
+  }
+
+  size_t size() const {
+    return size_;
+  }
+
+  bool Empty() const {
+    return size_ == 0;
+  }
+
+  //! returns the score of the tail record. Can be called only if !Empty().
+  uint64_t TailScore() const {
+    return Rank(vec_[vec_[head_].prev]);
+  }
+
+  //! returns the score of the head record. Can be called only if !Empty().
+  uint64_t HeadScore() const {
+    return Rank(vec_[head_]);
+  }
+
+  //! Can be called only if !Empty().
+  Iterator Head() const {
+    return head_;
+  }
+
+  // Returns the next iterator, it's circular so it always returns a valid
+  // iterator. Can be called only if !Empty().
+  Iterator Next(Iterator it) const {
+    return vec_[it].next;
+  }
 
  private:
-  void Grow();
-  Iterator AllocateNode();
-  void FreeNode(Iterator it);
+  enum { TRANS_TAG = 0, UINT_TAG = 11, FREE_TAG = 12 };
 
-  struct Node {
-    Transaction* trans = nullptr;
-    uint32_t next = kEnd;
-    uint32_t prev = kEnd;
-    bool used = false;  // 标记节点是否在使用
+  void Grow();
+  void LinkFree(uint64_t rank);
+
+  struct QRecord {
+    union {
+      Transaction* trans;
+      uint64_t uval;
+    } u;
+
+    uint32_t tag : 8;
+    uint32_t next : 24;
+    uint32_t prev;
+
+    QRecord() : tag(FREE_TAG), prev(kEnd) {
+    }
   };
 
-  std::vector<Node> vec_;
-  uint32_t next_free_ = kEnd;  // 空闲链表头
-  uint32_t head_ = kEnd;       // 链表头
-  uint32_t tail_ = kEnd;       // 链表尾
+  static_assert(sizeof(QRecord) == 16, "");
+
+  uint64_t Rank(const QRecord& r) const;
+
+  std::function<uint64_t(const Transaction*)> score_fun_;
+  std::vector<QRecord> vec_;
+  uint32_t next_free_ = 0, head_ = kEnd;
   size_t size_ = 0;
 
   TxQueue(const TxQueue&) = delete;
