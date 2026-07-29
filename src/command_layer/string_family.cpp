@@ -209,6 +209,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
     return {};
   };
   co_await cmd::SingleHopT(cb);
+
   auto* rb = cmd_cntx->rb();
   rb->BuildArray(std::move(vec));
   co_return;

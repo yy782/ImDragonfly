@@ -337,7 +337,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic, s
   ShardId sid = SidToId(shard->shard_id());
   auto& sd = shard_data_[sid];
 
-  LOG(INFO) << "ScheduleInShard 在分片:" << shard->shard_id() << " sd掩码:" << sd.local_mask;
+  //LOG(INFO) << "ScheduleInShard 在分片:" << shard->shard_id() << " sd掩码:" << sd.local_mask;
   DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
   sd.local_mask &= ~(OUT_OF_ORDER | OPTIMISTIC_EXECUTION);
 
