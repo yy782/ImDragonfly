@@ -207,11 +207,7 @@ std::string TxQueue::PrintTxLock() const {
     lock_str += "事务: ";
     lock_str += std::to_string(t->id);
 #endif
-<<<<<<< HEAD
-    lock_str += t->PrintLock(sid);
-=======
     // lock_str += t->PrintLock(sid);
->>>>>>> main
     it = vec_[it].next;
   }
   str += lock_str;

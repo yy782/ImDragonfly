@@ -210,7 +210,9 @@ class Transaction {
 #ifndef NDEBUG
   int id;
 #endif
-
+#ifdef UNIT_TESTS
+  void set_txid(int id) { txid_ = id; }
+#endif
  private:
   struct alignas(64) PerShardData {
     PerShardData() {}
