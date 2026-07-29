@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #pragma once
 #include <mimalloc.h>
 
@@ -35,8 +39,6 @@ class EngineShard {
 
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }
-
-  DbSlice* GetDbSlice(ShardId sid);
 
   size_t committed_txid() const { return committed_txid_; }
   void AddCommittedTxid(Transaction* trans) { committed_txid_++; }

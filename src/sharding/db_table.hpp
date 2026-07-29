@@ -60,23 +60,8 @@ struct DbTable
 
   DbIndex index() const { return index_; }
 
-  class WatchedKeyContext {
-   public:
-    WatchedKeyContext(ConnectionContext* o_conn_context);
-    bool operator==(const WatchedKeyContext& o) const noexcept;
-    bool isExpired() const noexcept;
-
-   private:
-    friend class DbSlice;
-    ConnectionContext* conn_context;
-
-    RedisSessionWeakPtr sess;
-    uint64_t key_version;
-  };
   PrimeTable prime_;
   DbIndex index_;
-  absl::flat_hash_map<std::string, std::vector<WatchedKeyContext>>
-      watched_keys_;
   LockTable trans_locks;
 };
 using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
