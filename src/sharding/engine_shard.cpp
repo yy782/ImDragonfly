@@ -30,7 +30,7 @@ EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
     : proactor_(pb),
       shard_id_(pb->id()),
       mi_resource_(heap),
-      txq_(mi_resource_) {}
+      txq_(&mi_resource_) {}
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
