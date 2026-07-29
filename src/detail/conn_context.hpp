@@ -52,8 +52,8 @@ class CommandContext {
  public:
   CommandContext() = default;
 
-  CommandContext(Transaction* transaction, const CommandId* cid, ReplyBuilder* reply_builder, int fd)
-      : transaction_(transaction), cid_(cid), reply_builder_(reply_builder), fd_(fd) {
+  CommandContext(Transaction* transaction, const CommandId* cid, ReplyBuilder* reply_builder)
+      : transaction_(transaction), cid_(cid), reply_builder_(reply_builder) {
         assert(reply_builder_);
       }
   const CommandId* cid() const { return cid_; }
@@ -62,13 +62,10 @@ class CommandContext {
     assert(reply_builder_); 
     return reply_builder_; 
   }
-
-  int fd() const { return fd_; }
  private:
   Transaction* transaction_;
   const CommandId* cid_;
   ReplyBuilder* reply_builder_;
-  int fd_;
 };
 
 }  // namespace dfly

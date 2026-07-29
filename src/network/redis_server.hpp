@@ -66,7 +66,7 @@ class RedisSession : public yy::net::TcpConnection {
     std::construct_at(&transaction_, ci);
     transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
                             args_);
-    cmd_cntx_ = CommandContext(&transaction_, ci, &rb_, fd_);
+    cmd_cntx_ = CommandContext(&transaction_, ci, &rb_);
     ci->Invoke(&cmd_cntx_, args_);
     co_return;
   }
