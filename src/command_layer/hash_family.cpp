@@ -57,13 +57,13 @@ CoroTask CmdHSet(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -97,12 +97,15 @@ CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildBulkString(result.value()));
+    rb->BuildBulkString(result.value());
+  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+    rb->BuildNullBulkString();
   } else {
-    t->CollectedResult(BuildBulkString(std::string()));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -136,13 +139,13 @@ CoroTask CmdHDel(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -171,13 +174,13 @@ CoroTask CmdHExists(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -205,13 +208,13 @@ CoroTask CmdHLen(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -241,13 +244,11 @@ void HLen(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterHashFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"HSET", 1, 1, kInvalidKeysOffset}.SetHandler(HSet)
-      << CI{"HGET", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(HGet)
-      << CI{"HDEL", 1, 1, kInvalidKeysOffset}.SetHandler(HDel)
-      << CI{"HEXISTS", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(
-             HExists)
-      << CI{"HLEN", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(HLen);
+  *registry << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(HSet)
+            << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(HGet)
+            << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(HDel)
+            << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(HExists)
+            << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(HLen);
 }
 
 }  // namespace dfly

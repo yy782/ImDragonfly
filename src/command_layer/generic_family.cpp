@@ -45,11 +45,11 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
   facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
   uint32_t del_cnt = result.load(std::memory_order_relaxed);
 
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
   if (res.status() == OpStatus::OK)
-    t->CollectedResult(BuildInteger(del_cnt));
+    rb->BuildInteger(del_cnt);
   else
-    t->CollectedResult(BuildError("ERR"));
+    rb->BuildError("ERR");
   co_return;
 }
 
@@ -60,13 +60,12 @@ void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
   if (args.size() > 1) {
-    t->CollectedResult(BuildError("ERR"));
+    rb->BuildError("ERR");
     return;
   }
-  t->CollectedResult(BuildSimpleString("PONG"));
-  return;
+  rb->BuildSimpleString("PONG");
 }
 
 CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
@@ -94,11 +93,11 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
   facade::OpResult<void> res = co_await cmd::SingleHopT(cb);
 
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
   if (res.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(result.load()));
+    rb->BuildInteger(result.load());
   } else {
-    t->CollectedResult(BuildInteger(0));
+    rb->BuildInteger(0);
   }
 
   co_return;
@@ -121,11 +120,11 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key,
   };
   auto res = co_await cmd::SingleHopT(cb);
 
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
   if (res.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(1));
+    rb->BuildInteger(1);
   } else {
-    t->CollectedResult(BuildInteger(0));
+    rb->BuildInteger(0);
   }
 
   co_return;
@@ -157,16 +156,16 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
 
   facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
   if (res.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(res.value()));
+    rb->BuildInteger(res.value());
   } else {
     if (res.status() == OpStatus::KEY_NOTFOUND) {
-      t->CollectedResult(BuildInteger(-2));
+      rb->BuildInteger(-2);
     } else if (res.status() == OpStatus::SKIPPED) {
-      t->CollectedResult(BuildInteger(-1));
+      rb->BuildInteger(-1);
     } else {
-      t->CollectedResult(BuildError("ERR"));
+      rb->BuildError("ERR");
     }
   }
   co_return;
@@ -192,17 +191,16 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
 
   facade::OpResult<int64_t> res = co_await cmd::SingleHopT(cb);
 
-  auto* t = cmd_cntx->tx();
-
+  auto* rb = cmd_cntx->rb();
   if (res.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(res.value()));
+    rb->BuildInteger(res.value());
   } else {
     if (res.status() == OpStatus::KEY_NOTFOUND) {
-      t->CollectedResult(BuildInteger(-2));
+      rb->BuildInteger(-2);
     } else if (res.status() == OpStatus::SKIPPED) {
-      t->CollectedResult(BuildInteger(-1));
+      rb->BuildInteger(-1);
     } else {
-      t->CollectedResult(BuildError("ERR"));
+      rb->BuildError("ERR");
     }
   }
   co_return;
@@ -213,9 +211,8 @@ void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
-  auto* t = cmd_cntx->tx();
-
-  t->CollectedResult((BuildSimpleString("OK")));
+  auto* rb = cmd_cntx->rb();
+  rb->BuildSimpleString("OK");
 }
 
 void GenericFamily::ShutDown(CommandContext*, CmdArgList) { ser->Stop(); }
@@ -227,27 +224,21 @@ void GenericFamily::ShutDown(CommandContext*, CmdArgList) { ser->Stop(); }
 using CI = CommandId;
 void GenericFamily::Register(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"DEL", /*keys_start*/ 1, /*keys_nums*/ kInvalidKeysNum,
-            /*keys_offset*/ 1}
-             .SetHandler(&GenericFamily::Delex)
-      << CI{"PING", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}
-             .SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", 1, kInvalidKeysNum, 1, CO::READABLE | CO::NEED_TIME}
-             .SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", 1, 1, kInvalidKeysOffset, CO::NEED_TIME}.SetHandler(
-             &GenericFamily::Expire)
-      << CI{"EXPIRETIME", 1, 1, kInvalidKeysOffset,
-            CO::READABLE | CO::NEED_TIME}
-             .SetHandler(&GenericFamily::ExpireTime)
-      << CI{"TTL", 1, 1, kInvalidKeysOffset, CO::READABLE | CO::NEED_TIME}
-             .SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}
-             .SetHandler(&GenericFamily::Client_Info)
-      << CI{"HELLO", kInvalidKeysStart, 0, kInvalidKeysOffset, CO::READABLE}
-             .SetHandler(&GenericFamily::Client_Info)
-      << CI{"SHUTDOWN", kInvalidKeysStart, 0, kInvalidKeysOffset}.SetHandler(
-             &GenericFamily::ShutDown);
+  *registry << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
+            << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Ping)
+            << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(
+                   &GenericFamily::Exists)
+            << CI{"EXPIRE", 0, 1, 1}.SetHandler(&GenericFamily::Expire)
+            << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(
+                   &GenericFamily::ExpireTime)
+            << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
+            << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Client_Info)
+            << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Client_Info)
+            << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::ShutDown);
 }
 
 void RegisterGeneric(CommandRegistry* registry) {

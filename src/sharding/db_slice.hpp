@@ -8,7 +8,7 @@
 namespace dfly {
 using namespace cmn;
 using namespace facade;
-
+class Transaction;
 class EngineShard;
 class DbSlice {
  public:

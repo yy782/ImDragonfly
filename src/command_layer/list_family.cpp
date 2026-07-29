@@ -58,13 +58,13 @@ CoroTask CmdLPush(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -89,13 +89,13 @@ CoroTask CmdRPush(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -127,19 +127,19 @@ CoroTask CmdLPop(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
     if (result.value().empty()) {
-      t->CollectedResult(BuildError("ERR"));
+      rb->BuildError("ERR");
     } else {
-      t->CollectedResult(BuildBulkString(result.value()));
+      rb->BuildBulkString(result.value());
     }
   } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-    t->CollectedResult(BuildError("ERR"));
+    rb->BuildError("ERR");
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -171,19 +171,19 @@ CoroTask CmdRPop(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
     if (result.value().empty()) {
-      t->CollectedResult(BuildError("ERR"));
+      rb->BuildError("ERR");
     } else {
-      t->CollectedResult(BuildBulkString(result.value()));
+      rb->BuildBulkString(result.value());
     }
   } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-    t->CollectedResult(BuildError("ERR"));
+    rb->BuildError("ERR");
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -211,13 +211,13 @@ CoroTask CmdLLen(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -251,12 +251,12 @@ CoroTask CmdLIndex(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildBulkString(result.value()));
+    rb->BuildBulkString(result.value());
   } else {
-    t->CollectedResult(BuildBulkString(std::string()));
+    rb->BuildBulkString(std::string());
   }
 
   co_return;
@@ -290,17 +290,17 @@ CoroTask CmdLSet(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildSimpleString("OK"));
+    rb->BuildSimpleString("OK");
   } else if (result.status() == OpStatus::NO_KEY) {
-    t->CollectedResult(BuildError("no such key"));
+    rb->BuildError("no such key");
   } else if (result.status() == OpStatus::OUT_OF_RANGE) {
-    t->CollectedResult(BuildError("index out of range"));
+    rb->BuildError("index out of range");
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -333,13 +333,13 @@ CoroTask CmdLRange(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildArray(std::move(result_values)));
+    rb->BuildArray(std::move(result_values));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -370,13 +370,13 @@ CoroTask CmdLRem(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
-    t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -417,19 +417,19 @@ CoroTask CmdLInsert(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   auto result = co_await cmd::SingleHopT(cb);
-  auto* t = cmd_cntx->tx();
+  auto* rb = cmd_cntx->rb();
 
   if (result.status() == OpStatus::OK) {
     if (result.value() == -1) {
-      t->CollectedResult(BuildError("no such pivot"));
+      rb->BuildError("no such pivot");
     } else {
-      t->CollectedResult(BuildInteger(static_cast<int64_t>(result.value())));
+      rb->BuildInteger(static_cast<int64_t>(result.value()));
     }
   } else if (result.status() == OpStatus::SYNTAX_ERROR) {
-    t->CollectedResult(BuildError("syntax error"));
+    rb->BuildError("syntax error");
   } else {
-    t->CollectedResult(BuildError(
-        "WRONGTYPE Operation against a key holding the wrong kind of value"));
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
   }
 
   co_return;
@@ -480,17 +480,16 @@ void LInsert(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterListFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"LPUSH", 1, 1, kInvalidKeysOffset}.SetHandler(LPush)
-      << CI{"RPUSH", 1, 1, kInvalidKeysOffset}.SetHandler(RPush)
-      << CI{"LPOP", 1, 1, kInvalidKeysOffset}.SetHandler(LPop)
-      << CI{"RPOP", 1, 1, kInvalidKeysOffset}.SetHandler(RPop)
-      << CI{"LLEN", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LLen)
-      << CI{"LINDEX", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LIndex)
-      << CI{"LSET", 1, 1, kInvalidKeysOffset}.SetHandler(LSet)
-      << CI{"LRANGE", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(LRange)
-      << CI{"LREM", 1, 1, kInvalidKeysOffset}.SetHandler(LRem)
-      << CI{"LINSERT", 1, 1, kInvalidKeysOffset}.SetHandler(LInsert);
+  *registry << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(LPush)
+            << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(RPush)
+            << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(LPop)
+            << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(RPop)
+            << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(LLen)
+            << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(LIndex)
+            << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(LSet)
+            << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(LRange)
+            << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(LRem)
+            << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(LInsert);
 }
 
 }  // namespace dfly

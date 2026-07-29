@@ -326,7 +326,7 @@ def test_zrem(clean_redis):
 # ═══════════════════════════════════════════════════════════
 
 @pytest.mark.concurrent
-def test_concurrent_mset_mget(clean_redis, pytestconfig):
+def test_concurrent_mset_mget(clean_redis, pytestconfig):  # 测试服务端还是会崩溃，等完善调试工具再修
     """多线程并发 MSET/MGET 测试.
 
     3 个线程, 各用独立连接, 各执行 100 轮:

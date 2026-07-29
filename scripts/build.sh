@@ -15,7 +15,7 @@
 #   bash scripts/build.sh                          # Debug 构建所有目标
 #   bash scripts/build.sh -r                       # Release 构建
 #   bash scripts/build.sh -d --asan                # Debug + ASan
-#   bash scripts/build.sh -t "imdragonfly"          # 只构建 ImDragonfly
+#            # 只构建 ImDragonfly
 #   bash scripts/build.sh -b build-release -j 8    # 自定义目录和并行数
 # bash scripts/build.sh -t "unit_tests"
 set -euo pipefail

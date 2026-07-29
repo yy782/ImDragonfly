@@ -3,6 +3,7 @@
 //
 #pragma once
 #include <iostream>
+#include <ranges>
 #include <span>
 
 #include "command_layer/cmn_types.hpp"
@@ -21,7 +22,7 @@ class LockTag {
   std::string_view str_;
 
  public:
-  using is_stackonly = void;
+  using is_stackonly = void;  // marks that this object does not use heap.
 
   LockTag() = default;
   explicit LockTag(std::string_view key);
@@ -29,6 +30,14 @@ class LockTag {
   explicit operator std::string_view() const { return str_; }
 
   LockFp Fingerprint() const;
+
+  // To make it hashable.
+  template <typename H>
+  friend H AbslHashValue(H h, const LockTag& tag) {
+    return H::combine(std::move(h), tag.str_);
+  }
+
+  bool operator==(const LockTag& o) const { return str_ == o.str_; }
 };
 
 class DbContext {
@@ -56,4 +65,34 @@ class DbContext {
   uint64_t time_now_ms_;
 };
 
+struct KeyIndex {
+  KeyIndex(unsigned start = 0, unsigned end = 0, unsigned step = 1)
+      : start(start), end(end), step(step) {}
+
+  using iterator_category = std::forward_iterator_tag;
+  using value_type = unsigned;
+  using difference_type = std::ptrdiff_t;
+  using pointer = value_type;
+  using reference = value_type;
+
+  unsigned operator*() const;
+  KeyIndex& operator++();
+  bool operator!=(const KeyIndex& ki) const;
+
+  unsigned NumArgs() const { return (end - start + step - 1) / step; }
+
+  auto Range() const {
+    return std::views::iota(0u, NumArgs()) |
+           std::views::transform(
+               [this](unsigned i) { return start + i * step; });  // 不确定
+  }
+
+  auto Range(const cmn::ArgSlice& args) const {
+    return Range() | std::views::transform(
+                         [args](unsigned idx) { return args[idx]; });  // 不确定
+  }
+
+ public:
+  unsigned start, end, step;
+};
 }  // namespace dfly
