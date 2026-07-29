@@ -207,7 +207,7 @@ class Transaction {
 
   unsigned GetKeyNum() const { return kv_fp_.size(); }
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(UNIT_TESTS)
   int id;
 #endif
 #ifdef UNIT_TESTS
