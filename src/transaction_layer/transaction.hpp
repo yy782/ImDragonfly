@@ -1,15 +1,19 @@
+// Copyright 2022, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #pragma once
 
 #include <optional>
 
-#include "sharding/op_status.hpp"
+#include "absl/container/inlined_vector.h"
+#include "base/function.hpp"
+#include "command_layer/command_registry.hpp"
+#include "detail/cluster_support.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
-#include "detail/cluster_support.hpp"
 #include "sharding/engine_shard_set.hpp"
-#include "base/function.hpp"
-#include "absl/container/inlined_vector.h"
-#include "command_layer/command_registry.hpp"
+#include "sharding/op_status.hpp"
 using namespace base;
 namespace dfly {
 
@@ -20,12 +24,8 @@ using facade::OpResult;
 using facade::OpStatus;
 
 class Transaction {
-
-
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
-
-
 
  public:
   // struct RunnableResult {
@@ -52,53 +52,56 @@ class Transaction {
 
   static constexpr std::nullopt_t kShardArgs{std::nullopt};
 
-
   // 当前 shard 上的状态标志位。
   enum LocalMask : uint16_t {
-    // 该事务涉及此 shard（key hash 落到此 shard，或通过 InitGlobal/EnableAllShards 全局激活）。
+    // 该事务涉及此 shard（key hash 落到此 shard，或通过
+    // InitGlobal/EnableAllShards 全局激活）。
     // 在 InitByKeys 中设置；unique_shard_cnt_ > 0 的 shard 上此位必为 1。
     // IsActive() 以此位判断是否需要向该 shard 分发调度/执行/取消操作。
     ACTIVE = 1,
 
     // 回调已在调度阶段乐观执行（无需进入 TxQueue 排队）。
-    // 当 lock_granted && execute_optimistic 为真时，ScheduleInShard 内联执行回调，
-    // 后续 Execute() 跳过此 shard 不再 poll。RunCallback 返回后或下一轮 ScheduleInShard 时清除。
+    // 当 lock_granted && execute_optimistic 为真时，ScheduleInShard
+    // 内联执行回调，
+    // 后续 Execute() 跳过此 shard 不再 poll。RunCallback 返回后或下一轮
+    // ScheduleInShard 时清除。
     OPTIMISTIC_EXECUTION = 1 << 1,
 
     // 所有 key 级锁无竞争获取成功，可绕过 TxQueue 排序直接执行。
-    // ScheduleInShard 中 lock_granted 为真时置位；concluding hop 结束时（RunInShard）清除。
+    // ScheduleInShard 中 lock_granted 为真时置位；concluding hop
+    // 结束时（RunInShard）清除。
     // 仅在 KEYLOCK_ACQUIRED 已置位时有效。
     OUT_OF_ORDER = 1 << 2,
 
     // 已持有 fingerprint 级 key 锁。ScheduleInShard 中 Acquire() 成功后置位。
-    // RunInShard 中据此判断是否需要释放锁；CancelShardCb/expire 路径也据此决定是否 Release()。
+    // RunInShard 中据此判断是否需要释放锁；CancelShardCb/expire
+    // 路径也据此决定是否 Release()。
     // 全局事务不置此位（走 shard_lock 而非 fp lock）。
     KEYLOCK_ACQUIRED = 1 << 3,
 
-    // // 粘性标志：事务已通过 WatchInShard() 注册到 BlockingController 等待（如 BLPOP）。
-    // // 一旦设置永不撤销，标记此事务曾作为阻塞事务存在。与 AWAKED_Q 配合区分"首次注册等待"
+    // // 粘性标志：事务已通过 WatchInShard() 注册到 BlockingController 等待（如
+    // BLPOP）。
+    // // 一旦设置永不撤销，标记此事务曾作为阻塞事务存在。与 AWAKED_Q
+    // 配合区分"首次注册等待"
     // // 与"被唤醒后重执行"两种状态。
     // WAS_SUSPENDED = 1 << 4,
 
     // // 事务被 NotifySuspended() 从阻塞等待中唤醒（目标 key 已就绪）。
-    // // 每次唤醒最多设置一次；RunInShard 中据此驱动 BlockingController 清理（RemovedWatched），
+    // // 每次唤醒最多设置一次；RunInShard 中据此驱动 BlockingController
+    // 清理（RemovedWatched），
     // // 并保证事务挂起期间不释放锁。
     // AWAKED_Q = 1 << 5,
   };
 
-
-
-  Transaction(const CommandId* cid = nullptr); // todo 使用explicit 
+  Transaction(const CommandId* cid = nullptr);  // todo 使用explicit
   ~Transaction();
 
   OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args);
 
-  cppcoro::AsyncTask SingleHopAsync(RunnableType cb, std::coroutine_handle<> handle);
-
-
+  cppcoro::AsyncTask SingleHopAsync(RunnableType cb,
+                                    std::coroutine_handle<> handle);
 
   bool RunInShard(EngineShard* shard, std::string context);
-
 
   KeyLockArgs GetLockArgs(ShardId sid) const;
 
@@ -108,31 +111,19 @@ class Transaction {
 
   bool IsActive(ShardId sid) const;
 
-
-  TxId txid() const {
-    return txid_;
-  }
+  TxId txid() const { return txid_; }
 
   IntentLock::Mode LockMode() const;
 
   std::string_view Name() const;
 
-  uint32_t GetUniqueShardCnt() const {
-    return unique_shard_cnt_;
-  }
+  uint32_t GetUniqueShardCnt() const { return unique_shard_cnt_; }
 
   ShardId GetUniqueShard() const;
 
   std::optional<SlotId> GetUniqueSlotId() const;
 
-
-  bool IsScheduled() const {
-    return coordinator_state_ & COORD_SCHED;
-  }
-
-
-
-
+  bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
   DbContext GetDbContext() const {
     return DbContext{namespace_, db_index_, time_now_ms_};
@@ -142,19 +133,13 @@ class Transaction {
     return shard_data_[sid].pq_pos;
   }
 
-  const Namespace& GetNamespace() const {
-    return *namespace_;
-  }
+  const Namespace& GetNamespace() const { return *namespace_; }
 
   DbSlice& GetDbSlice(ShardId sid) const;
 
-  DbIndex GetDbIndex() const {
-    return db_index_;
-  }
+  DbIndex GetDbIndex() const { return db_index_; }
 
-  const CommandId* GetCId() const {
-    return cid_;
-  }
+  const CommandId* GetCId() const { return cid_; }
 
   // traverse (key, keyId) pairs on a shard
   class Slice {
@@ -188,15 +173,23 @@ class Transaction {
 
     Iterator begin() const {
       if (slices_.empty()) return end();
-      Iterator it{&slices_.front(), &slices_.back() + 1,
-                   slices_.front().first, step_, args_, {}};
+      Iterator it{&slices_.front(),
+                  &slices_.back() + 1,
+                  slices_.front().first,
+                  step_,
+                  args_,
+                  {}};
       it.val_ = {args_[it.idx_], it.idx_};
       return it;
     }
     Iterator end() const {
       if (slices_.empty()) return {nullptr, nullptr, 0, step_, args_, {}};
-      return {&slices_.back() + 1, &slices_.back() + 1,
-              slices_.back().second, step_, args_, {}};
+      return {&slices_.back() + 1,
+              &slices_.back() + 1,
+              slices_.back().second,
+              step_,
+              args_,
+              {}};
     }
 
     Transaction* trans_ = nullptr;
@@ -210,10 +203,7 @@ class Transaction {
     CmdArgList args_;
   };
 
-  const Slice& GetSlice(ShardId sid) const {
-    return key_slices_[SidToId(sid)];
-  }
-  
+  const Slice& GetSlice(ShardId sid) const { return key_slices_[SidToId(sid)]; }
 
   unsigned GetKeyNum() const { return kv_fp_.size(); }
 
@@ -222,15 +212,9 @@ class Transaction {
 #endif
 
  private:
-
-
-
-
   struct alignas(64) PerShardData {
-    PerShardData() {
-    }
-    PerShardData(PerShardData&& other) noexcept {
-    }
+    PerShardData() {}
+    PerShardData(PerShardData&& other) noexcept {}
 
     uint16_t local_mask = 0;
 
@@ -259,9 +243,7 @@ class Transaction {
     std::vector<IndexSlice> slices;
     unsigned key_step = 1;
 
-    void Clear() {
-      slices.clear();
-    }
+    void Clear() { slices.clear(); }
   };
 
   void InitBase(const Namespace* ns, DbIndex dbid, CmdArgList args);
@@ -270,13 +252,15 @@ class Transaction {
 
   void BuildShardIndex(const KeyIndex& keys, std::vector<PerShardCache>* out);
 
-  void InitShardData(absl::Span<const PerShardCache> shard_index, size_t num_args);
+  void InitShardData(absl::Span<const PerShardCache> shard_index,
+                     size_t num_args);
 
   void StoreKeysInArgs(const KeyIndex& key_index);
 
   cppcoro::task<> ScheduleInternal();
 
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic, std::string context);
+  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic,
+                       std::string context);
 
   void DispatchHop();
 
@@ -290,12 +274,12 @@ class Transaction {
 
   bool CanRunInlined() const;
 
-
   unsigned SidToId(ShardId sid) const {
     return sid < shard_data_.size() ? sid : 0;
   }
 
-  template <typename F> void IterateShards(F&& f) {
+  template <typename F>
+  void IterateShards(F&& f) {
     if (unique_shard_cnt_ == 1) {
       f(shard_data_[SidToId(unique_shard_id_)], unique_shard_id_);
     } else {
@@ -305,10 +289,10 @@ class Transaction {
     }
   }
 
-  template <typename F> void IterateActiveShards(F&& f) {
+  template <typename F>
+  void IterateActiveShards(F&& f) {
     IterateShards([&f](auto& sd, auto i) {
-      if (sd.local_mask & ACTIVE)
-        f(sd, i);
+      if (sd.local_mask & ACTIVE) f(sd, i);
     });
   }
 
@@ -328,19 +312,15 @@ class Transaction {
 
   const CommandId* cid_ = nullptr;
 
-
   TxId txid_{0};
 
   const Namespace* namespace_{nullptr};
   DbIndex db_index_{0};
   uint64_t time_now_ms_{0};
 
-
-
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
   UniqueSlotChecker unique_slot_checker_;
-
 
   uint8_t coordinator_state_ = 0;
 
@@ -349,33 +329,32 @@ class Transaction {
   std::atomic<bool> need_resume = false;
   std::atomic<uint16_t> resume_count_ = 1;
 
-  void InitBlockingController(std::coroutine_handle<> handle, unsigned blocking_count) {
+  void InitBlockingController(std::coroutine_handle<> handle,
+                              unsigned blocking_count) {
     handle_ = handle;
     assert(blocking_count_ == 0);
     blocking_count_ = blocking_count;
   }
   void ResumeIfNeed(std::string context) {
     // fetch_sub(1) == 1 保证只有一个调用者看到 blocking_count_ 降到 0
-    bool watch_resume = (context == "SingleHopAsync") || (context == "PollExecution");
+    bool watch_resume =
+        (context == "SingleHopAsync") || (context == "PollExecution");
     if (watch_resume) {
-      if (need_resume.load() && resume_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) { // 多个观察者，防止反复resume
+      if (need_resume.load() &&
+          resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
+              1) {  // 多个观察者，防止反复resume
         LOG(INFO) << "ResumeHandle";
         handle_.resume();
       }
-    }else { // RunCallBack
+    } else {  // RunCallBack
       if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        //LOG(INFO) << "事务: "<< id <<" FinishCoroTask resume coroutine, 上下文: " << context; // 临时
-        //assert(handle_.has_value()); 测试不断言，不std::nullopt的情况
+        // LOG(INFO) << "事务: "<< id <<" FinishCoroTask resume coroutine,
+        // 上下文: " << context; // 临时 assert(handle_.has_value());
+        // 测试不断言，不std::nullopt的情况
         need_resume.store(true);
-        //handle_ = std::nullopt;
-      }      
+        // handle_ = std::nullopt;
+      }
     }
-
-
-
-
-
-
   }
 
  private:
@@ -400,9 +379,5 @@ inline std::string CmdArgListToString(CmdArgList full_args) {
   }
   return out;
 }
-
-
-
-
 
 }  // namespace dfly

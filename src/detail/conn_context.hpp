@@ -10,9 +10,9 @@
 
 #include "cppcoro/task.hpp"
 #include "detail/common.hpp"
+#include "redis/facade/reply_builder.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard_set.hpp"
-#include "redis/facade/reply_builder.hpp"
 namespace dfly {
 
 class Connection;
@@ -52,16 +52,18 @@ class CommandContext {
  public:
   CommandContext() = default;
 
-  CommandContext(Transaction* transaction, const CommandId* cid, ReplyBuilder* reply_builder)
+  CommandContext(Transaction* transaction, const CommandId* cid,
+                 ReplyBuilder* reply_builder)
       : transaction_(transaction), cid_(cid), reply_builder_(reply_builder) {
-        assert(reply_builder_);
-      }
+    assert(reply_builder_);
+  }
   const CommandId* cid() const { return cid_; }
   Transaction* tx() const { return transaction_; }
   ReplyBuilder* rb() {
-    assert(reply_builder_); 
-    return reply_builder_; 
+    assert(reply_builder_);
+    return reply_builder_;
   }
+
  private:
   Transaction* transaction_;
   const CommandId* cid_;

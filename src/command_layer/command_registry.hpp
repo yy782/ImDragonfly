@@ -14,8 +14,6 @@
 
 namespace dfly {
 
-
-
 class CommandRegistry {
  public:
   CommandRegistry();

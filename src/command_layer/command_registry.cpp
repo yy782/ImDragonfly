@@ -10,8 +10,6 @@ namespace dfly {
 
 using namespace facade;
 
-
-
 CommandRegistry::CommandRegistry() {}
 
 CommandRegistry& CommandRegistry::operator<<(CommandId cmd) {

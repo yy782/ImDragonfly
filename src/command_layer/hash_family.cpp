@@ -45,7 +45,7 @@ CoroTask CmdHSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto value = args[3];
 
   auto cb = [key, field, value](Transaction* tx,
-                                 EngineShard* es) -> OpResult<int> {
+                                EngineShard* es) -> OpResult<int> {
     HashObject* hash = GetOrCreateHash(tx, es, key);
     if (!hash) {
       return OpStatus::WRONG_TYPE;
@@ -75,7 +75,7 @@ CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
   auto field = args[2];
 
   auto cb = [key, field](Transaction* tx,
-                          EngineShard* es) -> OpResult<std::string> {
+                         EngineShard* es) -> OpResult<std::string> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
 
@@ -117,7 +117,7 @@ CoroTask CmdHDel(CommandContext* cmd_cntx, CmdArgList args) {
   auto fields = args.subspan(2);
 
   auto cb = [key, fields](Transaction* tx,
-                           EngineShard* es) -> OpResult<size_t> {
+                          EngineShard* es) -> OpResult<size_t> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -244,12 +244,11 @@ void HLen(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterHashFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(HSet)
-      << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(HGet)
-      << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(HDel)
-      << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(HExists)
-      << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(HLen);
+  *registry << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(HSet)
+            << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(HGet)
+            << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(HDel)
+            << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(HExists)
+            << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(HLen);
 }
 
 }  // namespace dfly

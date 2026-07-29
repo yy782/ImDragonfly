@@ -404,15 +404,14 @@ void ZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterZSetFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"ZADD", CO::JOURNALED, 1, 1}.SetHandler(ZAdd)
-      << CI{"ZCARD", CO::READONLY, 1, 1}.SetHandler(ZCard)
-      << CI{"ZSCORE", CO::READONLY, 1, 1}.SetHandler(ZScore)
-      << CI{"ZREM", CO::JOURNALED, 1, 1}.SetHandler(ZRem)
-      << CI{"ZRANK", CO::READONLY, 1, 1}.SetHandler(ZRank)
-      << CI{"ZREVRANK", CO::READONLY, 1, 1}.SetHandler(ZRevRank)
-      << CI{"ZRANGE", CO::READONLY, 1, 1}.SetHandler(ZRange)
-      << CI{"ZREVRANGE", CO::READONLY, 1, 1}.SetHandler(ZRevRange);
+  *registry << CI{"ZADD", CO::JOURNALED, 1, 1}.SetHandler(ZAdd)
+            << CI{"ZCARD", CO::READONLY, 1, 1}.SetHandler(ZCard)
+            << CI{"ZSCORE", CO::READONLY, 1, 1}.SetHandler(ZScore)
+            << CI{"ZREM", CO::JOURNALED, 1, 1}.SetHandler(ZRem)
+            << CI{"ZRANK", CO::READONLY, 1, 1}.SetHandler(ZRank)
+            << CI{"ZREVRANK", CO::READONLY, 1, 1}.SetHandler(ZRevRank)
+            << CI{"ZRANGE", CO::READONLY, 1, 1}.SetHandler(ZRange)
+            << CI{"ZREVRANGE", CO::READONLY, 1, 1}.SetHandler(ZRevRange);
 }
 
 }  // namespace dfly

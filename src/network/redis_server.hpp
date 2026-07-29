@@ -14,12 +14,12 @@
 #include "command_layer/command_families.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/multi_family.hpp"
+#include "detail/conn_context.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "redis/facade/resp_buf.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
 #include "transaction_layer/transaction.hpp"
-#include "detail/conn_context.hpp"
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
@@ -29,16 +29,13 @@ inline RedisServer* ser = nullptr;
 class RedisSession : public yy::net::TcpConnection {
  public:
   RedisSession(int fd, const yy::net::Address& addr, yy::net::EventLoop* loop)
-      : TcpConnection(fd, addr, loop) {
-
-      }
+      : TcpConnection(fd, addr, loop) {}
   void init() {
     auto self = std::static_pointer_cast<RedisSession>(shared_from_this());
-    rb_.SetSendCallback([self](std::string&& s) {
-      self->RedisSend(std::move(s));
-    });
+    rb_.SetSendCallback(
+        [self](std::string&& s) { self->RedisSend(std::move(s)); });
 
-    context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);    
+    context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
   }
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
@@ -60,9 +57,10 @@ class RedisSession : public yy::net::TcpConnection {
       co_return;
     }
 
-    LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_) << " fd: " << client_fd;
-    
-    std::destroy_at(&transaction_); // 事务可能还没结束
+    LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_)
+              << " fd: " << client_fd;
+
+    std::destroy_at(&transaction_);  // 事务可能还没结束
     std::construct_at(&transaction_, ci);
     transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
                             args_);

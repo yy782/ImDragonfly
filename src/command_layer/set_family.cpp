@@ -242,12 +242,11 @@ void SIsMember(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterSetFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"SADD", CO::JOURNALED, 1, 1}.SetHandler(SAdd)
-      << CI{"SREM", CO::JOURNALED, 1, 1}.SetHandler(SRem)
-      << CI{"SMEMBERS", CO::READONLY, 1, 1}.SetHandler(SMembers)
-      << CI{"SCARD", CO::READONLY, 1, 1}.SetHandler(SCard)
-      << CI{"SISMEMBER", CO::READONLY, 1, 1}.SetHandler(SIsMember);
+  *registry << CI{"SADD", CO::JOURNALED, 1, 1}.SetHandler(SAdd)
+            << CI{"SREM", CO::JOURNALED, 1, 1}.SetHandler(SRem)
+            << CI{"SMEMBERS", CO::READONLY, 1, 1}.SetHandler(SMembers)
+            << CI{"SCARD", CO::READONLY, 1, 1}.SetHandler(SCard)
+            << CI{"SISMEMBER", CO::READONLY, 1, 1}.SetHandler(SIsMember);
 }
 
 }  // namespace dfly

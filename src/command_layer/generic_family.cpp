@@ -215,7 +215,6 @@ void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
   rb->BuildSimpleString("OK");
 }
 
-
 void GenericFamily::ShutDown(CommandContext*, CmdArgList) { ser->Stop(); }
 
 // void GenericFamily::Select(CmdArgList args, CommandContext* cmd_cntx) {
@@ -225,16 +224,21 @@ void GenericFamily::ShutDown(CommandContext*, CmdArgList) { ser->Stop(); }
 using CI = CommandId;
 void GenericFamily::Register(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
-      << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(&GenericFamily::Ping)
-      << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", 0, 1, 1}.SetHandler(&GenericFamily::Expire)
-      << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::ExpireTime)
-      << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(&GenericFamily::Client_Info)
-      << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(&GenericFamily::Client_Info)
-      << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(&GenericFamily::ShutDown);
+  *registry << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
+            << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Ping)
+            << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(
+                   &GenericFamily::Exists)
+            << CI{"EXPIRE", 0, 1, 1}.SetHandler(&GenericFamily::Expire)
+            << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(
+                   &GenericFamily::ExpireTime)
+            << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
+            << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Client_Info)
+            << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::Client_Info)
+            << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+                   &GenericFamily::ShutDown);
 }
 
 void RegisterGeneric(CommandRegistry* registry) {

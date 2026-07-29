@@ -105,8 +105,7 @@ CoroTask CmdRPush(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask CmdLPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx,
-                  EngineShard* es) -> OpResult<std::string> {
+  auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<std::string> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -150,8 +149,7 @@ CoroTask CmdLPop(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask CmdRPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx,
-                  EngineShard* es) -> OpResult<std::string> {
+  auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<std::string> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -231,7 +229,7 @@ CoroTask CmdLIndex(CommandContext* cmd_cntx, CmdArgList args) {
   int64_t index = std::stoll(std::string(args[2]));
 
   auto cb = [key, index](Transaction* tx,
-                          EngineShard* es) -> OpResult<std::string> {
+                         EngineShard* es) -> OpResult<std::string> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
 
@@ -271,7 +269,7 @@ CoroTask CmdLSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto value = args[3];
 
   auto cb = [key, index, value](Transaction* tx,
-                                 EngineShard* es) -> OpResult<void> {
+                                EngineShard* es) -> OpResult<void> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -354,7 +352,7 @@ CoroTask CmdLRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto value = args[3];
 
   auto cb = [key, count, value](Transaction* tx,
-                                 EngineShard* es) -> OpResult<size_t> {
+                                EngineShard* es) -> OpResult<size_t> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -392,7 +390,7 @@ CoroTask CmdLInsert(CommandContext* cmd_cntx, CmdArgList args) {
   auto value = args[4];
 
   auto cb = [key, pos, pivot, value](Transaction* tx,
-                                      EngineShard* es) -> OpResult<int> {
+                                     EngineShard* es) -> OpResult<int> {
     auto& db_slice = tx->GetDbSlice(es->shard_id());
     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
 
@@ -482,17 +480,16 @@ void LInsert(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterListFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry
-      << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(LPush)
-      << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(RPush)
-      << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(LPop)
-      << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(RPop)
-      << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(LLen)
-      << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(LIndex)
-      << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(LSet)
-      << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(LRange)
-      << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(LRem)
-      << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(LInsert);
+  *registry << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(LPush)
+            << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(RPush)
+            << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(LPop)
+            << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(RPop)
+            << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(LLen)
+            << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(LIndex)
+            << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(LSet)
+            << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(LRange)
+            << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(LRem)
+            << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(LInsert);
 }
 
 }  // namespace dfly

@@ -28,8 +28,8 @@ inline bool cluster_shard_by_slot = false;
 
 constexpr SlotId kMaxSlotNum = 0x3FFF;
 
-// A simple utility class that "aggregates" SlotId-s and can tell whether all inputs were the same.
-// Only works when cluster is enabled.
+// A simple utility class that "aggregates" SlotId-s and can tell whether all
+// inputs were the same. Only works when cluster is enabled.
 class UniqueSlotChecker {
  public:
   void Add(std::string_view key);
@@ -37,13 +37,9 @@ class UniqueSlotChecker {
 
   std::optional<SlotId> GetUniqueSlotId() const;
 
-  bool IsCrossSlot() const {
-    return slot_id_ == kCrossSlot;
-  }
+  bool IsCrossSlot() const { return slot_id_ == kCrossSlot; }
 
-  void Reset() {
-    slot_id_ = kNoSlotId;
-  }
+  void Reset() { slot_id_ = kNoSlotId; }
 
  private:
   // kNoSlotId - if slot wasn't set at all
@@ -70,9 +66,7 @@ inline bool IsClusterEnabledOrEmulated() {
   return IsClusterEnabled() || IsClusterEmulated();
 }
 
-inline bool IsClusterShardedBySlot() {
-  return detail::cluster_shard_by_slot;
-}
+inline bool IsClusterShardedBySlot() { return detail::cluster_shard_by_slot; }
 
 bool IsClusterShardedByTag();
 

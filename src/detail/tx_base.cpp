@@ -1,16 +1,14 @@
 #include "tx_base.hpp"
 
-#include <string_view>
 #include <functional>
+#include <string_view>
 namespace dfly {
 
-unsigned KeyIndex::operator*() const {
-  return start;
-}
+unsigned KeyIndex::operator*() const { return start; }
 
 KeyIndex& KeyIndex::operator++() {
-    start = std::min(end, start + step);
-    return *this;
+  start = std::min(end, start + step);
+  return *this;
 }
 
 bool KeyIndex::operator!=(const KeyIndex& ki) const {
@@ -18,11 +16,11 @@ bool KeyIndex::operator!=(const KeyIndex& ki) const {
 }
 
 LockTag::LockTag(std::string_view key) {
-  str_ = key; // 可能有问题，看源码
+  str_ = key;  // 可能有问题，看源码
 }
 
 LockFp LockTag::Fingerprint() const {
   return std::hash<std::string_view>{}(str_);
 }
 
-}
+}  // namespace dfly

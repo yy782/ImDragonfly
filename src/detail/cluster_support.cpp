@@ -3,8 +3,9 @@
 //
 #include "detail/cluster_support.hpp"
 
-#include <cstdint>
 #include <glog/logging.h>
+
+#include <cstdint>
 
 namespace dfly {
 
@@ -67,7 +68,7 @@ std::optional<SlotId> UniqueSlotChecker::GetUniqueSlotId() const {
 using namespace detail;
 
 void InitializeCluster() {
-  std::string cluster_mode_str = "yes"; // 不确定
+  std::string cluster_mode_str = "yes";  // 不确定
 
   if (cluster_mode_str == "emulated") {
     cluster_mode = ClusterMode::kEmulatedCluster;
@@ -81,7 +82,7 @@ void InitializeCluster() {
   }
 
   if (cluster_mode != ClusterMode::kNoCluster) {
-    cluster_shard_by_slot = false;// 不确定
+    cluster_shard_by_slot = false;  // 不确定
   }
 }
 

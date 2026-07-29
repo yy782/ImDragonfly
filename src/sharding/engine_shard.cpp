@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #include "engine_shard.hpp"
 
 #include <glog/logging.h>
@@ -23,7 +27,10 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 class Transaction;
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_(mi_resource_) {}
+    : proactor_(pb),
+      shard_id_(pb->id()),
+      mi_resource_(heap),
+      txq_(mi_resource_) {}
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
@@ -38,34 +45,32 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {}
 
-
 void EngineShard::PollExecution(Transaction* trans) {
   ShardId sid = shard_id();
   uint16_t flags = Transaction::OUT_OF_ORDER;
-  auto [trans_mask, disarmed] =
-      trans ? trans->DisarmInShardWhen(sid, flags) : std::make_pair(uint16_t(0), false);
-  if (trans && trans_mask == 0)  
-    return;
+  auto [trans_mask, disarmed] = trans ? trans->DisarmInShardWhen(sid, flags)
+                                      : std::make_pair(uint16_t(0), false);
+  if (trans && trans_mask == 0) return;
 
-  auto run = [this](Transaction* tx) -> bool  {
+  auto run = [this](Transaction* tx) -> bool {
     return tx->RunInShard(this, "PollExecution");
   };
 
   Transaction* head = nullptr;
 
-  //LOG(INFO) << "PollExecution in shard:"<< shard_id() << "txq_.Size(): "<< txq_.size();
+  // LOG(INFO) << "PollExecution in shard:"<< shard_id() << "txq_.Size(): "<<
+  // txq_.size();
   while (!txq_.Empty()) {
     head = txq_.Front();
     bool should_run = (head == trans && disarmed) || head->DisarmInShard(sid);
     if (!should_run) {
-      //LOG(INFO) << "PollExecution should_run false";
-       break;
+      // LOG(INFO) << "PollExecution should_run false";
+      break;
     }
-    if (head == trans)
-      trans = nullptr;
+    if (head == trans) trans = nullptr;
 
     TxId txid = head->txid();
- 
+
     committed_txid_ = txid;
     run(head);
   }
@@ -75,8 +80,5 @@ void EngineShard::PollExecution(Transaction* trans) {
     assert(concludes);
   }
 }
-
-
-
 
 }  // namespace dfly

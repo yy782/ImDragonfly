@@ -33,7 +33,7 @@ StringResult ReadString(DbIndex dbid, std::string_view key,
   (void)key;
   (void)es;
   // 分层存储扩展
-  //LOG(INFO) << "ReadString" << key << " " << pv.ToString();
+  // LOG(INFO) << "ReadString" << key << " " << pv.ToString();
 
   return StringResult{pv.ToString()};
 }
@@ -124,8 +124,6 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it,
         slice_.GetDbContext().GetDbIndex(), it,
         params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
   }
-
-
 }
 
 struct NegativeExpire {};  // Returned if relative expiry was in the past
@@ -159,7 +157,6 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
     return {};
   };
 
-
   co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
@@ -188,7 +185,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
-  
+
   co_return;
 }
 
@@ -222,7 +219,7 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
     if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
-      //LOG(INFO) << "CmdGet not found" << key;
+      // LOG(INFO) << "CmdGet not found" << key;
       return OpStatus::KEY_NOTFOUND;
     }
 
@@ -254,12 +251,14 @@ void MGET(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterStringFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}.SetHandler(Set)
-           << CI{"GET", CO::READONLY, 1, 1}.SetHandler(Get)
-           << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(MGET)
-           << CI{"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1}
-                  .SetInterleavedStep(2)
-                  .SetHandler(MSET);
+  *registry << CI{"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
+                   .SetHandler(Set)
+            << CI{"GET", CO::READONLY, 1, 1}.SetHandler(Get)
+            << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(MGET)
+            << CI{"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1,
+                  -1}
+                   .SetInterleavedStep(2)
+                   .SetHandler(MSET);
 }
 
 }  // namespace dfly

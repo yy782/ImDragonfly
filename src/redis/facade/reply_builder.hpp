@@ -62,7 +62,7 @@ class ReplyBuilder {
     reply_.append(std::to_string(items.size()));
     reply_.append("\r\n");
     for (const auto& item : items) {
-      AppendBulkStringRaw(item);   // 不触发 send，拼完统一发
+      AppendBulkStringRaw(item);  // 不触发 send，拼完统一发
     }
     DoSend();
   }
@@ -73,7 +73,7 @@ class ReplyBuilder {
     reply_.append(std::to_string(items.size()));
     reply_.append("\r\n");
     for (const auto& item : items) {
-      reply_.append(item);         // 各 item 已是编好的 RESP 片段
+      reply_.append(item);  // 各 item 已是编好的 RESP 片段
     }
     DoSend();
   }
@@ -88,8 +88,7 @@ class ReplyBuilder {
   }
 
   void DoSend() {
-    if (send_cb_)
-      send_cb_(std::move(reply_)); // TODO try 捕捉
+    if (send_cb_) send_cb_(std::move(reply_));  // TODO try 捕捉
   }
 
   std::string reply_;

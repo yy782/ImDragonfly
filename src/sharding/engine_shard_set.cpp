@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #include "engine_shard_set.hpp"
 
 #include <glog/logging.h>
@@ -41,8 +45,5 @@ void EngineShardSet::InitThreadLocal(yy::net::EventLoop* pb) {
   shards_[es->shard_id()] = es;
   base::Thread::set_cpu_affinity(es->shard_id());
 }
-
-
-
 
 }  // namespace dfly

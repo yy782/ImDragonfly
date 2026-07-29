@@ -255,9 +255,7 @@ void DbSlice::ExpireAllIfNeeded() {
 }
 
 void DbSlice::RegisterWatchedKey(std::string_view key,
-                                 ConnectionContext* conn_cntx) {
-
-}
+                                 ConnectionContext* conn_cntx) {}
 
 void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
   // auto& db = *db_arr_[db_ind];
@@ -285,7 +283,8 @@ void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx,
 }
 
 bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
-  if (lock_args.fps.empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+  if (lock_args.fps
+          .empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
     return true;
   }
   DCHECK_LT(lock_args.db_index, db_arr_.size());
@@ -298,7 +297,8 @@ bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
 }
 
 void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
-  if (lock_args.fps.empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+  if (lock_args.fps
+          .empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
     return;
   }
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;

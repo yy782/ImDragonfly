@@ -3,8 +3,9 @@
 //
 #pragma once
 #include <iostream>
-#include <span>
 #include <ranges>
+#include <span>
+
 #include "command_layer/cmn_types.hpp"
 #include "detail/common_types.hpp"
 #include "sharding/namespaces.hpp"
@@ -26,20 +27,17 @@ class LockTag {
   LockTag() = default;
   explicit LockTag(std::string_view key);
 
-  explicit operator std::string_view() const {
-    return str_;
-  }
+  explicit operator std::string_view() const { return str_; }
 
   LockFp Fingerprint() const;
 
   // To make it hashable.
-  template <typename H> friend H AbslHashValue(H h, const LockTag& tag) {
+  template <typename H>
+  friend H AbslHashValue(H h, const LockTag& tag) {
     return H::combine(std::move(h), tag.str_);
   }
 
-  bool operator==(const LockTag& o) const {
-    return str_ == o.str_;
-  }
+  bool operator==(const LockTag& o) const { return str_ == o.str_; }
 };
 
 class DbContext {
@@ -69,8 +67,7 @@ class DbContext {
 
 struct KeyIndex {
   KeyIndex(unsigned start = 0, unsigned end = 0, unsigned step = 1)
-      : start(start), end(end), step(step) {
-  }
+      : start(start), end(end), step(step) {}
 
   using iterator_category = std::forward_iterator_tag;
   using value_type = unsigned;
@@ -82,20 +79,17 @@ struct KeyIndex {
   KeyIndex& operator++();
   bool operator!=(const KeyIndex& ki) const;
 
-  unsigned NumArgs() const {
-    return (end - start + step - 1) / step;
-  }
+  unsigned NumArgs() const { return (end - start + step - 1) / step; }
 
   auto Range() const {
     return std::views::iota(0u, NumArgs()) |
-           std::views::transform([this](unsigned i) {
-               return start + i * step;
-           }); // 不确定
+           std::views::transform(
+               [this](unsigned i) { return start + i * step; });  // 不确定
   }
 
   auto Range(const cmn::ArgSlice& args) const {
-    return Range() | 
-           std::views::transform([args](unsigned idx) { return args[idx]; }); // 不确定
+    return Range() | std::views::transform(
+                         [args](unsigned idx) { return args[idx]; });  // 不确定
   }
 
  public:
