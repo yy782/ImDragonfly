@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(unit_tests
     db_table_test.cpp
     tx_queue_test.cpp
+    intent_lock_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
     incomplete-imdragonfly
