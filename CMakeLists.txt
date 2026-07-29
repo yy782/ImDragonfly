@@ -49,7 +49,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CXX_WARNING_OPTIONS
         -g -O0
         -rdynamic
-        -march=native
+        -march=x86-64-v3
         -Wall
         -Wextra                 #额外警告
         -Wpedantic              #严格遵守C++标准
@@ -64,7 +64,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 else()
     set(CXX_WARNING_OPTIONS
         -O3                     # 生产优化
-        -march=native
+        -march=x86-64-v3
         -DNDEBUG
         -Wall
         -Wextra
