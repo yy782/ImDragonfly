@@ -33,7 +33,7 @@ StringResult ReadString(DbIndex dbid, std::string_view key,
   (void)key;
   (void)es;
   // 分层存储扩展
-  LOG(INFO) << "ReadString" << key << " " << pv.ToString();
+  //LOG(INFO) << "ReadString" << key << " " << pv.ToString();
 
   return StringResult{pv.ToString()};
 }
@@ -125,8 +125,6 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it,
         params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
   }
 
-  LOG(INFO) << "AddNew " << key << " " << value << " it->second:" << it->second.ToString();
-
 
 }
 
@@ -161,10 +159,10 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
     return {};
   };
 
+
+  co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
-  co_await cmd::SingleHopT(cb);
-
   co_return;
 }
 
@@ -213,13 +211,6 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
   rb->BuildArray(std::move(vec));
-
-
-
-  for (int i = 0; i < 1000; ++i) {
-      __asm__ volatile("");
-  }
-
   co_return;
 }
 CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
@@ -230,7 +221,7 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
     if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
-      LOG(INFO) << "CmdGet not found" << key;
+      //LOG(INFO) << "CmdGet not found" << key;
       return OpStatus::KEY_NOTFOUND;
     }
 

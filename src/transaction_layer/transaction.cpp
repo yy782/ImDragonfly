@@ -10,12 +10,10 @@ namespace {
 
 
 std::atomic_uint64_t op_seq{1};
-
+std::atomic_uint64_t ids{1};
 constexpr size_t kTransSize [[maybe_unused]] = sizeof(Transaction);
 
-uint16_t trans_id(const Transaction* ptr) {
-  return (intptr_t(ptr) >> 8) & 0xFFFF;
-}
+
 
 struct ScheduleContext {
   Transaction* trans;
@@ -31,6 +29,9 @@ struct ScheduleContext {
 
 
 Transaction::Transaction(const CommandId* cid) : cid_{cid} {
+#ifndef NDEBUG
+  id = ids.fetch_add(1);
+#endif
   InitTxTime();
 }
 void Transaction::InitTxTime() {
@@ -226,57 +227,66 @@ uint16_t Transaction::DisarmInShard(ShardId sid) {
   return sd.is_armed.exchange(false, memory_order_acquire) ? sd.local_mask : 0;
 }
 
-void Transaction::SingleHopAsync(RunnableType cb, std::coroutine_handle<> handle) { 
+cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb, std::coroutine_handle<> handle) { 
   LOG(INFO) << "命令:" << CmdArgListToString(full_args_)
-            << " shard_id:" << unique_shard_id_
-            << " shard_cnt:" << unique_shard_cnt_
-            << " shard_set_size:" << shard_set->size();
+            << " shard_cnt:" << unique_shard_cnt_;
   coordinator_state_ |= COORD_CONCLUDING;
   cb_ptr_ = cb;
   InitBlockingController(handle, unique_shard_cnt_);
   if (unique_shard_cnt_ == 1) {
-    LOG(INFO) << "SingleHopAsync unique_shard_cnt_ == 1";
+    //LOG(INFO) << "SingleHopAsync unique_shard_cnt_ == 1";
     CHECK_EQ(shard_data_.size(), 1u);
     shard_data_.front().is_armed.store(true, memory_order_relaxed);
     run_barrier_->Add(1);
-    auto shard_cb = [this] {
-      bool success = ScheduleInShard(EngineShard::tlocal(), true);
+    auto shard_cb = [this] (std::string context = "SingleHopAsync: not CanRunInlined"){
+      bool success = ScheduleInShard(EngineShard::tlocal(), true, context);
       CHECK(success);  
       if (shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
-        LOG(INFO) << "SingleHopAsync shard_data_.front().local_mask & OPTIMISTIC_EXECUTION";
+        //LOG(INFO) << "SingleHopAsync shard_data_.front().local_mask & OPTIMISTIC_EXECUTION";
         run_barrier_->Dec();
       } else {
         EngineShard::tlocal()->PollExecution(this);
       }
     };
     if (CanRunInlined()) {
-      LOG(INFO) << "SingleHopAsync CanRunInlined";
-      shard_cb();
+      //LOG(INFO) << "SingleHopAsync CanRunInlined";
+      shard_cb("SingleHopAsync: CanRunInlined");
+      
     } 
     else {
-      LOG(INFO) << "SingleHopAsync not CanRunInlined";
+      //LOG(INFO) << "SingleHopAsync not CanRunInlined";
       shard_set->Add(unique_shard_id_, shard_cb);
     }
+    co_await run_barrier_->Wait();
   } else {
-    LOG(INFO) << "SingleHopAsync unique_shard_cnt_ > 1";
-    ScheduleInternal();
+    //LOG(INFO) << "SingleHopAsync unique_shard_cnt_ > 1";
+    co_await ScheduleInternal();
     DispatchHop();  
   }
+  ResumeIfNeed("SingleHopAsync");
+
+  co_return;
 }
 
-cppcoro::AsyncTask Transaction::ScheduleInternal() {
+cppcoro::task<> Transaction::ScheduleInternal() {
   bool optimistic_exec = (coordinator_state_ & COORD_CONCLUDING) &&
                          (unique_shard_cnt_ == 1 || (cid_->opt_mask() & CO::IDEMPOTENT)); // 幂等
   auto is_active = [this](uint32_t i) { return IsActive(i); };
+
+
+
+  IterateActiveShards([](auto& sd, auto i) {
+    DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
+  });
+
+
   while (true) {
     if (unique_shard_cnt_ > 1)
       txid_ = op_seq.fetch_add(1, memory_order_relaxed);
     run_barrier_->Start(unique_shard_cnt_);
 
-    InitBlockingController(handle_, unique_shard_cnt_);
-
     if (CanRunInlined()) {
-      bool success = ScheduleInShard(EngineShard::tlocal(), optimistic_exec);
+      bool success = ScheduleInShard(EngineShard::tlocal(), optimistic_exec, "ScheduleInternal:CanRunInlined");
       assert(success);
       run_barrier_->Dec();
       break;
@@ -284,7 +294,7 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
     ScheduleContext schedule_ctx{this, optimistic_exec};
     auto cb = [&schedule_ctx] {
       if (!schedule_ctx.trans->ScheduleInShard(EngineShard::tlocal(),
-                                               schedule_ctx.optimistic_execution)) {
+                                               schedule_ctx.optimistic_execution, "ScheduleInternal:cb")) {
         schedule_ctx.fail_cnt.fetch_add(1, memory_order_relaxed);
       }
       schedule_ctx.trans->FinishHop();
@@ -294,18 +304,22 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
     } else {
       IterateActiveShards([cb](const auto& sd, ShardId i) { shard_set->Add(i, cb); });
     }
-    co_await run_barrier_->Wait();  // 后面会改成协程
+    co_await run_barrier_->Wait();  
     if (schedule_ctx.fail_cnt.load(memory_order_relaxed) == 0) {
       break;
     }
     atomic_bool should_poll_execution{false};
-    auto cancel = [&](EngineShard* shard) {
+    run_barrier_->Start(unique_shard_cnt_);
+
+    auto cancel = [&, this](EngineShard* shard) {
       bool res = CancelShardCb(shard);
       if (res) {
         should_poll_execution.store(true, memory_order_relaxed);
       }
+      run_barrier_->Dec();
     };
     shard_set->DispatchBriefInParallel(std::move(cancel), is_active);
+    co_await run_barrier_->Wait();
     if (should_poll_execution.load(memory_order_relaxed)) {
       IterateActiveShards([](const auto& sd, auto i) {
         shard_set->Add(i, [] { EngineShard::tlocal()->PollExecution(nullptr); });
@@ -319,10 +333,11 @@ cppcoro::AsyncTask Transaction::ScheduleInternal() {
 }
 
 
-bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
+bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic, std::string context) {
   ShardId sid = SidToId(shard->shard_id());
   auto& sd = shard_data_[sid];
 
+  LOG(INFO) << "ScheduleInShard 在分片:" << shard->shard_id() << " sd掩码:" << sd.local_mask;
   DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
   sd.local_mask &= ~(OUT_OF_ORDER | OPTIMISTIC_EXECUTION);
 
@@ -336,20 +351,22 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   auto release_fp_locks = [&]() {
     GetDbSlice(shard->shard_id()).Release(mode, lock_args);
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
+    //LOG(INFO) << "LOCK 获取, 在分片:" << shard->shard_id() << " 由回调release_fp_locks清理";
   };
   lock_args = GetLockArgs(shard->shard_id());
   const bool keys_unlocked = GetDbSlice(shard->shard_id()).Acquire(mode, lock_args);
   lock_granted = keys_unlocked;
 
   sd.local_mask |= KEYLOCK_ACQUIRED;
+  //LOG(INFO) << "LOCK 获取, 在分片:" << shard->shard_id();
   if (lock_granted) {
-    LOG(INFO) << "ScheduleInShard lock_granted";
+    //LOG(INFO) << "ScheduleInShard lock_granted";
     sd.local_mask |= OUT_OF_ORDER;
   }
   if (lock_granted && execute_optimistic) {
     sd.local_mask |= OPTIMISTIC_EXECUTION;
-    LOG(INFO) << "ScheduleInShard execute_optimistic";
-    RunCallback(shard);
+    //LOG(INFO) << "ScheduleInShard execute_optimistic";
+    RunCallback(shard, context);
     if (coordinator_state_ & COORD_CONCLUDING) {
       release_fp_locks();
       return true;
@@ -417,14 +434,15 @@ bool Transaction::CanRunInlined() const {
   return false;
 }
 
-bool Transaction::RunInShard(EngineShard* shard) {
-  LOG(INFO) << "RunInShard";
+bool Transaction::RunInShard(EngineShard* shard, std::string context) {
+
+  //LOG(INFO) << "RunInShard";
   DCHECK_GT(txid_, 0u);
   unsigned idx = SidToId(shard->shard_id());
   auto& sd = shard_data_[idx];
 
   IntentLock::Mode mode = LockMode();
-  RunCallback(shard);
+  RunCallback(shard, context);
   bool is_concluding = coordinator_state_ & COORD_CONCLUDING;
   if (sd.pq_pos != TxQueue::kEnd) {
     shard->txq()->Remove(sd.pq_pos);
@@ -433,16 +451,20 @@ bool Transaction::RunInShard(EngineShard* shard) {
   if (is_concluding) {
       KeyLockArgs largs;
       largs = GetLockArgs(idx);
-      DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-      GetDbSlice(shard->shard_id()).Release(mode, largs);
-      sd.local_mask &= ~KEYLOCK_ACQUIRED;
+      //LOG(INFO) << "准备清理lock, 分片:" << shard->shard_id();
+      assert(sd.local_mask & KEYLOCK_ACQUIRED);
+      if (sd.local_mask & KEYLOCK_ACQUIRED) { // 和源码逻辑可能不一样，注意 
+        GetDbSlice(shard->shard_id()).Release(mode, largs);
+        sd.local_mask &= ~KEYLOCK_ACQUIRED;
+      }
       sd.local_mask &= ~OUT_OF_ORDER;
   }
-  FinishHop();  
+  FinishHop();
+  ResumeIfNeed(context);
   return is_concluding;
 }
 
-void Transaction::RunCallback(EngineShard* shard) {
+void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
   try {
     (*cb_ptr_)(this, shard);
     if (unique_shard_cnt_ == 1) {
@@ -451,7 +473,8 @@ void Transaction::RunCallback(EngineShard* shard) {
   } catch (std::exception& e) {
     LOG(FATAL) << "Unexpected exception " << e.what();
   }
-  FinishCoroTask(); // 不确定对不对
+  //LOG(INFO) << "RunCallback!";
+  ResumeIfNeed("RunCallback");
 }
 
 bool Transaction::CancelShardCb(EngineShard* shard) {

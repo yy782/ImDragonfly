@@ -60,12 +60,14 @@ class RedisSession : public yy::net::TcpConnection {
       co_return;
     }
 
-    std::destroy_at(&transaction_);
+    LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_) << " fd: " << client_fd;
+    
+    std::destroy_at(&transaction_); // 事务可能还没结束
     std::construct_at(&transaction_, ci);
     transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
                             args_);
-    CommandContext cmd_cntx(&transaction_, ci, &rb_, fd_);
-    ci->Invoke(&cmd_cntx, args_);
+    cmd_cntx_ = CommandContext(&transaction_, ci, &rb_, fd_);
+    ci->Invoke(&cmd_cntx_, args_);
     co_return;
   }
 
@@ -94,6 +96,7 @@ class RedisSession : public yy::net::TcpConnection {
   ConnectionContext context_;
   Transaction transaction_;
   ReplyBuilder rb_;
+  CommandContext cmd_cntx_;
 };
 
 class RedisServer {

@@ -20,6 +20,7 @@ void EngineShardSet::Init(uint32_t sz) {
   pp_->AwaitOnAll([this](yy::net::EventLoop* pb) { InitThreadLocal(pb); });
 
   namespaces = new Namespaces();
+  namespaces->init();
   LOG(INFO) << "EngineShardSet initialized with " << sz
             << " shards and namespace support";
 }

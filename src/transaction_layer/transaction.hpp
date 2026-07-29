@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "sharding/op_status.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
@@ -91,12 +93,11 @@ class Transaction {
 
   OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args);
 
-  void SingleHopAsync(RunnableType cb, std::coroutine_handle<> handle);
+  cppcoro::AsyncTask SingleHopAsync(RunnableType cb, std::coroutine_handle<> handle);
 
-  template <typename F> 
-  auto ScheduleSingleHopT(F&& f) -> decltype(f(this, nullptr));
 
-  bool RunInShard(EngineShard* shard);
+
+  bool RunInShard(EngineShard* shard, std::string context);
 
 
   KeyLockArgs GetLockArgs(ShardId sid) const;
@@ -213,6 +214,12 @@ class Transaction {
   unsigned GetKeyNum() const { return kv_fp_.size(); }
 
  private:
+
+#ifndef NDEBUG
+  int id;
+#endif
+
+
   struct alignas(64) PerShardData {
     PerShardData() {
     }
@@ -261,15 +268,15 @@ class Transaction {
 
   void StoreKeysInArgs(const KeyIndex& key_index);
 
-  cppcoro::AsyncTask ScheduleInternal();
+  cppcoro::task<> ScheduleInternal();
 
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
+  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic, std::string context);
 
   void DispatchHop();
 
   void FinishHop();
 
-  void RunCallback(EngineShard* shard);
+  void RunCallback(EngineShard* shard, std::string context);
 
   bool CancelShardCb(EngineShard* shard);
 
@@ -333,19 +340,36 @@ class Transaction {
 
   std::coroutine_handle<> handle_;
   std::atomic<uint16_t> blocking_count_ = 0;
-
+  std::atomic<bool> need_resume = false;
+  std::atomic<uint16_t> resume_count_ = 1;
 
   void InitBlockingController(std::coroutine_handle<> handle, unsigned blocking_count) {
     handle_ = handle;
+    assert(blocking_count_ == 0);
     blocking_count_ = blocking_count;
   }
-  void FinishCoroTask() {
-    blocking_count_.fetch_sub(1, std::memory_order_relaxed);
-    if (blocking_count_ == 0) {
-      assert(handle_);
-      LOG(INFO) << "FinishCoroTask handle_ != nullptr";
-      handle_.resume();
+  void ResumeIfNeed(std::string context) {
+    // fetch_sub(1) == 1 保证只有一个调用者看到 blocking_count_ 降到 0
+    bool watch_resume = (context == "SingleHopAsync") || (context == "PollExecution");
+    if (watch_resume) {
+      if (need_resume.load() && resume_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) { // 多个观察者，防止反复resume
+        LOG(INFO) << "ResumeHandle";
+        handle_.resume();
+      }
+    }else { // RunCallBack
+      if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        //LOG(INFO) << "事务: "<< id <<" FinishCoroTask resume coroutine, 上下文: " << context; // 临时
+        //assert(handle_.has_value()); 测试不断言，不std::nullopt的情况
+        need_resume.store(true);
+        //handle_ = std::nullopt;
+      }      
     }
+
+
+
+
+
+
   }
 
  private:

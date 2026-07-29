@@ -25,7 +25,9 @@ DbSlice& Namespace::GetCurrentDbSlice() const {
 DbSlice& Namespace::GetDbSlice(ShardId sid) const {
   return *shard_db_slices_[sid];
 }
-Namespaces::Namespaces() {  }
+Namespaces::Namespaces() {  
+  default_namespace_ = &GetOrInsert("");
+}
 
 Namespaces::~Namespaces() { Clear(); }
 
@@ -46,11 +48,10 @@ void Namespaces::Clear() {
 
   namespaces_.clear();
 }
-
+void Namespaces::init() {  
+  
+}
 Namespace& Namespaces::GetDefaultNamespace() const {
-  if (default_namespace_ == nullptr) {
-    default_namespace_ = &GetOrInsert("");
-  }
   return *default_namespace_;
 }
 
