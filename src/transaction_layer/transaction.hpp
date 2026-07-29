@@ -207,10 +207,12 @@ class Transaction {
 
   unsigned GetKeyNum() const { return kv_fp_.size(); }
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(UNIT_TESTS)
   int id;
 #endif
-
+#ifdef UNIT_TESTS
+  void set_txid(int id) { txid_ = id; }
+#endif
  private:
   struct alignas(64) PerShardData {
     PerShardData() {}
