@@ -379,13 +379,13 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic, s
     DCHECK_GT(txid_, shard->committed_txid());
   }
 
-  if (!txq->Empty() && txid_ < txq->TailScore() && !lock_granted) {
+  if (!txq->Empty() && txid_ < txq->Back()->txid() && !lock_granted) {
     if (sd.local_mask & KEYLOCK_ACQUIRED) {
       release_fp_locks();
     }
     return false;
   }
-  TxQueue::Iterator it = txq->Insert(this);
+  TxQueue::Iterator it = txq->Push(this);
   DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
   sd.pq_pos = it;
   return true;
@@ -445,7 +445,7 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
   RunCallback(shard, context);
   bool is_concluding = coordinator_state_ & COORD_CONCLUDING;
   if (sd.pq_pos != TxQueue::kEnd) {
-    shard->txq()->Remove(sd.pq_pos);
+    shard->txq()->Pop(sd.pq_pos);
     sd.pq_pos = TxQueue::kEnd;
   }
   if (is_concluding) {
@@ -486,8 +486,8 @@ bool Transaction::CancelShardCb(EngineShard* shard) {
     return false;
   }
   TxQueue* txq = shard->txq();
-  bool was_head = txq->Head() == q_pos;
-  txq->Remove(q_pos);
+  bool was_head = txq->Front()->GetTxQueuePos(idx) == q_pos;
+  txq->Pop(q_pos);
   auto lock_args = GetLockArgs(shard->shard_id());
   DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
   DCHECK(!lock_args.fps.empty());

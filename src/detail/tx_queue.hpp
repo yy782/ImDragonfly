@@ -1,117 +1,53 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
 #pragma once
 
 #include <cstdint>
-#include <functional>
-#include <variant>
+#include <string>
 #include <vector>
 
+#include "stateless_alloceator.hpp"
 namespace dfly {
 
 class Transaction;
 
-// TxQueue implemmented as a circular doubly-linked list.
 class TxQueue {
-  void Link(uint32_t p, uint32_t n) {
-    uint32_t next = vec_[p].next;
-    vec_[n].next = next;
-    vec_[n].prev = p;
-    vec_[p].next = n;
-    vec_[next].prev = n;
-  }
-
  public:
-  // uint64_t is used for unit-tests.
-  using ValueType = std::variant<Transaction*, uint64_t>;
   using Iterator = uint32_t;
   enum { kEnd = Iterator(-1) };
 
-  TxQueue(std::function<uint64_t(const Transaction*)> score_fun = nullptr);
+  explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
+      : vec_(mr) {}
 
-  // returns iterator to that item the list
-  Iterator Insert(Transaction* t);
-
-  Iterator Insert(uint64_t val);
-  void Remove(Iterator);
-
-  ValueType At(Iterator it) const {
-    switch (vec_[it].tag) {
-      case TRANS_TAG:
-        return vec_[it].u.trans;
-      case UINT_TAG:
-        return vec_[it].u.uval;
-    }
-    return 0u;
+  Iterator Push(Transaction* t);
+  void Pop(Iterator& it);
+  void Pop() {
+    Iterator it = head_;
+    Pop(it);
   }
-
-  ValueType Front() const {
-    return At(head_);
-  }
-
-  void PopFront() {
-    Remove(head_);
-  }
-
-  size_t size() const {
-    return size_;
-  }
-
-  bool Empty() const {
-    return size_ == 0;
-  }
-
-  //! returns the score of the tail record. Can be called only if !Empty().
-  uint64_t TailScore() const {
-    return Rank(vec_[vec_[head_].prev]);
-  }
-
-  //! returns the score of the head record. Can be called only if !Empty().
-  uint64_t HeadScore() const {
-    return Rank(vec_[head_]);
-  }
-
-  //! Can be called only if !Empty().
-  Iterator Head() const {
-    return head_;
-  }
-
-  // Returns the next iterator, it's circular so it always returns a valid
-  // iterator. Can be called only if !Empty().
-  Iterator Next(Iterator it) const {
-    return vec_[it].next;
-  }
+  Transaction* Front();
+  Transaction* Back();
+  size_t Size() const;
+  bool Empty() const { return head_ == kEnd; }
+  bool IsInFreeList(Iterator it) const;
+  bool IsInUsedList(Iterator it) const;
+  // friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);
+  std::string PrintTxLock() const;
+  std::string PrintFreeList() const;
+  std::string PrintUsedList() const;
 
  private:
-  enum { TRANS_TAG = 0, UINT_TAG = 11, FREE_TAG = 12 };
-
   void Grow();
-  void LinkFree(uint64_t rank);
-
-  struct QRecord {
-    union {
-      Transaction* trans;
-      uint64_t uval;
-    } u;
-
-    uint32_t tag : 8;
-    uint32_t next : 24;
-    uint32_t prev;
-
-    QRecord() : tag(FREE_TAG), prev(kEnd) {
-    }
+  Iterator AllocateNode();
+  void FreeNode(Iterator it);
+  struct Node {
+    Transaction* trans = nullptr;
+    Iterator next = kEnd;
+    Iterator prev = kEnd;
   };
 
-  static_assert(sizeof(QRecord) == 16, "");
-
-  uint64_t Rank(const QRecord& r) const;
-
-  std::function<uint64_t(const Transaction*)> score_fun_;
-  std::vector<QRecord> vec_;
-  uint32_t next_free_ = 0, head_ = kEnd;
-  size_t size_ = 0;
-
+  std::vector<Node, PMR_NS::polymorphic_allocator<Node>> vec_;
+  uint32_t tail_ = kEnd;
+  uint32_t head_ = kEnd;
+  uint32_t free_head_ = kEnd;
   TxQueue(const TxQueue&) = delete;
 };
 

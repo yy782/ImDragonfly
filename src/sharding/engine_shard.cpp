@@ -23,7 +23,7 @@ void EngineShard::InitThreadLocal(yy::net::EventLoop* pb) {
 }
 class Transaction;
 EngineShard::EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_([](const Transaction* t) { return t->txid(); }) {}
+    : proactor_(pb), shard_id_(pb->id()), mi_resource_(heap), txq_(mi_resource_) {}
 
 void EngineShard::DestroyThreadLocal() {
   if (!shard_) return;
@@ -55,7 +55,7 @@ void EngineShard::PollExecution(Transaction* trans) {
 
   //LOG(INFO) << "PollExecution in shard:"<< shard_id() << "txq_.Size(): "<< txq_.size();
   while (!txq_.Empty()) {
-    head = get<Transaction*>(txq_.Front());
+    head = txq_.Front();
     bool should_run = (head == trans && disarmed) || head->DisarmInShard(sid);
     if (!should_run) {
       //LOG(INFO) << "PollExecution should_run false";

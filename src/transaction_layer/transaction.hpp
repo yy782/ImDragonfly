@@ -138,6 +138,10 @@ class Transaction {
     return DbContext{namespace_, db_index_, time_now_ms_};
   }
 
+  TxQueue::Iterator& GetTxQueuePos(ShardId sid) {
+    return shard_data_[sid].pq_pos;
+  }
+
   const Namespace& GetNamespace() const {
     return *namespace_;
   }
@@ -213,11 +217,13 @@ class Transaction {
 
   unsigned GetKeyNum() const { return kv_fp_.size(); }
 
- private:
-
 #ifndef NDEBUG
   int id;
 #endif
+
+ private:
+
+
 
 
   struct alignas(64) PerShardData {
