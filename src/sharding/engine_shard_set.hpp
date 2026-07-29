@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #pragma once
 #include <latch>
 
@@ -22,7 +26,11 @@ class EngineShardSet {
   template <typename F>
   auto Add(ShardId sid, F&& f) {
     assert(sid < size_);
-    return shards_[sid]->GetQueue()->AsyncAdd(std::forward<F>(f));
+    bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
+    // 暂时使用TryAdd,
+    // 以后测试了AsyncAdd()函数的准确性，再切换，release下出错，切debug模式就ok了
+    assert(success);
+    return success;
   }
   template <typename U>
   void RunBlockingInParallel(U&& func) {

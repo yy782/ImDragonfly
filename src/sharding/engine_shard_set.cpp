@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #include "engine_shard_set.hpp"
 
 #include <glog/logging.h>
@@ -20,6 +24,7 @@ void EngineShardSet::Init(uint32_t sz) {
   pp_->AwaitOnAll([this](yy::net::EventLoop* pb) { InitThreadLocal(pb); });
 
   namespaces = new Namespaces();
+  namespaces->init();
   LOG(INFO) << "EngineShardSet initialized with " << sz
             << " shards and namespace support";
 }

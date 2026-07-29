@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
+#include "stateless_alloceator.hpp"
 namespace dfly {
 
 class Transaction;
@@ -12,40 +14,40 @@ class TxQueue {
   using Iterator = uint32_t;
   enum { kEnd = Iterator(-1) };
 
-  TxQueue() = default;
+  explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
+      : vec_(mr) {}
 
-  Iterator Insert(Iterator it, Transaction* t);
-  void Remove(Iterator it);
-  Transaction* At(Iterator it) const { return vec_[it].trans; }
-  Transaction* Front() const { return At(head_); }
-  Transaction* Back() const { return At(tail_); }
-  void PopFront() { Remove(head_); }
-  void PopBack() { Remove(tail_); }
-  size_t Size() const { return size_; }
-  bool Empty() const { return size_ == 0; }
-  Iterator Head() const { return head_; }
-  Iterator Tail() const { return tail_; }
-  Iterator Next(Iterator it) const { return vec_[it].next; }
-  Iterator Prev(Iterator it) const { return vec_[it].prev; }
+  Iterator Push(Transaction* t);
+  void Pop(Iterator& it);
+  void Pop() {
+    Iterator it = head_;
+    Pop(it);
+  }
+  Transaction* Front();
+  Transaction* Back();
+  size_t Size() const;
+  bool Empty() const { return head_ == kEnd; }
+  bool IsInFreeList(Iterator it) const;
+  bool IsInUsedList(Iterator it) const;
+  // friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);
+  std::string PrintTxLock() const;
+  std::string PrintFreeList() const;
+  std::string PrintUsedList() const;
 
  private:
   void Grow();
   Iterator AllocateNode();
   void FreeNode(Iterator it);
-
   struct Node {
     Transaction* trans = nullptr;
-    uint32_t next = kEnd;
-    uint32_t prev = kEnd;
-    bool used = false;  // 标记节点是否在使用
+    Iterator next = kEnd;
+    Iterator prev = kEnd;
   };
 
-  std::vector<Node> vec_;
-  uint32_t next_free_ = kEnd;  // 空闲链表头
-  uint32_t head_ = kEnd;       // 链表头
-  uint32_t tail_ = kEnd;       // 链表尾
-  size_t size_ = 0;
-
+  std::vector<Node, PMR_NS::polymorphic_allocator<Node>> vec_;
+  uint32_t tail_ = kEnd;
+  uint32_t head_ = kEnd;
+  uint32_t free_head_ = kEnd;
   TxQueue(const TxQueue&) = delete;
 };
 

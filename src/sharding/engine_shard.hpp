@@ -1,3 +1,7 @@
+// Copyright 2024, DragonflyDB authors.  All rights reserved.
+// See LICENSE for licensing terms.
+//
+
 #pragma once
 #include <mimalloc.h>
 
@@ -30,16 +34,15 @@ class EngineShard {
   ShardId shard_id() const { return shard_id_; }
   PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
   base::TaskQueue* GetQueue() { return proactor_->GetTaskQueue(); }
+  yy::net::EventLoop* GetLoop() { return proactor_; }
 
   void PollExecution(Transaction* trans);
 
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }
 
-  DbSlice* GetDbSlice(ShardId sid);
-
   size_t committed_txid() const { return committed_txid_; }
-  void AddCommittedTxid(Transaction* trans) { committed_txid_++; }
+  void AddCommittedTxid() { committed_txid_++; }
 
  private:
   EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap);
