@@ -46,7 +46,7 @@ void Namespaces::Clear() {
 
   namespaces_.clear();
 }
-
+void Namespaces::init() {}
 Namespace& Namespaces::GetDefaultNamespace() const {
   return *default_namespace_;
 }

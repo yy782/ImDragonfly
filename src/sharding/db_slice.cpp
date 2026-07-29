@@ -255,11 +255,7 @@ void DbSlice::ExpireAllIfNeeded() {
 }
 
 void DbSlice::RegisterWatchedKey(std::string_view key,
-                                 ConnectionContext* conn_cntx) {
-  db_arr_[conn_cntx->GetDbIndex()]
-      ->watched_keys_[std::string(key)]
-      .emplace_back(conn_cntx);
-}
+                                 ConnectionContext* conn_cntx) {}
 
 void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
   // auto& db = *db_arr_[db_ind];
@@ -283,50 +279,30 @@ void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
 
 void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx,
                                     const std::vector<std::string_view>& keys) {
-  auto& db = *db_arr_[conn_cntx->GetDbIndex()];
-  for (const auto& key : keys) {
-    if (auto wit = db.watched_keys_.find(std::string(key));
-        wit != db.watched_keys_.end()) {  // 这里需要优化
-      auto& vec = wit->second;
-      for (auto& key_cntx : vec) {
-        if (key_cntx.conn_context != conn_cntx)
-          continue;  // 这里是同步删除，一定是安全的
-        std::erase(wit->second, key_cntx);
-      }
-      if (wit->second.empty()) {
-        db.watched_keys_.erase(wit);
-      }
-    }
-  }
+
 }
 
-bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args,
-                      Transaction* tx) {
-  assert(!lock_args.fps.empty());
-  (void)tx;
+bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
+  if (lock_args.fps
+          .empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+    return true;
+  }
+  DCHECK_LT(lock_args.db_index, db_arr_.size());
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
-  bool all_locked = true;
-  int i = 0;
-  for (; i < lock_args.fps.size(); i++) {
-    if (!lt.Acquire(lock_args.fps[i], mode)) {
-      all_locked = false;
-      break;
-    }
+  bool lock_acquired = true;
+  for (LockFp fp : lock_args.fps) {
+    lock_acquired &= lt.Acquire(fp, mode);
   }
-  if (!all_locked) {
-    for (int j = 0; j <= i; j++) {
-      lt.Release(lock_args.fps[j], mode);
-    }
-  }
-
-  return all_locked;
+  return lock_acquired;
 }
 
-void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args,
-                      Transaction* tx) {
-  assert(!lock_args.fps.empty());
-  (void)tx;
+void DbSlice::Release(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
+  if (lock_args.fps
+          .empty()) {  // Can be empty for NO_KEY_TRANSACTIONAL commands.
+    return;
+  }
   auto& lt = db_arr_[lock_args.db_index]->trans_locks;
+
   for (LockFp fp : lock_args.fps) {
     lt.Release(fp, mode);
   }

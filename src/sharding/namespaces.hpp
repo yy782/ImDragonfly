@@ -41,7 +41,7 @@ class Namespaces {
  public:
   Namespaces();
   ~Namespaces();
-
+  void init();
   void Clear();
 
   Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
