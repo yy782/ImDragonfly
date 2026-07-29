@@ -4,6 +4,6 @@
 
 namespace dfly {
 
-ConnectionContext::~ConnectionContext() {  }
+ConnectionContext::~ConnectionContext() { ClearWatchKeys(); }
 
 }  // namespace dfly

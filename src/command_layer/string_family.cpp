@@ -33,7 +33,6 @@ StringResult ReadString(DbIndex dbid, std::string_view key,
   (void)key;
   (void)es;
   // 分层存储扩展
-  LOG(INFO) << "ReadString" << key << " " << pv.ToString();
 
   return StringResult{pv.ToString()};
 }
@@ -124,10 +123,6 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it,
         slice_.GetDbContext().GetDbIndex(), it,
         params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
   }
-
-  LOG(INFO) << "AddNew " << key << " " << value << " it->second:" << it->second.ToString();
-
-
 }
 
 struct NegativeExpire {};  // Returned if relative expiry was in the past
@@ -160,11 +155,9 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
     }
     return {};
   };
-
-  auto* rb = cmd_cntx->rb();
-  rb->BuildSimpleString("OK");
   co_await cmd::SingleHopT(cb);
-
+  auto* t = cmd_cntx->tx();
+  t->CollectedResult(BuildSimpleString("OK"));
   co_return;
 }
 
@@ -188,9 +181,14 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
   auto result = co_await cmd::SingleHopT(cb);
 
-  auto* rb = cmd_cntx->rb();
-  rb->BuildSimpleString("OK");
-  
+  auto* t = cmd_cntx->tx();
+
+  if (result.status() == OpStatus::OK) {
+    t->CollectedResult(BuildSimpleString("OK"));
+  } else {
+    t->CollectedResult(BuildError("ERR"));
+  }
+
   co_return;
 }
 
@@ -211,14 +209,8 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
     return {};
   };
   co_await cmd::SingleHopT(cb);
-  auto* rb = cmd_cntx->rb();
-  rb->BuildArray(std::move(vec));
-
-
-
-  for (int i = 0; i < 1000; ++i) {
-      __asm__ volatile("");
-  }
+  auto* t = cmd_cntx->tx();
+  t->CollectedResult(BuildArray(std::move(vec)));
 
   co_return;
 }
@@ -230,18 +222,17 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
     if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
-      LOG(INFO) << "CmdGet not found" << key;
       return OpStatus::KEY_NOTFOUND;
     }
 
     return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
   };
   auto result = co_await cmd::SingleHopT(cb);
-  auto* rb = cmd_cntx->rb();
+  auto* t = cmd_cntx->tx();
   if (result.status() == OpStatus::OK) {
-    rb->BuildBulkString(result.value());
+    t->CollectedResult(BuildBulkString(result.value()));
   } else {
-    rb->BuildNullBulkString();
+    t->CollectedResult(BuildBulkString(std::string()));
   }
 
   co_return;
@@ -262,12 +253,12 @@ void MGET(CommandContext* cmd_cntx, CmdArgList args) {
 
 void RegisterStringFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}.SetHandler(Set)
-           << CI{"GET", CO::READONLY, 1, 1}.SetHandler(Get)
-           << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(MGET)
-           << CI{"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1}
-                  .SetInterleavedStep(2)
-                  .SetHandler(MSET);
+  *registry << CI{"SET", /*keys_start*/ 1, /*keys_nums*/ 1,
+                  /*keys_offset*/ kInvalidKeysOffset}
+                   .SetHandler(Set)
+            << CI{"GET", 1, 1, kInvalidKeysOffset, CO::READABLE}.SetHandler(Get)
+            << CI{"MGET", 1, kInvalidKeysNum, 1, CO::READABLE}.SetHandler(MGET)
+            << CI{"MSET", 1, kInvalidKeysNum, 2}.SetHandler(MSET);
 }
 
 }  // namespace dfly

@@ -66,9 +66,8 @@ class Coro {
 
     bool await_ready() const noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<Coro> coro) noexcept {
-      cmd_cntx_->tx()->SingleHopAsync(*this, coro);
-      return;
+    bool await_suspend(std::coroutine_handle<Coro> coro) noexcept {
+      return !cmd_cntx_->tx()->Scheduling(coro, *this);  // tx执行完恢复权柄
     }
 
     void operator()(Transaction* tx, EngineShard* es) const {

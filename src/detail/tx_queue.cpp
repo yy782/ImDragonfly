@@ -1,115 +1,88 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
-#include "detail/tx_queue.hpp"
+#include "tx_queue.hpp"
 
-#include <glog/logging.h>
-
+#include <cassert>
 namespace dfly {
 
-TxQueue::TxQueue(std::function<uint64_t(const Transaction*)> sf)
-    : score_fun_(sf), vec_(32) {
-  for (size_t i = 0; i < vec_.size(); ++i) {
-    vec_[i].next = i + 1;
-  }
-}
-
-auto TxQueue::Insert(Transaction* t) -> Iterator {
-  if (next_free_ >= vec_.size()) {
-    Grow();
-  }
-  DCHECK_LT(next_free_, vec_.size());
-  DCHECK_EQ(FREE_TAG, vec_[next_free_].tag);
-
-  Iterator res = next_free_;
-  vec_[next_free_].u.trans = t;
-  vec_[next_free_].tag = TRANS_TAG;
-  DVLOG(1) << "Insert " << next_free_ << " " << t;
-  LinkFree(score_fun_(t));
-  return res;
-}
-
-auto TxQueue::Insert(uint64_t val) -> Iterator {
-  if (next_free_ >= vec_.size()) {
-    Grow();
-  }
-  DCHECK_LT(next_free_, vec_.size());
-
-  Iterator res = next_free_;
-
-  vec_[next_free_].u.uval = val;
-  vec_[next_free_].tag = UINT_TAG;
-
-  LinkFree(val);
-  return res;
-}
-
-void TxQueue::LinkFree(uint64_t weight) {
-  uint32_t taken = next_free_;
-  next_free_ = vec_[taken].next;
-
-  if (size_ == 0) {
-    head_ = taken;
-    vec_[head_].next = vec_[head_].prev = head_;
-  } else {
-    uint32_t cur = vec_[head_].prev;
-    while (true) {
-      if (Rank(vec_[cur]) < weight) {
-        Link(cur, taken);
-        break;
-      }
-      if (cur == head_) {
-        Link(vec_[head_].prev, taken);
-        head_ = taken;
-        break;
-      }
-      cur = vec_[cur].prev;
-    }
-  }
-  ++size_;
-}
-
 void TxQueue::Grow() {
-  size_t start = vec_.size();
-  DVLOG(1) << "Grow from " << start << " to " << start * 2;
+  uint32_t old_size = vec_.size();
+  uint32_t new_size = old_size == 0 ? 16 : old_size * 2;
+  vec_.resize(new_size);
 
-  vec_.resize(start * 2);
-  for (size_t i = start; i < vec_.size(); ++i) {
+  // 将新节点加入空闲链表
+  for (uint32_t i = old_size; i < new_size - 1; ++i) {
     vec_[i].next = i + 1;
+    vec_[i].used = false;
   }
+  vec_[new_size - 1].next = kEnd;
+  vec_[new_size - 1].used = false;
+
+  next_free_ = old_size;
+}
+
+TxQueue::Iterator TxQueue::AllocateNode() {
+  if (next_free_ == kEnd) {
+    Grow();
+  }
+
+  uint32_t idx = next_free_;
+  next_free_ = vec_[idx].next;
+  vec_[idx].used = true;
+  vec_[idx].next = kEnd;
+  vec_[idx].prev = kEnd;
+  return idx;
+}
+
+void TxQueue::FreeNode(Iterator it) {
+  if (!vec_[it].used) {
+    return;
+  }
+
+  vec_[it].used = false;
+  vec_[it].trans = nullptr;
+  vec_[it].next = next_free_;
+  vec_[it].prev = kEnd;
+  next_free_ = it;
+}
+
+TxQueue::Iterator TxQueue::Insert(Iterator it, Transaction* t) {
+  assert(it == kEnd);
+  Iterator new_node = AllocateNode();
+  vec_[new_node].trans = t;
+
+  if (head_ == kEnd) {
+    // 空链表
+    head_ = tail_ = new_node;
+  } else {
+    // 链接到头部
+    vec_[new_node].next = head_;
+    vec_[head_].prev = new_node;
+    head_ = new_node;
+  }
+
+  ++size_;
+  return new_node;
 }
 
 void TxQueue::Remove(Iterator it) {
-  DCHECK_GT(size_, 0u);
-  DCHECK_LT(it, vec_.size());
-  DCHECK_NE(FREE_TAG, vec_[it].tag);
-
-  DVLOG(1) << "Remove " << it << " " << vec_[it].u.trans;
-  Iterator next = kEnd;
-  if (size_ > 1) {
-    Iterator prev = vec_[it].prev;
-    next = vec_[it].next;
-
-    vec_[prev].next = next;
-    vec_[next].prev = prev;
+  if (it == kEnd || !vec_[it].used) {
+    return;
   }
+
+  // 从链表中移除
+  if (vec_[it].prev != kEnd) {
+    vec_[vec_[it].prev].next = vec_[it].next;
+  } else {
+    head_ = vec_[it].next;  // 移除的是头节点
+  }
+
+  if (vec_[it].next != kEnd) {
+    vec_[vec_[it].next].prev = vec_[it].prev;
+  } else {
+    tail_ = vec_[it].prev;  // 移除的是尾节点
+  }
+
+  FreeNode(it);
   --size_;
-  vec_[it].next = next_free_;
-  vec_[it].tag = FREE_TAG;
-  next_free_ = it;
-  if (head_ == it) {
-    head_ = next;
-  }
-}
-
-uint64_t TxQueue::Rank(const QRecord& r) const {
-  switch (r.tag) {
-    case UINT_TAG:
-      return r.u.uval;
-    case TRANS_TAG:
-      return score_fun_(r.u.trans);
-  }
-  return 0;
 }
 
 }  // namespace dfly

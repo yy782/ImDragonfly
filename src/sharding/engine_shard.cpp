@@ -38,41 +38,17 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {}
 
-
 void EngineShard::PollExecution(Transaction* trans) {
-  ShardId sid = shard_id();
-  uint16_t flags = Transaction::OUT_OF_ORDER;
-  auto [trans_mask, disarmed] =
-      trans ? trans->DisarmInShardWhen(sid, flags) : std::make_pair(uint16_t(0), false);
-  if (trans && trans_mask == 0)  
-    return;
-
-  auto run = [this](Transaction* tx) -> bool  {
-    return tx->RunInShard(this);
-  };
-
-  Transaction* head = nullptr;
-
+  (void)trans;
   while (!txq_.Empty()) {
-    head = get<Transaction*>(txq_.Front());
-    bool should_run = (head == trans && disarmed) || head->DisarmInShard(sid);
-    if (!should_run)
+    auto tx = txq_.Front();
+    bool concluded = tx->RunInShard(this);
+    if (!concluded) {
       break;
-    if (head == trans)
-      trans = nullptr;
-
-    TxId txid = head->txid();
- 
-    committed_txid_ = txid;
-    run(head);
-  }
-  if (trans && disarmed) {
-    DCHECK(trans_mask & Transaction::OUT_OF_ORDER);
-    bool concludes = run(trans);
+    }
   }
 }
 
-
-
+DbSlice* EngineShard::GetDbSlice(ShardId sid) { return nullptr; }
 
 }  // namespace dfly
