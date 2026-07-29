@@ -201,7 +201,7 @@ void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
     kv_fp_.push_back(LockTag(key).Fingerprint());
 }
 
-Transaction::~Transaction() {}
+Transaction::~Transaction() { assert(std::uncaught_exceptions() == 0); }
 
 std::pair<uint16_t, bool> Transaction::DisarmInShardWhen(
     ShardId sid, uint16_t relevant_flags) {

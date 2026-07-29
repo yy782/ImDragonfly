@@ -57,8 +57,8 @@ class RedisSession : public yy::net::TcpConnection {
       co_return;
     }
 
-    LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_)
-              << " fd: " << client_fd;
+    // LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_)
+    //           << " fd: " << client_fd;
 
     std::destroy_at(&transaction_);  // 事务可能还没结束
     std::construct_at(&transaction_, ci);
