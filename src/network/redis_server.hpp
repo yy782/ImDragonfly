@@ -105,10 +105,6 @@ class RedisServer {
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
     // // RegisterMulti(CIs);
-    RegisterListFamily(CIs);
-    RegisterHashFamily(CIs);
-    RegisterSetFamily(CIs);
-    RegisterZSetFamily(CIs);
     ser = this;
 
     server_.setConnectCallBack(

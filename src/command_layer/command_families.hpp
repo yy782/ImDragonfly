@@ -13,9 +13,5 @@ class CommandRegistry;
 
 void RegisterStringFamily(CommandRegistry*);
 void RegisterGeneric(CommandRegistry*);
-void RegisterListFamily(CommandRegistry*);
-void RegisterHashFamily(CommandRegistry*);
-void RegisterSetFamily(CommandRegistry*);
-void RegisterZSetFamily(CommandRegistry*);
 
 }  // namespace dfly

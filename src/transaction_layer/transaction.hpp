@@ -346,7 +346,7 @@ class Transaction {
       if (need_resume.load() &&
           resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
               1) {  // 多个观察者，防止反复resume
-        //LOG(INFO) << "ResumeHandle";
+        // LOG(INFO) << "ResumeHandle";
         handle_.resume();
       }
     } else {  // RunCallBack
