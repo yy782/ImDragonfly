@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -52,26 +53,28 @@ TEST_F(TxQueueTest, BasicFIFO) {
   EXPECT_EQ(q_->Back(), nullptr);
 
   // 2. Push 后 FIFO 出队
-  Transaction tx1, tx3, tx2;
-  tx1.set_txid(1);
-  tx2.set_txid(2);
-  tx3.set_txid(3);
-  q_->Push(&tx1);
-  q_->Push(&tx2);
-  q_->Push(&tx3);
+  auto tx1 = std::make_shared<Transaction>();
+  auto tx2 = std::make_shared<Transaction>();
+  auto tx3 = std::make_shared<Transaction>();
+  tx1->set_txid(1);
+  tx2->set_txid(2);
+  tx3->set_txid(3);
+  q_->Push(tx1);
+  q_->Push(tx2);
+  q_->Push(tx3);
 
   EXPECT_FALSE(q_->Empty());
   EXPECT_EQ(q_->Size(), 3u);
-  EXPECT_EQ(q_->Front(), &tx1);
-  EXPECT_EQ(q_->Back(), &tx3);
-  EXPECT_EQ(q_->Front(), &tx1);
+  EXPECT_EQ(q_->Front(), tx1);
+  EXPECT_EQ(q_->Back(), tx3);
+  EXPECT_EQ(q_->Front(), tx1);
   q_->Pop();
   EXPECT_EQ(q_->Size(), 2u);
-  EXPECT_EQ(q_->Front(), &tx2);
+  EXPECT_EQ(q_->Front(), tx2);
 
   q_->Pop();
   EXPECT_EQ(q_->Size(), 1u);
-  EXPECT_EQ(q_->Front(), &tx3);
+  EXPECT_EQ(q_->Front(), tx3);
 
   q_->Pop();
 
@@ -82,21 +85,21 @@ TEST_F(TxQueueTest, BasicFIFO) {
   EXPECT_EQ(q_->Back(), nullptr);
 
   // 4. 空队列后重新 Push 仍然正常工作
-  q_->Push(&tx1);
+  q_->Push(tx1);
   EXPECT_FALSE(q_->Empty());
   EXPECT_EQ(q_->Size(), 1u);
-  EXPECT_EQ(q_->Front(), &tx1);
+  EXPECT_EQ(q_->Front(), tx1);
   q_->Pop();
   EXPECT_TRUE(q_->Empty());
 }
 
 TEST_F(TxQueueTest, SingleElement) {
-  Transaction tx1;
-  tx1.set_txid(1);
-  q_->Push(&tx1);
+  auto tx1 = std::make_shared<Transaction>();
+  tx1->set_txid(1);
+  q_->Push(tx1);
 
-  EXPECT_EQ(q_->Front(), &tx1);
-  EXPECT_EQ(q_->Back(), &tx1);
+  EXPECT_EQ(q_->Front(), tx1);
+  EXPECT_EQ(q_->Back(), tx1);
   EXPECT_EQ(q_->Size(), 1u);
 
   q_->Pop();
@@ -105,16 +108,19 @@ TEST_F(TxQueueTest, SingleElement) {
 
 TEST_F(TxQueueTest, PopSpecificIterator) {
   // 测试带参数 Pop(Iterator) 从中间移除
-  Transaction tx1, tx2, tx3, tx4;
-  tx1.set_txid(1);
-  tx2.set_txid(2);
-  tx3.set_txid(3);
-  tx4.set_txid(4);
-  q_->Push(&tx1);
+  auto tx1 = std::make_shared<Transaction>();
+  auto tx2 = std::make_shared<Transaction>();
+  auto tx3 = std::make_shared<Transaction>();
+  auto tx4 = std::make_shared<Transaction>();
+  tx1->set_txid(1);
+  tx2->set_txid(2);
+  tx3->set_txid(3);
+  tx4->set_txid(4);
+  q_->Push(tx1);
 
-  q_->Push(&tx2);
-  auto it3 = q_->Push(&tx3);
-  q_->Push(&tx4);
+  q_->Push(tx2);
+  auto it3 = q_->Push(tx3);
+  q_->Push(tx4);
 
   EXPECT_EQ(q_->Size(), 4u);
 
@@ -123,64 +129,68 @@ TEST_F(TxQueueTest, PopSpecificIterator) {
   EXPECT_EQ(q_->Size(), 3u);
 
   // 验证剩余顺序是 tx1, tx2, tx4
-  EXPECT_EQ(q_->Front(), &tx1);
+  EXPECT_EQ(q_->Front(), tx1);
   q_->Pop();
 
-  EXPECT_EQ(q_->Front(), &tx2);
+  EXPECT_EQ(q_->Front(), tx2);
   q_->Pop();
 
-  EXPECT_EQ(q_->Front(), &tx4);
+  EXPECT_EQ(q_->Front(), tx4);
   q_->Pop();
 
   EXPECT_TRUE(q_->Empty());
 }
 
 TEST_F(TxQueueTest, PopFromHead) {
-  Transaction tx1, tx2;
-  tx1.set_txid(1);
-  tx2.set_txid(2);
-  auto it1 = q_->Push(&tx1);
-  q_->Push(&tx2);
+  auto tx1 = std::make_shared<Transaction>();
+  auto tx2 = std::make_shared<Transaction>();
+  tx1->set_txid(1);
+  tx2->set_txid(2);
+  auto it1 = q_->Push(tx1);
+  q_->Push(tx2);
 
   q_->Pop(it1);  // 从头移除
   EXPECT_EQ(q_->Size(), 1u);
-  EXPECT_EQ(q_->Front(), &tx2);
+  EXPECT_EQ(q_->Front(), tx2);
 }
 
 TEST_F(TxQueueTest, PopFromTail) {
-  Transaction tx1, tx2;
-  tx1.set_txid(1);
-  tx2.set_txid(2);
-  q_->Push(&tx1);
-  auto it2 = q_->Push(&tx2);
+  auto tx1 = std::make_shared<Transaction>();
+  auto tx2 = std::make_shared<Transaction>();
+  tx1->set_txid(1);
+  tx2->set_txid(2);
+  q_->Push(tx1);
+  auto it2 = q_->Push(tx2);
 
   q_->Pop(it2);  // 从尾移除
   EXPECT_EQ(q_->Size(), 1u);
-  EXPECT_EQ(q_->Front(), &tx1);
-  EXPECT_EQ(q_->Back(), &tx1);
+  EXPECT_EQ(q_->Front(), tx1);
+  EXPECT_EQ(q_->Back(), tx1);
 }
 
 TEST_F(TxQueueTest, PushPopAlternating) {
-  Transaction tx1, tx2, tx3;
+  auto tx1 = std::make_shared<Transaction>();
+  auto tx2 = std::make_shared<Transaction>();
+  auto tx3 = std::make_shared<Transaction>();
 
-  tx1.set_txid(1);
-  tx2.set_txid(2);
-  tx3.set_txid(3);
-  q_->Push(&tx1);
-  q_->Push(&tx2);
+  tx1->set_txid(1);
+  tx2->set_txid(2);
+  tx3->set_txid(3);
+  q_->Push(tx1);
+  q_->Push(tx2);
   EXPECT_EQ(q_->Size(), 2u);
 
   q_->Pop();  // 移除 tx1
   EXPECT_EQ(q_->Size(), 1u);
-  EXPECT_EQ(q_->Front(), &tx2);
+  EXPECT_EQ(q_->Front(), tx2);
 
-  q_->Push(&tx3);  // 追加 tx3
+  q_->Push(tx3);  // 追加 tx3
   EXPECT_EQ(q_->Size(), 2u);
-  EXPECT_EQ(q_->Front(), &tx2);
-  EXPECT_EQ(q_->Back(), &tx3);
+  EXPECT_EQ(q_->Front(), tx2);
+  EXPECT_EQ(q_->Back(), tx3);
 
   q_->Pop();  // 移除 tx2
-  EXPECT_EQ(q_->Front(), &tx3);
+  EXPECT_EQ(q_->Front(), tx3);
   q_->Pop();  // 移除 tx3
   EXPECT_TRUE(q_->Empty());
 }
@@ -229,7 +239,7 @@ TEST_F(TxQueueTest, MultiConcurrent) {  // 不稳定测试
       args.push_back(CmdArgList{all_views[i]});
     }
 
-    std::vector<std::unique_ptr<Transaction>> txs;
+    std::vector<std::shared_ptr<Transaction>> txs;
 
     auto* cid = CIs->Find("MSET");
     ASSERT_NE(cid, nullptr);
@@ -243,9 +253,9 @@ TEST_F(TxQueueTest, MultiConcurrent) {  // 不稳定测试
       rbs[i].SetSendCallback([&finish_count](std::string&&) {
         finish_count.fetch_add(1, std::memory_order_release);
       });
-      auto* tx = new Transaction(cid);
+      auto tx = std::make_shared<Transaction>(cid);
       tx->id = i;
-      txs.push_back(std::unique_ptr<Transaction>(tx));
+      txs.push_back(tx);
       cmd_cntxs.emplace_back(tx, cid, &rbs[i]);
     }
 
@@ -293,8 +303,8 @@ TEST_F(TxQueueTest, MultiConcurrent) {  // 不稳定测试
         mget_done.store(1);
       });
 
-      Transaction mget_tx(mget_cid);
-      mget_tx.id = Count;
+      auto mget_tx = std::make_shared<Transaction>(mget_cid);
+      mget_tx->id = Count;
 
       std::vector<std::string> mget_strings;
       mget_strings.push_back("MGET");
@@ -307,10 +317,10 @@ TEST_F(TxQueueTest, MultiConcurrent) {  // 不稳定测试
       }
       CmdArgList mget_args{mget_views};
 
-      CommandContext mget_cntx(&mget_tx, mget_cid, &mget_rb);
+      CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
       shard_set->Add(0, [&]() {
-        mget_tx.InitByArgs(Namespace, db_index, mget_args);
+        mget_tx->InitByArgs(Namespace, db_index, mget_args);
         mget_cid->Invoke(&mget_cntx, mget_args);
       });
 
@@ -331,10 +341,10 @@ TEST_F(TxQueueTest, MultiConcurrent) {  // 不稳定测试
       }
 
       bool found = false;
-      for (int i = 0; i < Count; ++i) {
+      for (int j = 0; j < Count; ++j) {
         bool match = true;
         for (int k = 0; k < KeyCount; ++k) {
-          std::string expected = all_cmd_strings[i][1 + k * 2 + 1];
+          std::string expected = all_cmd_strings[j][1 + k * 2 + 1];
           if (mget_values[k] != expected) {
             match = false;
             break;

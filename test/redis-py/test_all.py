@@ -87,7 +87,9 @@ def test_expiretime(clean_redis):
 # ═══════════════════════════════════════════════════════════
 
 @pytest.mark.concurrent
-def test_concurrent_mset_mget(clean_redis, pytestconfig):  # 测试服务端还是会崩溃，等完善调试工具再修
+def test_concurrent_mset_mget(clean_redis, pytestconfig):  
+    # 测试服务端还是会崩溃，等完善调试工具再修,
+    # 目前测试稳定了，应该还是事务对象生命周期导致UB
     """多线程并发 MSET/MGET 测试.
 
     3 个线程, 各用独立连接, 各执行 100 轮:

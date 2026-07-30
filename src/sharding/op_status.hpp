@@ -24,8 +24,6 @@ class OpResultBase {
 
   bool ok() const { return st_ == OpStatus::OK; }
 
-  const char* DebugFormat() const;
-
  private:
   OpStatus st_;
 };
@@ -70,7 +68,5 @@ class OpResult<void> : public OpResultBase {
 inline bool operator==(OpStatus st, const OpResultBase& ob) {
   return ob.operator==(st);
 }
-
-std::string_view StatusToMsg(OpStatus status);
 
 }  // namespace facade

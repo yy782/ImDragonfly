@@ -36,7 +36,7 @@ class EngineShard {
   base::TaskQueue* GetQueue() { return proactor_->GetTaskQueue(); }
   yy::net::EventLoop* GetLoop() { return proactor_; }
 
-  void PollExecution(Transaction* trans);
+  void PollExecution(std::shared_ptr<Transaction> trans);
 
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }

@@ -4,6 +4,7 @@
 
 #pragma once
 #include <latch>
+#include <memory>
 
 #include "Time.hpp"
 #include "YY/net/EventLoopThreadPool.h"

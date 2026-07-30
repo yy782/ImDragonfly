@@ -30,7 +30,7 @@ TxQueue::Iterator TxQueue::AllocateNode() {
   return idx;
 }
 
-TxQueue::Iterator TxQueue::Push(Transaction* t) {
+TxQueue::Iterator TxQueue::Push(std::shared_ptr<Transaction> t) {
   // auto* e = EngineShard::tlocal();
   //  auto sid = e->shard_id();
   //  auto& tx_it = t->GetPos(sid);
@@ -47,10 +47,10 @@ TxQueue::Iterator TxQueue::Push(Transaction* t) {
   //  }
 
   Iterator new_node = AllocateNode();
-  vec_[new_node].trans = t;
+  vec_[new_node].trans = std::move(t);
   Iterator it = tail_;
   while (it != kEnd) {
-    if (vec_[it].trans->txid() <= t->txid()) {
+    if (vec_[it].trans->txid() <= vec_[new_node].trans->txid()) {
       break;
     }
     it = vec_[it].prev;
@@ -109,25 +109,25 @@ void TxQueue::Pop(Iterator& it) {
   }
   vec_[it].next = free_head_;
   vec_[it].prev = kEnd;
-  vec_[it].trans = nullptr;
+  vec_[it].trans.reset();
   free_head_ = it;
   it = kEnd;
 }
 
-Transaction* TxQueue::Front() {
+std::shared_ptr<Transaction> TxQueue::Front() {
   if (head_ == kEnd) {
     return nullptr;
   }
-  auto* t = vec_[head_].trans;
+  auto t = vec_[head_].trans;
   assert(t);
   return t;
 }
 
-Transaction* TxQueue::Back() {
+std::shared_ptr<Transaction> TxQueue::Back() {
   if (tail_ == kEnd) {
     return nullptr;
   }
-  auto* t = vec_[tail_].trans;
+  auto t = vec_[tail_].trans;
   assert(t);
   return t;
 }
@@ -202,7 +202,7 @@ std::string TxQueue::PrintTxLock() const {
   uint32_t it = head_;
   std::string lock_str;
   while (it != kEnd) {
-    auto* t = vec_[it].trans;
+    auto& t = vec_[it].trans;
 #ifdef UNIT_TESTS
     lock_str += "事务: ";
     lock_str += std::to_string(t->id);

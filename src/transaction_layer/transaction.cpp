@@ -17,13 +17,13 @@ std::atomic_uint64_t op_seq{1};
 constexpr size_t kTransSize [[maybe_unused]] = sizeof(Transaction);
 
 struct ScheduleContext {
-  Transaction* trans;
+  std::shared_ptr<Transaction> trans;
   bool optimistic_execution = false;
 
   std::atomic_uint32_t fail_cnt{0};
 
-  ScheduleContext(Transaction* t, bool optimistic)
-      : trans(t), optimistic_execution(optimistic) {}
+  ScheduleContext(std::shared_ptr<Transaction> t, bool optimistic)
+      : trans(std::move(t)), optimistic_execution(optimistic) {}
 };
 
 }  // namespace
@@ -231,18 +231,20 @@ cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
     CHECK_EQ(shard_data_.size(), 1u);
     shard_data_.front().is_armed.store(true, memory_order_relaxed);
     run_barrier_->Add(1);
-    auto shard_cb = [this](std::string context =
-                               "SingleHopAsync: not CanRunInlined") {
-      bool success = ScheduleInShard(EngineShard::tlocal(), true, context);
-      CHECK(success);
-      if (shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
-        // LOG(INFO) << "SingleHopAsync shard_data_.front().local_mask &
-        // OPTIMISTIC_EXECUTION";
-        run_barrier_->Dec();
-      } else {
-        EngineShard::tlocal()->PollExecution(this);
-      }
-    };
+    auto shard_cb =
+        [self = shared_from_this()](std::string context =
+                                        "SingleHopAsync: not CanRunInlined") {
+          bool success =
+              self->ScheduleInShard(EngineShard::tlocal(), true, context);
+          CHECK(success);
+          if (self->shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
+            // LOG(INFO) << "SingleHopAsync shard_data_.front().local_mask &
+            // OPTIMISTIC_EXECUTION";
+            self->run_barrier_->Dec();
+          } else {
+            EngineShard::tlocal()->PollExecution(self);
+          }
+        };
     if (CanRunInlined()) {
       // LOG(INFO) << "SingleHopAsync CanRunInlined";
       shard_cb("SingleHopAsync: CanRunInlined");
@@ -285,7 +287,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       run_barrier_->Dec();
       break;
     }
-    ScheduleContext schedule_ctx{this, optimistic_exec};
+    ScheduleContext schedule_ctx{shared_from_this(), optimistic_exec};
     auto cb = [&schedule_ctx] {
       if (!schedule_ctx.trans->ScheduleInShard(
               EngineShard::tlocal(), schedule_ctx.optimistic_execution,
@@ -307,12 +309,12 @@ cppcoro::task<> Transaction::ScheduleInternal() {
     atomic_bool should_poll_execution{false};
     run_barrier_->Start(unique_shard_cnt_);
 
-    auto cancel = [&, this](EngineShard* shard) {
-      bool res = CancelShardCb(shard);
+    auto cancel = [&, self = shared_from_this()](EngineShard* shard) {
+      bool res = self->CancelShardCb(shard);
       if (res) {
         should_poll_execution.store(true, memory_order_relaxed);
       }
-      run_barrier_->Dec();
+      self->run_barrier_->Dec();
     };
     shard_set->DispatchBriefInParallel(std::move(cancel), is_active);
     co_await run_barrier_->Wait();
@@ -384,7 +386,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
     }
     return false;
   }
-  TxQueue::Iterator it = txq->Push(this);
+  TxQueue::Iterator it = txq->Push(shared_from_this());
   DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
   sd.pq_pos = it;
   return true;
@@ -409,13 +411,13 @@ void Transaction::DispatchHop() {
   });
 
   if (CanRunInlined()) {
-    EngineShard::tlocal()->PollExecution(this);
+    EngineShard::tlocal()->PollExecution(shared_from_this());
     return;
   }
 
-  auto poll_cb = [this] {
-    CHECK(namespace_ != nullptr);
-    EngineShard::tlocal()->PollExecution(this);
+  auto poll_cb = [self = shared_from_this()] {
+    CHECK(self->namespace_ != nullptr);
+    EngineShard::tlocal()->PollExecution(self);
   };
   IterateShards([&poll_cb, &poll_flags](PerShardData& /*sd*/, auto i) {
     if (poll_flags.test(i)) shard_set->Add(i, poll_cb);

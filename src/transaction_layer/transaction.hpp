@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include "absl/container/inlined_vector.h"
@@ -24,30 +25,11 @@ using namespace ::cmn;
 using facade::OpResult;
 using facade::OpStatus;
 
-class Transaction {
+class Transaction : public std::enable_shared_from_this<Transaction> {
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
  public:
-  // struct RunnableResult {
-  //   enum Flag : uint16_t {
-  //     AVOID_CONCLUDING = 1,
-  //   };
-
-  //   RunnableResult(OpStatus status = OpStatus::OK, uint16_t flags = 0)
-  //       : status(status), flags(flags) {
-  //   }
-
-  //   operator OpStatus() const {
-  //     return status;
-  //   }
-
-  //   OpStatus status;
-  //   uint16_t flags;
-  // };
-
-  // static_assert(sizeof(RunnableResult) == 4);
-
   using time_point = ::std::chrono::steady_clock::time_point;
   using RunnableType = base::FunctionRef<void(Transaction* t, EngineShard*)>;
 
@@ -299,7 +281,8 @@ class Transaction {
     });
   }
 
-  ::dfly::BlockingCounter run_barrier_{0};
+  //::dfly::BlockingCounter run_barrier_{0}; // 会导致极高的P99.9 延迟
+  base::BlockingCounter run_barrier_{0};
 
   absl::InlinedVector<PerShardData, 4> shard_data_;
 
