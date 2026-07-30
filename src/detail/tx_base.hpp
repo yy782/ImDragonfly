@@ -82,14 +82,19 @@ struct KeyIndex {
   unsigned NumArgs() const { return (end - start + step - 1) / step; }
 
   auto Range() const {
+    unsigned s = start, e = end, st = step; // 由ASAN报告，2026.7.30 -- 1 修改
     return std::views::iota(0u, NumArgs()) |
            std::views::transform(
-               [this](unsigned i) { return start + i * step; });  // 不确定
+               [s, st](unsigned i) { return s + i * st; });
   }
 
   auto Range(const cmn::ArgSlice& args) const {
-    return Range() | std::views::transform(
-                         [args](unsigned idx) { return args[idx]; });  // 不确定
+    unsigned s = start, e = end, st = step; // 由ASAN报告，2026.7.30 -- 1 修改
+    return std::views::iota(0u, NumArgs()) |
+           std::views::transform(
+               [s, st](unsigned i) { return s + i * st; }) |
+           std::views::transform(
+               [args](unsigned idx) { return args[idx]; });
   }
 
  public:

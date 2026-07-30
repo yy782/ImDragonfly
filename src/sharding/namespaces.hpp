@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
+#include <absl/container/node_hash_map.h>
 
 #include <memory>
 #include <shared_mutex>
@@ -49,7 +49,7 @@ class Namespaces {
 
  private:
   std::shared_mutex rw_mutex_;
-  absl::flat_hash_map<std::string, Namespace> namespaces_;
+  absl::node_hash_map<std::string, Namespace> namespaces_;
   Namespace* default_namespace_ = nullptr;
 };
 
