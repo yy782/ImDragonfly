@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <glog/logging.h>
+
+#include <memory>
 #include <optional>
 
 #include "absl/container/inlined_vector.h"
 #include "base/function.hpp"
 #include "command_layer/command_registry.hpp"
-#include "detail/cluster_support.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/op_status.hpp"
+#include "sharding/synchronization.hpp"
 using namespace base;
 namespace dfly {
 
@@ -23,30 +26,11 @@ using namespace ::cmn;
 using facade::OpResult;
 using facade::OpStatus;
 
-class Transaction {
+class Transaction : public std::enable_shared_from_this<Transaction> {
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
  public:
-  // struct RunnableResult {
-  //   enum Flag : uint16_t {
-  //     AVOID_CONCLUDING = 1,
-  //   };
-
-  //   RunnableResult(OpStatus status = OpStatus::OK, uint16_t flags = 0)
-  //       : status(status), flags(flags) {
-  //   }
-
-  //   operator OpStatus() const {
-  //     return status;
-  //   }
-
-  //   OpStatus status;
-  //   uint16_t flags;
-  // };
-
-  // static_assert(sizeof(RunnableResult) == 4);
-
   using time_point = ::std::chrono::steady_clock::time_point;
   using RunnableType = base::FunctionRef<void(Transaction* t, EngineShard*)>;
 
@@ -121,8 +105,6 @@ class Transaction {
 
   ShardId GetUniqueShard() const;
 
-  std::optional<SlotId> GetUniqueSlotId() const;
-
   bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
   DbContext GetDbContext() const {
@@ -164,7 +146,7 @@ class Transaction {
             idx_ = cur_->first;
           }
         }
-        val_ = {args_[idx_], idx_};
+        val_ = {args_[idx_], idx_};  // 会越界
         return *this;
       }
 
@@ -211,12 +193,12 @@ class Transaction {
   int id;
 #endif
 #ifdef UNIT_TESTS
-  void set_txid(int id) { txid_ = id; }
+  void set_txid(int new_id) { txid_ = new_id; }
 #endif
  private:
   struct alignas(64) PerShardData {
     PerShardData() {}
-    PerShardData(PerShardData&& other) noexcept {}
+    PerShardData(PerShardData&& /*other*/) noexcept {}
 
     uint16_t local_mask = 0;
 
@@ -298,6 +280,7 @@ class Transaction {
     });
   }
 
+  //::dfly::BlockingCounter run_barrier_{0}; // 会导致极高的P99.9 延迟
   base::BlockingCounter run_barrier_{0};
 
   absl::InlinedVector<PerShardData, 4> shard_data_;
@@ -322,40 +305,28 @@ class Transaction {
 
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
-  UniqueSlotChecker unique_slot_checker_;
 
   uint8_t coordinator_state_ = 0;
 
   std::coroutine_handle<> handle_;
   std::atomic<uint16_t> blocking_count_ = 0;
   std::atomic<bool> need_resume = false;
-  std::atomic<uint16_t> resume_count_ = 1;
+  std::atomic<bool> resume_count_ = false;
 
   void InitBlockingController(std::coroutine_handle<> handle,
                               unsigned blocking_count) {
     handle_ = handle;
-    assert(blocking_count_ == 0);
+    DCHECK_EQ(blocking_count_, 0u);
     blocking_count_ = blocking_count;
   }
-  void ResumeIfNeed(std::string context) {
-    // fetch_sub(1) == 1 保证只有一个调用者看到 blocking_count_ 降到 0
-    bool watch_resume =
-        (context == "SingleHopAsync") || (context == "PollExecution");
-    if (watch_resume) {
-      if (need_resume.load() &&
-          resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
-              1) {  // 多个观察者，防止反复resume
-        LOG(INFO) << "ResumeHandle";
-        handle_.resume();
-      }
-    } else {  // RunCallBack
-      if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        // LOG(INFO) << "事务: "<< id <<" FinishCoroTask resume coroutine,
-        // 上下文: " << context; // 临时 assert(handle_.has_value());
-        // 测试不断言，不std::nullopt的情况
-        need_resume.store(true);
-        // handle_ = std::nullopt;
-      }
+  void ResumeIfNeed() {
+    if (!need_resume.load(std::memory_order_acquire)) {
+      return;
+    }
+    bool expected = false;
+    if (resume_count_.compare_exchange_strong(expected, true,
+                                              std::memory_order_acq_rel)) {
+      handle_.resume();
     }
   }
 

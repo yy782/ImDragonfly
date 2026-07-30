@@ -22,7 +22,7 @@ class LockTag {
   std::string_view str_;
 
  public:
-  using is_stackonly = void;  // marks that this object does not use heap.
+  using is_stackonly = void;
 
   LockTag() = default;
   explicit LockTag(std::string_view key);
@@ -30,12 +30,6 @@ class LockTag {
   explicit operator std::string_view() const { return str_; }
 
   LockFp Fingerprint() const;
-
-  // To make it hashable.
-  template <typename H>
-  friend H AbslHashValue(H h, const LockTag& tag) {
-    return H::combine(std::move(h), tag.str_);
-  }
 
   bool operator==(const LockTag& o) const { return str_ == o.str_; }
 };
@@ -82,14 +76,16 @@ struct KeyIndex {
   unsigned NumArgs() const { return (end - start + step - 1) / step; }
 
   auto Range() const {
+    unsigned s = start, st = step;  // 由ASAN报告，2026.7.30 -- 1 修改
     return std::views::iota(0u, NumArgs()) |
-           std::views::transform(
-               [this](unsigned i) { return start + i * step; });  // 不确定
+           std::views::transform([s, st](unsigned i) { return s + i * st; });
   }
 
   auto Range(const cmn::ArgSlice& args) const {
-    return Range() | std::views::transform(
-                         [args](unsigned idx) { return args[idx]; });  // 不确定
+    unsigned s = start, st = step;  // 由ASAN报告，2026.7.30 -- 1 修改
+    return std::views::iota(0u, NumArgs()) |
+           std::views::transform([s, st](unsigned i) { return s + i * st; }) |
+           std::views::transform([args](unsigned idx) { return args[idx]; });
   }
 
  public:

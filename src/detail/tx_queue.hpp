@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -17,14 +18,14 @@ class TxQueue {
   explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
       : vec_(mr) {}
 
-  Iterator Push(Transaction* t);
+  Iterator Push(std::shared_ptr<Transaction> t);
   void Pop(Iterator& it);
   void Pop() {
     Iterator it = head_;
     Pop(it);
   }
-  Transaction* Front();
-  Transaction* Back();
+  std::shared_ptr<Transaction> Front();
+  std::shared_ptr<Transaction> Back();
   size_t Size() const;
   bool Empty() const { return head_ == kEnd; }
   bool IsInFreeList(Iterator it) const;
@@ -39,7 +40,7 @@ class TxQueue {
   Iterator AllocateNode();
   void FreeNode(Iterator it);
   struct Node {
-    Transaction* trans = nullptr;
+    std::shared_ptr<Transaction> trans;
     Iterator next = kEnd;
     Iterator prev = kEnd;
   };

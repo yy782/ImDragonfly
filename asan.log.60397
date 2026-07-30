@@ -1,0 +1,145 @@
+=================================================================
+==60397==ERROR: AddressSanitizer: heap-use-after-free on address 0x511000014bc0 at pc 0x57b14f150519 bp 0x7f3a606e2e50 sp 0x7f3a606e2e48
+READ of size 8 at 0x511000014bc0 thread T3
+    #0 0x57b14f150518 in dfly::Transaction::ScheduleInternal()::$_0::operator()() const /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:290:25
+    #1 0x57b14f1503c4 in void std::__invoke_impl<void, dfly::Transaction::ScheduleInternal()::$_0&>(std::__invoke_other, dfly::Transaction::ScheduleInternal()::$_0&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #2 0x57b14f150374 in std::enable_if<is_invocable_r_v<void, dfly::Transaction::ScheduleInternal()::$_0&>, void>::type std::__invoke_r<void, dfly::Transaction::ScheduleInternal()::$_0&>(dfly::Transaction::ScheduleInternal()::$_0&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #3 0x57b14f15023c in std::_Function_handler<void (), dfly::Transaction::ScheduleInternal()::$_0>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #4 0x57b14efd9ad2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #5 0x57b14f1b7d10 in base::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/YY/base/task_queue.hpp:66:9
+    #6 0x57b14f1b5db9 in yy::net::EventLoop::doPendingFunctions() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:100:14
+    #7 0x57b14f1b5b73 in yy::net::EventLoop::loop() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:63:7
+    #8 0x57b14efd95ab in yy::net::EventLoopThread::run()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:24:12
+    #9 0x57b14efd9384 in void std::__invoke_impl<void, yy::net::EventLoopThread::run()::'lambda'()&>(std::__invoke_other, yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #10 0x57b14efd9364 in std::__invoke_result<yy::net::EventLoopThread::run()::'lambda'()&>::type std::__invoke<yy::net::EventLoopThread::run()::'lambda'()&>(yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #11 0x57b14efd9338 in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:506:11
+    #12 0x57b14efd92bd in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::operator()<void>() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:591:17
+    #13 0x57b14efd91d4 in void std::__invoke_impl<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::__invoke_other, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #14 0x57b14efd9184 in std::enable_if<is_invocable_r_v<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>, void>::type std::__invoke_r<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #15 0x57b14efd904c in std::_Function_handler<void (), std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #16 0x57b14efd9ad2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #17 0x57b14efd8e9d in base::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:115:5
+    #18 0x57b14ef6e3aa in asan_thread_start(void*) asan_interceptors.cpp.o
+    #19 0x7f3a65a94a82 in start_thread nptl/pthread_create.c:442:8
+    #20 0x7f3a65b2688f  misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:81
+
+0x511000014bc0 is located 64 bytes inside of 216-byte region [0x511000014b80,0x511000014c58)
+freed by thread T3 here:
+    #0 0x57b14efad95d in operator delete(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x12995d) (BuildId: 90a9972f94c3f18945e7e1d5e7a39f526af49805)
+    #1 0x57b14f1627e1 in dfly::Transaction::ScheduleInternal() (.destroy) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:265:30
+    #2 0x57b14f18ca74 in std::__n4861::coroutine_handle<cppcoro::detail::task_promise<void>>::destroy() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:242:30
+    #3 0x57b14f17139e in cppcoro::task<void>::~task() /home/yy/programs/ImDragonfly/YY/base/cppcoro/task.hpp:231:19
+    #4 0x57b14f166462 in dfly::Transaction::SingleHopAsync(fu2::abi_400::detail::function<fu2::abi_400::detail::config<false, true, fu2::capacity_fixed<16ul, 8ul>>, fu2::abi_400::detail::property<false, false, void (dfly::Transaction*, dfly::EngineShard*)>>, std::__n4861::coroutine_handle<void>) (.resume) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:257:5
+    #5 0x57b14f188c8b in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #6 0x57b14f189879 in base::detail::WaitQueue::NotifyAll() /home/yy/programs/ImDragonfly/YY/base/wait_queue.hpp:58:22
+    #7 0x57b14f1895eb in base::EventCount::NotifyInternal(bool (base::detail::WaitQueue::*)()) /home/yy/programs/ImDragonfly/YY/base/synchronization.hpp:119:14
+    #8 0x57b14f189173 in base::EventCount::notifyAll() /home/yy/programs/ImDragonfly/YY/base/synchronization.hpp:51:12
+    #9 0x57b14f17257b in base::EmbeddedBlockingCounter::Dec() /home/yy/programs/ImDragonfly/YY/base/synchronization.hpp:226:24
+    #10 0x57b14f14b820 in dfly::Transaction::FinishHop() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:495:47
+    #11 0x57b14f150932 in dfly::Transaction::ScheduleInternal()::$_0::operator()() const /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:295:27
+    #12 0x57b14f1503c4 in void std::__invoke_impl<void, dfly::Transaction::ScheduleInternal()::$_0&>(std::__invoke_other, dfly::Transaction::ScheduleInternal()::$_0&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #13 0x57b14f150374 in std::enable_if<is_invocable_r_v<void, dfly::Transaction::ScheduleInternal()::$_0&>, void>::type std::__invoke_r<void, dfly::Transaction::ScheduleInternal()::$_0&>(dfly::Transaction::ScheduleInternal()::$_0&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #14 0x57b14f15023c in std::_Function_handler<void (), dfly::Transaction::ScheduleInternal()::$_0>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #15 0x57b14efd9ad2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #16 0x57b14f1b7d10 in base::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/YY/base/task_queue.hpp:66:9
+    #17 0x57b14f1b5db9 in yy::net::EventLoop::doPendingFunctions() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:100:14
+    #18 0x57b14f1b5b73 in yy::net::EventLoop::loop() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:63:7
+    #19 0x57b14efd95ab in yy::net::EventLoopThread::run()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:24:12
+    #20 0x57b14efd9384 in void std::__invoke_impl<void, yy::net::EventLoopThread::run()::'lambda'()&>(std::__invoke_other, yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #21 0x57b14efd9364 in std::__invoke_result<yy::net::EventLoopThread::run()::'lambda'()&>::type std::__invoke<yy::net::EventLoopThread::run()::'lambda'()&>(yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #22 0x57b14efd9338 in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:506:11
+    #23 0x57b14efd92bd in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::operator()<void>() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:591:17
+    #24 0x57b14efd91d4 in void std::__invoke_impl<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::__invoke_other, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #25 0x57b14efd9184 in std::enable_if<is_invocable_r_v<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>, void>::type std::__invoke_r<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #26 0x57b14efd904c in std::_Function_handler<void (), std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #27 0x57b14efd9ad2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #28 0x57b14efd8e9d in base::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:115:5
+    #29 0x57b14ef6e3aa in asan_thread_start(void*) asan_interceptors.cpp.o
+
+previously allocated by thread T1 here:
+    #0 0x57b14efad0fd in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x1290fd) (BuildId: 90a9972f94c3f18945e7e1d5e7a39f526af49805)
+    #1 0x57b14f1445d7 in dfly::Transaction::ScheduleInternal() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:265:30
+    #2 0x57b14f143437 in dfly::Transaction::SingleHopAsync(fu2::abi_400::detail::function<fu2::abi_400::detail::config<false, true, fu2::capacity_fixed<16ul, 8ul>>, fu2::abi_400::detail::property<false, false, void (dfly::Transaction*, dfly::EngineShard*)>>, std::__n4861::coroutine_handle<void>) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:257:14
+    #3 0x57b14f0027af in dfly::cmd::Coro::SingleHopWaiterT<facade::OpResult<void>>::await_suspend(std::__n4861::coroutine_handle<dfly::cmd::Coro>) /home/yy/programs/ImDragonfly/src/command_layer/cmd_support.hpp:70:24
+    #4 0x57b14efead80 in dfly::CmdDel(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/src/command_layer/generic_family.cpp:45:32
+    #5 0x57b14efeb763 in dfly::GenericFamily::Delex(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/src/command_layer/generic_family.cpp:58:3
+    #6 0x57b14f008911 in decltype(std::forward<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>)>(fp)(std::forward<dfly::CommandContext*>(fp0), std::forward<std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>>(fp0))) fu2::abi_400::detail::invocation::invoke<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>), dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>>(void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>), dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/YY/base/function2.hpp:221:10
+    #7 0x57b14f008554 in fu2::abi_400::detail::type_erasure::invocation_table::function_trait<void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>::internal_invoker<fu2::abi_400::detail::type_erasure::box<true, void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>), std::allocator<void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>)>>, true>::invoke(fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/YY/base/function2.hpp:620:1
+    #8 0x57b14efd412d in decltype(auto) fu2::abi_400::detail::type_erasure::tables::vtable<fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>>::invoke<0ul, fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>>(fu2::abi_400::detail::type_erasure::data_accessor const*&&, unsigned long const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>&&) const /home/yy/programs/ImDragonfly/YY/base/function2.hpp:1017:12
+    #9 0x57b14efd3e7d in decltype(auto) fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>>::invoke<0ul, fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>> const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>>(fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>> const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/YY/base/function2.hpp:1231:37
+    #10 0x57b14efd3c9b in fu2::abi_400::detail::type_erasure::invocation_table::operator_impl<0ul, fu2::abi_400::detail::function<fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>>, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const>::operator()(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/YY/base/function2.hpp:803:1
+    #11 0x57b14efc4771 in dfly::CommandId::Invoke(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/src/command_layer/command_id.hpp:72:5
+    #12 0x57b14efc1c8a in dfly::RedisSession::OnMessage() /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:68:9
+    #13 0x57b14efc0a81 in dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)::operator()(std::shared_ptr<yy::net::TcpConnection>) const /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:122:63
+    #14 0x57b14efc08ce in void std::__invoke_impl<void, dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)&, std::shared_ptr<yy::net::TcpConnection>>(std::__invoke_other, dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)&, std::shared_ptr<yy::net::TcpConnection>&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #15 0x57b14efc079c in std::enable_if<is_invocable_r_v<void, dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)&, std::shared_ptr<yy::net::TcpConnection>>, void>::type std::__invoke_r<void, dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)&, std::shared_ptr<yy::net::TcpConnection>>(dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)&, std::shared_ptr<yy::net::TcpConnection>&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #16 0x57b14efc05d4 in std::_Function_handler<void (std::shared_ptr<yy::net::TcpConnection>), dfly::RedisServer::RedisServer(unsigned short, yy::net::EventLoop*, int)::'lambda'(int, yy::net::Address const&, yy::net::EventLoop*)::operator()(int, yy::net::Address const&, yy::net::EventLoop*) const::'lambda'(std::shared_ptr<yy::net::TcpConnection>)>::_M_invoke(std::_Any_data const&, std::shared_ptr<yy::net::TcpConnection>&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #17 0x57b14f1d17ee in std::function<void (std::shared_ptr<yy::net::TcpConnection>)>::operator()(std::shared_ptr<yy::net::TcpConnection>) const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #18 0x57b14f1c9974 in yy::net::TcpConnection::handleRead() /home/yy/programs/ImDragonfly/YY/net/TcpConnection.cpp:189:5
+    #19 0x57b14f1cadd9 in yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1::operator()() const /home/yy/programs/ImDragonfly/YY/net/TcpConnection.cpp:24:41
+    #20 0x57b14f1cad94 in void std::__invoke_impl<void, yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1&>(std::__invoke_other, yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #21 0x57b14f1cad44 in std::enable_if<is_invocable_r_v<void, yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1&>, void>::type std::__invoke_r<void, yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1&>(yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #22 0x57b14f1cac0c in std::_Function_handler<void (), yy::net::TcpConnection::TcpConnection(int, yy::net::Address const&, yy::net::EventLoop*, yy::net::Event)::$_1>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #23 0x57b14efd9ad2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #24 0x57b14f1b201b in yy::net::EventHandler::handler_revent() /home/yy/programs/ImDragonfly/YY/net/EventHandler.cpp:59:7
+    #25 0x57b14f1b5921 in yy::net::EventLoop::loop() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:59:18
+    #26 0x57b14efd95ab in yy::net::EventLoopThread::run()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:24:12
+    #27 0x57b14efd9384 in void std::__invoke_impl<void, yy::net::EventLoopThread::run()::'lambda'()&>(std::__invoke_other, yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #28 0x57b14efd9364 in std::__invoke_result<yy::net::EventLoopThread::run()::'lambda'()&>::type std::__invoke<yy::net::EventLoopThread::run()::'lambda'()&>(yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #29 0x57b14efd9338 in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:506:11
+
+Thread T3 created by T0 here:
+    #0 0x57b14ef5613d in pthread_create (/home/yy/programs/ImDragonfly/build/imdragonfly+0xd213d) (BuildId: 90a9972f94c3f18945e7e1d5e7a39f526af49805)
+    #1 0x57b14efd8904 in base::Thread::Thread<yy::net::EventLoopThread::run()::'lambda'()>(char const*, yy::net::EventLoopThread::run()::'lambda'()&&) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:25:9
+    #2 0x57b14efd841f in std::__detail::_MakeUniq<base::Thread>::__single_object std::make_unique<base::Thread, char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()>(char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_ptr.h:1070:34
+    #3 0x57b14efd81a8 in yy::net::EventLoopThread::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:17:15
+    #4 0x57b14efd7fda in yy::net::EventLoopThreadPool::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThreadPool.h:35:14
+    #5 0x57b14efd7d1c in yy::net::Server::loop() /home/yy/programs/ImDragonfly/YY/net/OneAccSer.h:25:21
+    #6 0x57b14efb49d8 in dfly::RedisServer::Start() /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:146:13
+    #7 0x57b14efafc61 in main /home/yy/programs/ImDragonfly/main.cpp:81:10
+    #8 0x7f3a65a29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+Thread T1 created by T0 here:
+    #0 0x57b14ef5613d in pthread_create (/home/yy/programs/ImDragonfly/build/imdragonfly+0xd213d) (BuildId: 90a9972f94c3f18945e7e1d5e7a39f526af49805)
+    #1 0x57b14efd8904 in base::Thread::Thread<yy::net::EventLoopThread::run()::'lambda'()>(char const*, yy::net::EventLoopThread::run()::'lambda'()&&) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:25:9
+    #2 0x57b14efd841f in std::__detail::_MakeUniq<base::Thread>::__single_object std::make_unique<base::Thread, char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()>(char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_ptr.h:1070:34
+    #3 0x57b14efd81a8 in yy::net::EventLoopThread::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:17:15
+    #4 0x57b14efd7fda in yy::net::EventLoopThreadPool::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThreadPool.h:35:14
+    #5 0x57b14efd7d1c in yy::net::Server::loop() /home/yy/programs/ImDragonfly/YY/net/OneAccSer.h:25:21
+    #6 0x57b14efb49d8 in dfly::RedisServer::Start() /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:146:13
+    #7 0x57b14efafc61 in main /home/yy/programs/ImDragonfly/main.cpp:81:10
+    #8 0x7f3a65a29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+SUMMARY: AddressSanitizer: heap-use-after-free /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:290:25 in dfly::Transaction::ScheduleInternal()::$_0::operator()() const
+Shadow bytes around the buggy address:
+  0x511000014900: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x511000014980: 00 00 00 00 00 00 00 00 00 00 00 fa fa fa fa fa
+  0x511000014a00: fa fa fa fa fa fa fa fa fd fd fd fd fd fd fd fd
+  0x511000014a80: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  0x511000014b00: fd fd fd fd fd fd fd fa fa fa fa fa fa fa fa fa
+=>0x511000014b80: fd fd fd fd fd fd fd fd[fd]fd fd fd fd fd fd fd
+  0x511000014c00: fd fd fd fd fd fd fd fd fd fd fd fa fa fa fa fa
+  0x511000014c80: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x511000014d00: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x511000014d80: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x511000014e00: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==60397==ABORTING

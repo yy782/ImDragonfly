@@ -37,9 +37,9 @@ class RedisSession : public yy::net::TcpConnection {
 
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
   }
-  ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
+  ~RedisSession() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
-  Transaction* GetTransaction() { return &transaction_; }
+  std::shared_ptr<Transaction> GetTransaction() { return transaction_; }
   yy::net::EventLoop* GetProactor() { return loop(); }
   cppcoro::AsyncTask OnMessage() {
     int client_fd = this->fd();
@@ -57,20 +57,20 @@ class RedisSession : public yy::net::TcpConnection {
       co_return;
     }
 
-    // LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_)
-    //           << " fd: " << client_fd;
+    VLOG(3) << "CmdArgListToString: " << CmdArgListToString(args_)
+            << " fd: " << client_fd;
 
-    std::destroy_at(&transaction_);  // 事务可能还没结束
-    std::construct_at(&transaction_, ci);
-    transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
-                            args_);
-    cmd_cntx_ = CommandContext(&transaction_, ci, &rb_);
+    transaction_.reset();  // 事务可能还没结束
+    transaction_ = std::make_shared<Transaction>(ci);
+    transaction_->InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
+                             args_);
+    cmd_cntx_ = CommandContext(transaction_, ci, &rb_);
     ci->Invoke(&cmd_cntx_, args_);
     co_return;
   }
 
   void OnClose() {
-    LOG(INFO) << "Connection closed by client, fd: " << fd();
+    VLOG(2) << "Connection closed by client, fd: " << fd();
     context_.owner().reset();
   }
 
@@ -87,12 +87,12 @@ class RedisSession : public yy::net::TcpConnection {
   int fd() const noexcept { return fd_; }
 
  private:
-  void SendImp(std::string&& s) {}
+  void SendImp(std::string&& /*s*/) {}
   friend class ConnectionContext;
   RESP_Buf parser_;
   ::cmn::CmdArgList args_;
   ConnectionContext context_;
-  Transaction transaction_;
+  std::shared_ptr<Transaction> transaction_;
   ReplyBuilder rb_;
   CommandContext cmd_cntx_;
 };
@@ -111,22 +111,22 @@ class RedisServer {
     RegisterZSetFamily(CIs);
     ser = this;
 
-    server_.setConnectCallBack([this](int fd, const yy::net::Address& addr,
-                                      yy::net::EventLoop* loop) {
-      auto session = std::make_shared<RedisSession>(fd, addr, loop);
-      session->init();
-      LOG(INFO) << "New connection from " << addr.sockaddrToString()
-                << ", fd: " << fd;
-      session->setTcpNoDelay(true);
-      session->setMessageCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnMessage(); });
-      session->setCloseCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnClose(); });
-      session->setErrorCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnError(); });
-      session->setReading();
-      return session;
-    });
+    server_.setConnectCallBack(
+        [](int fd, const yy::net::Address& addr, yy::net::EventLoop* loop) {
+          auto session = std::make_shared<RedisSession>(fd, addr, loop);
+          session->init();
+          VLOG(2) << "New connection from " << addr.sockaddrToString()
+                  << ", fd: " << fd;
+          session->setTcpNoDelay(true);
+          session->setMessageCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnMessage(); });
+          session->setCloseCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnClose(); });
+          session->setErrorCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnError(); });
+          session->setReading();
+          return session;
+        });
   }
 
   ~RedisServer() {
@@ -140,7 +140,7 @@ class RedisServer {
   }
 
   void Start() {
-    LOG(INFO) << "Starting RedisServer...";
+    VLOG(1) << "Starting RedisServer...";
     isRuning = true;
 
     server_.loop();

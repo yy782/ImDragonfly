@@ -36,14 +36,15 @@ class EngineShard {
   base::TaskQueue* GetQueue() { return proactor_->GetTaskQueue(); }
   yy::net::EventLoop* GetLoop() { return proactor_; }
 
-  void PollExecution(Transaction* trans);
+  void PollExecution(std::shared_ptr<Transaction> trans);
 
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }
 
   size_t committed_txid() const { return committed_txid_; }
-  void AddCommittedTxid() { committed_txid_++; }
-
+#ifdef UNIT_TESTS
+  size_t& committed_txid() { return committed_txid_; }
+#endif
  private:
   EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap);
   void Shutdown();

@@ -1,5 +1,5 @@
-# python3 redis1.py
-# cd test/redis-py
+# python3 redis-session.py
+# cd examples
 import redis
 import sys
 from typing import List, Tuple, Optional, Any

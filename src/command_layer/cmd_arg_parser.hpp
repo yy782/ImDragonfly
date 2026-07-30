@@ -132,6 +132,12 @@ class CmdArgParser {
       NextImpl<next>(t);
   }
 
+  std::string_view SafeSV(size_t i) const {
+    using namespace std::literals::string_view_literals;
+    if (i >= args_.size()) return ""sv;
+    return args_[i].empty() ? ""sv : args_[i];
+  }
+
   template <class T>
   T Convert(size_t idx) {
     if constexpr (std::is_arithmetic_v<T>) {
@@ -141,12 +147,7 @@ class CmdArgParser {
     }
   }
 
-  std::string_view SafeSV(size_t i) const {
-    using namespace std::literals::string_view_literals;
-    if (i >= args_.size()) return ""sv;
-    return args_[i].empty() ? ""sv : args_[i];
-  }
-
+  template <class T>
   int64_t Num(size_t idx) {
     std::string_view arg = SafeSV(idx);
     int64_t out;

@@ -162,8 +162,6 @@ class DbSlice {
   ShardId shard_id_;
   EngineShard* owner_;
   DbTableArray db_arr_;
-
-  pid_t owner_thread_;
 };
 
 template <typename T>

@@ -12,7 +12,7 @@ ImDragonfly 是一款模仿Dragonfly的高性能键值存储数据库，通过�
 
 ### 2️⃣ 解决高并发场景下的 IO 阻塞
 
-ImDragonfly 主分支基于 **epoll + 协程** 实现高性能网络 IO，同时支持数万级并发连接。未来将引入 **io\_uring** 以进一步降低系统调用开销，相关探索在 `io_uring_proactor` 分支进行中。
+ImDragonfly 基于 **epoll + 协程** 实现高性能网络 IO，支持数万级并发连接。
 
 ### 3️⃣ 优化内存管理，降低运营成本
 
@@ -32,6 +32,39 @@ ImDragonfly 采用 **DashTable** 作为核心数据存储引擎，这是一款�
 
 - **可扩展哈希分段**：采用类似 Extendible Hashing 的目录结构，支持动态扩展。通过 `Split` 操作将单个 Segment 分裂为两个，`IncreaseDepth` 扩展全局目录，实现按需扩容而无需重建整个哈希表。
 
+### 5️⃣ 替换传统 2PL 锁为 VVL 意向锁
+
+传统 2PL（Two-Phase Locking，两阶段锁）需要为每个锁维护等待队列和死锁检测图——随着 Key 数量增长，锁表本身成为严重的内存和性能瓶颈，而死锁检测更是在多 Key 事务中引入不可预测的延迟。
+
+ImDragonfly 的 **VVL（Very Lightweight Locking）意向锁** 的核心洞察是：**所有锁状态可以退化为每个 Key 上的两个原子计数器**，不需要锁表、锁请求节点、等待队列、死锁检测图。
+
+```
+struct IntentLock {
+  unsigned cnt_[2] = {0, 0};   // [SHARED 计数, EXCLUSIVE 计数]
+};
+```
+
+**"意向"而非"锁"——关键差异：**
+
+| 维度 | 2PL（真正加锁） | VVL（记录意图） |
+| ---- | --- | --------- |
+| 数据结构 | 锁表 + 等待队列 + 死锁检测图 | 仅 8 字节双计数器 |
+| 加锁动作 | 真正阻塞线程，挂起等待 | `cnt_[m]++`，仅记录"我对这个 Key 有意向" |
+| 冲突处理 | 阻塞 → 死锁检测 → 回滚 | `Acquire()` 非阻塞，失败直接返回 false |
+| 锁获取失败 | 线程被挂起，死锁风险 | 之前已递增的计数器**不释放**，保留意图标记 |
+| 调度方式 | 线程挂起/唤醒 | 排队进入 TxQueue，协程级调度 |
+| 死锁 | 需要检测和回滚 | **不可能死锁**——事务从不阻塞等锁 |
+
+**为什么不会死锁：**
+
+所有事务都走同一条路径：`Acquire（非阻塞标记意图）→ 失败则 Push TxQueue → PollExecution 按队列顺序唤醒`。队头事务一定能完成——因为任何后来者只是在计数器上看到了冲突，拿不到锁返回 false 排队，永远无法阻塞队头。这个归纳保证消除了死锁的可能性。
+
+**性能优势：**
+
+- 非冲突场景（乐观路径）：事务拿到 `OUT_OF_ORDER` 标记，跳过队列直接执行，锁的开销仅是一次原子递增
+- 冲突场景：TxQueue 的 FIFO 顺序 + 协程轻量切换，避免了线程上下文切换和死锁检测的计算开销
+- 每个 Key 仅 8 字节，对比 2PL 的数百字节锁表，内存效率提升数十倍
+
 ***
 
 ## 🚀 技术亮点
@@ -39,7 +72,6 @@ ImDragonfly 采用 **DashTable** 作为核心数据存储引擎，这是一款�
 | 技术领域      | 实现方案              | 核心优势        |
 | --------- | ----------------- | ----------- |
 | **网络 IO** | epoll + C++20 协程   | 事件驱动，高并发处理 |
-| **异步 IO（分支）** | Linux io\_uring   | 零拷贝，探索更低延迟 |
 | **并发模型**  | C++ 20 Coroutines | 轻量级线程调度 |
 | **内存管理**  | mimalloc + PMR    | 低碎片、高性能分配   |
 | **协议兼容**  | Redis RESP     | 无缝对接现有生态    |
@@ -69,7 +101,7 @@ ImDragonfly 采用 **DashTable** 作为核心数据存储引擎，这是一款�
 - **CommandRegistry**: 命令注册中心
 - **RedisSession**: 客户端会话管理，处理连接生命周期
 - **Transaction**: 事务引擎，处理分片事务
-- **UringProactor**: io\_uring 事件循环（`io_uring_proactor` 分支），主分支使用 epoll
+
 
 ***
 
@@ -77,15 +109,15 @@ ImDragonfly 采用 **DashTable** 作为核心数据存储引擎，这是一款�
 
 ### DashTable 存储引擎基准
 
-| 操作类型 | DashTable | Redis dict | std::unordered_map | 胜出 |
-|---------|-----------|------------|-------------------|------|
-| **Insert** (插入) | 274.67 ms | 320.31 ms | 427.24 ms | DashTable |
-| **Find** (查找) | 179.14 ms | 131.53 ms | 237.37 ms | DashTable |
-| **Erase** (删除) | 307.60 ms | 174.25 ms | 357.29 ms | DashTable |
-| **Memory Usage** (内存占用) | 22.8 MB | 37.1 MB | 41.6 MB | DashTable |
+| 操作类型 | DashTable | std::unordered_map | 胜出 |
+|---------|-----------|-------------------|------|
+| **Insert** (插入) | 274.67 ms | 427.24 ms | DashTable |
+| **Find** (查找) | 179.14 ms | 237.37 ms | DashTable |
+| **Erase** (删除) | 307.60 ms | 357.29 ms | DashTable |
+| **Memory Usage** (内存占用) | 22.8 MB | 41.6 MB | DashTable |
 
-> - Insert 比 Redis dict 快 **14%**，比 unordered_map 快 **36%**
-> - 内存占用比 Redis dict 降低 **39%**
+> - Insert 比 unordered_map 快 **36%**
+> - 内存占用比 unordered_map 降低 **47%**
 
 ### 端到端吞吐基准 (epoll, 4 分片)
 
@@ -132,7 +164,7 @@ redis-cli -p 6379
 ```bash
 # Ubuntu/Debian
 sudo apt-get install -y clang cmake ninja-build \
-    liburing-dev libmimalloc-dev libboost-dev \
+    libmimalloc-dev libboost-dev \
     libgoogle-glog-dev libabsl-dev
 ```
 

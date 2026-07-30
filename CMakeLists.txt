@@ -1,5 +1,7 @@
-# StorageEngine/CMakeLists.txt
-cmake_minimum_required(VERSION 3.14)
+# ImDragonfly/CMakeLists.txt
+cmake_minimum_required(VERSION 3.14) 
+
+# 编译imdragonfly和unit_test时因为UNIT_TESTS宏要编译两份imdragonfly_lib, 后续改进
 
 find_program(CLANG_EXECUTABLE clang)
 find_program(CLANGXX_EXECUTABLE clang++)
@@ -15,7 +17,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-project(StorageEngine VERSION 1.0.0)
+project(imdragonfly VERSION 1.0.0)
 
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -34,6 +36,7 @@ if(USE_ASAN)
     set(ASAN_FLAGS 
         -fsanitize=address 
         -fno-omit-frame-pointer
+        -DNDEBUG_SANITIZER  # 关闭对absl的检查
     )
     set(ASAN_LDFLAGS -fsanitize=address)
     add_compile_options(${ASAN_FLAGS})
@@ -46,9 +49,9 @@ else()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_link_options(-rdynamic)
     set(CXX_WARNING_OPTIONS
         -g -O0
-        -rdynamic
         -march=x86-64-v3
         -Wall
         -Wextra                 #额外警告
@@ -91,7 +94,7 @@ target_include_directories(imdragonfly PRIVATE
 target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
-    incomplete-imdragonfly
+    imdragonfly_lib
     net
     base
     thread

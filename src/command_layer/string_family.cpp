@@ -2,6 +2,8 @@
 // See LICENSE for licensing terms.
 //
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,7 +14,6 @@
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
 #include "detail/conn_context.hpp"
-#include "network/redis_server.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard.hpp"
 #include "sharding/op_status.hpp"
@@ -23,7 +24,7 @@ namespace {
 
 using CI = CommandId;
 
-constexpr uint32_t kMaxStrLen = 1 << 28;
+constexpr uint32_t kMaxStrLen [[maybe_unused]] = 1 << 28;
 
 using StringResult = std::string;
 
@@ -177,11 +178,11 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
   auto cb = [key, value, sparams](Transaction* t,
                                   EngineShard* shard) -> OpResult<void> {
-    assert(EngineShard::tlocal()->shard_id() == shard->shard_id());
+    DCHECK_EQ(EngineShard::tlocal()->shard_id(), shard->shard_id());
     return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
   };
 
-  auto result = co_await cmd::SingleHopT(cb);
+  [[maybe_unused]] auto result = co_await cmd::SingleHopT(cb);
 
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
@@ -214,7 +215,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
 CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key = args[1]](Transaction* tx,
                             EngineShard* es) -> OpResult<StringResult> {
-    assert(EngineShard::tlocal()->shard_id() == es->shard_id());
+    DCHECK_EQ(EngineShard::tlocal()->shard_id(), es->shard_id());
     auto it_res =
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 

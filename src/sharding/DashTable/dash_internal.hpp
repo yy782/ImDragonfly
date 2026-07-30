@@ -3,7 +3,7 @@
 //
 #pragma once
 
-#include <assert.h>
+#include <glog/logging.h>
 #include <immintrin.h>
 
 #include "detail/memory_resource.hpp"
@@ -47,7 +47,7 @@ class SlotBitmap {
   int FindEmptySlot() const {
     uint32_t mask = ~(GetBusy());
     int slot = __builtin_ctz(mask);
-    assert(slot < int(NUM_SLOTS));
+    DCHECK_LT(slot, int(NUM_SLOTS));
     return slot;
   }
   void ClearSlots(uint32_t mask) {
@@ -58,14 +58,14 @@ class SlotBitmap {
   void Clear() { val_[0].d = val_[1].d = 0; }
 
   void ClearSlot(unsigned index) {
-    assert(Size() > 0);
+    DCHECK_GT(Size(), 0);
     uint32_t mask = 1u << index;
     val_[0].d &= ~mask;
     val_[1].d &= ~mask;
   }
 
   void SetSlot(unsigned index, bool probe) {
-    assert(((val_[0].d >> index) & 1) == 0);
+    DCHECK_EQ(((val_[0].d >> index) & 1), 0);
     val_[0].d |= (1u << index);
     val_[1].d |= (unsigned(probe) << index);
   }
@@ -133,7 +133,7 @@ class BucketBase {
   }
 
   uint8_t Fp(unsigned i) const {
-    assert(i < finger_arr_.size());
+    DCHECK_LT(i, finger_arr_.size());
     return finger_arr_[i];
   }
   uint32_t GetProbe(bool probe) const { return slotb_.GetProbe(probe); }
@@ -144,7 +144,7 @@ class BucketBase {
   void Clear() { slotb_.Clear(); }
 
   void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe) {
-    assert(slot_id < finger_arr_.size());
+    DCHECK_LT(slot_id, finger_arr_.size());
 
     finger_arr_[slot_id] = meta_hash;
     slotb_.SetSlot(slot_id, probe);
@@ -187,7 +187,7 @@ class BucketBase {
   }
 
   void SetStashPtr(unsigned stash_pos, uint8_t meta_hash, BucketBase* next) {
-    assert(stash_pos < 4);
+    DCHECK_LT(stash_pos, 4);
     if (!SetStash(meta_hash, stash_pos, false)) {
       if (!next->SetStash(meta_hash, stash_pos, true)) {
         overflow_count_++;
@@ -207,7 +207,7 @@ class BucketBase {
     }
 
     if (!clear_success) {
-      assert(overflow_count_ > 0);
+      DCHECK_GT(overflow_count_, 0);
       overflow_count_--;
     }
     unsigned mask1 = stash_busy_ & (kStashPresentBit - 1);
@@ -237,7 +237,7 @@ class BucketBase {
       finger_arr_[i] = finger_arr_[i - 1];
     }
     bool res = slotb_.ShiftLeft();
-    assert(slotb_.FindEmptySlot() == 0);
+    DCHECK_EQ(slotb_.FindEmptySlot(), 0);
     return res;
   }
 
@@ -262,7 +262,7 @@ class BucketBase {
         stash_probe_mask_ &= (~(1u << i));
         stash_pos_ &= (~(3u << (i * 2)));
 
-        assert(0u == ((stash_pos_ >> (i * 2)) & 3));
+        DCHECK_EQ(0u, ((stash_pos_ >> (i * 2)) & 3));
         return 0;
       }
       return kNanSlot;
@@ -417,22 +417,22 @@ class Segment {
     return GetBucket(bid).GetBusy() & (1U << slot);
   }
   Key_t& Key(PhysicalBid bid, unsigned slot) {
-    assert(IsBusy(bid, slot));
+    DCHECK(IsBusy(bid, slot));
     return GetBucket(bid).key[slot];
   }
 
   const Key_t& Key(PhysicalBid bid, unsigned slot) const {
-    assert(IsBusy(bid, slot));
+    DCHECK(IsBusy(bid, slot));
     return GetBucket(bid).key[slot];
   }
 
   Value_t& Value(PhysicalBid bid, unsigned slot) {
-    assert(IsBusy(bid, slot));
+    DCHECK(IsBusy(bid, slot));
     return GetBucket(bid).value[slot];
   }
 
   const Value_t& Value(PhysicalBid bid, unsigned slot) const {
-    assert(IsBusy(bid, slot));
+    DCHECK(IsBusy(bid, slot));
     return GetBucket(bid).value[slot];
   }
 
@@ -542,7 +542,7 @@ int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key,
   }
 
   int slot = this->slotb_.FindEmptySlot();
-  assert(slot >= 0);
+  DCHECK_GE(slot, 0);
   Insert(slot, std::forward<U>(new_key), std::forward<V>(new_value), meta_hash,
          probe);
   return slot;
@@ -563,7 +563,7 @@ template <typename U, typename V>
 void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
                                                  uint8_t meta_hash,
                                                  bool probe) {
-  assert(slot < kSlotNum);
+  DCHECK_LT(slot, kSlotNum);
   key[slot] = std::forward<U>(u);
   value[slot] = std::forward<V>(v);
   this->SetHash(slot, meta_hash, probe);
@@ -715,7 +715,7 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const
 
   auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
     (void)overflow_index;
-    assert(pos < kStashBucketNum);
+    DCHECK_LT(pos, kStashBucketNum);
     pos += kBucketNum;
     const Bucket& bucket = bucket_[pos];
     return bucket.FindByFp(fp_hash, false, pred);
@@ -747,7 +747,7 @@ auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const
 
 template <typename Key, typename Value, typename Policy>
 void Segment<Key, Value, Policy>::Delete(const Iterator& it, Hash_t key_hash) {
-  assert(it.found());
+  DCHECK(it.found());
 
   auto& b = bucket_[it.index];
 
@@ -793,7 +793,7 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right,
           dest_right->InsertUniq(std::forward<Key_t>(bucket->key[slot]),
                                  std::forward<Value_t>(bucket->value[slot]),
                                  hash, false, [](auto&&...) {});
-      assert(it.found());
+      DCHECK(it.found());
       on_move_cb(segment_id_, i, dest_right->segment_id_, it.index);
     };
 
@@ -830,7 +830,7 @@ void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right,
           std::forward<Value_t>(bucket->value[slot]), hash, false,
           /* not interested in these movements */ [](auto&&...) {});
       (void)it;
-      assert(it.index != kNanBid);
+      DCHECK_NE(it.index, kNanBid);
       on_move_cb(segment_id_, i, dest_right->segment_id_, it.index);
 
       // Remove stash reference pointing to stash bucket i.
@@ -904,7 +904,8 @@ int Segment<Key, Value, Policy>::MoveToOther(
     unsigned from_bid,
     unsigned
         to_bid) {  // 桶满时将一个条目从当前桶移动到另一个桶，为新条目腾出空间
-  assert(from_bid < kBucketNum && to_bid < kBucketNum);
+  DCHECK_LT(from_bid, kBucketNum);
+  DCHECK_LT(to_bid, kBucketNum);
   auto& src = bucket_[from_bid];
   uint32_t mask = src.GetProbe(!own_items);
   if (mask == 0) {
@@ -943,7 +944,7 @@ template <typename Cb, typename HashFn>
 bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid,
                                                         HashFn&& hfun,
                                                         Cb&& cb) const {
-  assert(bid < kBucketNum);
+  DCHECK_LT(bid, kBucketNum);
 
   const Bucket& b = bucket_[bid];
   bool found = false;
@@ -969,15 +970,13 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid,
 
       if (probe) {
         found = true;
-        assert(HomeIndex(hfun(bucket->key[slot])) == bid);
+        DCHECK_EQ(HomeIndex(hfun(bucket->key[slot])), bid);
         cb(Iterator{nid, slot});
       }
     });
   }
 
-  // Finally go over stash buckets and find those entries that belong to b.
   if (b.HasStash()) {
-    // do not bother with overflow fps. Just go over all the stash buckets.
     for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
       const auto& stashb = bucket_[j];
       stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {

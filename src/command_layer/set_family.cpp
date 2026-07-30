@@ -2,7 +2,6 @@
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
 #include "detail/conn_context.hpp"
-#include "network/redis_server.hpp"
 #include "redis/redis_aux.hpp"
 #include "sharding/DashTable/compact_obj.hpp"
 #include "sharding/db_slice.hpp"

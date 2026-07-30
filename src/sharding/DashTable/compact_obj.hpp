@@ -19,9 +19,6 @@ using CompactObjType = unsigned;
 constexpr CompactObjType kInvalidCompactObjType =
     std::numeric_limits<CompactObjType>::max();
 
-// ──── Tagged Union core ──────────────────────────────────────────────────────
-// Union U holds all possible value representations.
-// Lifetime is managed explicitly by CompactObj via placement new / destroy.
 struct TtlString {
   std::string val;
   uint64_t exp_ms;
@@ -42,10 +39,8 @@ union CompactU {
   TtlString ttl_;
   Robj robj_;
   CompactU() : ival_{} {}
-  ~CompactU() {}  // non-trivial members require manual destruction
+  ~CompactU() {}
 };
-
-// ──── CompactObj ─────────────────────────────────────────────────────────────
 
 class CompactObj {
   void operator=(const CompactObj&) = delete;

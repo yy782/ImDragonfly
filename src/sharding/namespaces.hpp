@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <absl/container/flat_hash_map.h>
+#include <absl/container/node_hash_map.h>
 
 #include <memory>
 #include <shared_mutex>
@@ -15,7 +15,6 @@
 
 namespace dfly {
 
-// class BlockingController;
 class DbSlice;
 class EngineShard;
 
@@ -26,13 +25,9 @@ class Namespace {
   DbSlice& GetCurrentDbSlice() const;
 
   DbSlice& GetDbSlice(ShardId sid) const;
-  // BlockingController* GetOrAddBlockingController(EngineShard* shard);
-  // BlockingController* GetBlockingController(ShardId sid);
 
  private:
   std::vector<std::unique_ptr<DbSlice>> shard_db_slices_;
-  // std::vector<std::unique_ptr<BlockingController>>
-  // shard_blocking_controller_;
 
   friend class Namespaces;
 };
@@ -49,7 +44,7 @@ class Namespaces {
 
  private:
   std::shared_mutex rw_mutex_;
-  absl::flat_hash_map<std::string, Namespace> namespaces_;
+  absl::node_hash_map<std::string, Namespace> namespaces_;
   Namespace* default_namespace_ = nullptr;
 };
 

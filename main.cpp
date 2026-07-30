@@ -54,13 +54,8 @@ allocation (over 64MiB)) mimalloc和ASAN冲突
 // ./imdragonfly
 
 int main(int argc, char *argv[]) {
-  int ret = mkdir("./logs", 0755);
-  if (ret != 0 && errno != EEXIST) {
-    fprintf(stderr, "Failed to create logs directory: %s\n", strerror(errno));
-    return 1;
-  }
-  FLAGS_log_dir = "./logs";
-  FLAGS_logtostderr = false;
+  // 先初始化 glog（先输出到 stderr，确保后续 LOG 可用）
+  FLAGS_logtostderr = true;
   FLAGS_alsologtostderr = false;
   FLAGS_minloglevel = 0;
   FLAGS_v = 2;
@@ -68,6 +63,17 @@ int main(int argc, char *argv[]) {
   FLAGS_logbufsecs = 0;
 #endif
   google::InitGoogleLogging(argv[0]);
+
+  // 创建日志目录，再切换到文件日志
+  int ret = mkdir("./logs", 0755);
+  if (ret != 0 && errno != EEXIST) {
+    LOG(ERROR) << "Failed to create logs directory: " << strerror(errno);
+    google::ShutdownGoogleLogging();
+    return 1;
+  }
+
+  FLAGS_log_dir = "./logs";
+  FLAGS_logtostderr = false;
   LOG(INFO) << "ImDragonfly server starting...";
   int num = 4;
   if (argc > 1) {
