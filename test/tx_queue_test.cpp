@@ -32,6 +32,7 @@ class TxQueueTest : public ::testing::Test {
     RegisterStringFamily(CIs);
   }
   void TearDown() override {
+    shard_set->Shutdown();
     pool_.stop();
     sleep(1);
     delete loop_;

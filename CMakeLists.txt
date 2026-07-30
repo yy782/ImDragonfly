@@ -34,6 +34,7 @@ if(USE_ASAN)
     set(ASAN_FLAGS 
         -fsanitize=address 
         -fno-omit-frame-pointer
+        -DNDEBUG_SANITIZER  # 关闭对absl的检查
     )
     set(ASAN_LDFLAGS -fsanitize=address)
     add_compile_options(${ASAN_FLAGS})
