@@ -87,7 +87,7 @@ class RedisSession : public yy::net::TcpConnection {
   int fd() const noexcept { return fd_; }
 
  private:
-  void SendImp(std::string&& s) {}
+  void SendImp(std::string&& /*s*/) {}
   friend class ConnectionContext;
   RESP_Buf parser_;
   ::cmn::CmdArgList args_;
@@ -111,22 +111,22 @@ class RedisServer {
     RegisterZSetFamily(CIs);
     ser = this;
 
-    server_.setConnectCallBack([this](int fd, const yy::net::Address& addr,
-                                      yy::net::EventLoop* loop) {
-      auto session = std::make_shared<RedisSession>(fd, addr, loop);
-      session->init();
-      LOG(INFO) << "New connection from " << addr.sockaddrToString()
-                << ", fd: " << fd;
-      session->setTcpNoDelay(true);
-      session->setMessageCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnMessage(); });
-      session->setCloseCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnClose(); });
-      session->setErrorCallBack(
-          [this, se = session](yy::net::TcpConnectionPtr) { se->OnError(); });
-      session->setReading();
-      return session;
-    });
+    server_.setConnectCallBack(
+        [](int fd, const yy::net::Address& addr, yy::net::EventLoop* loop) {
+          auto session = std::make_shared<RedisSession>(fd, addr, loop);
+          session->init();
+          LOG(INFO) << "New connection from " << addr.sockaddrToString()
+                    << ", fd: " << fd;
+          session->setTcpNoDelay(true);
+          session->setMessageCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnMessage(); });
+          session->setCloseCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnClose(); });
+          session->setErrorCallBack(
+              [se = session](yy::net::TcpConnectionPtr) { se->OnError(); });
+          session->setReading();
+          return session;
+        });
   }
 
   ~RedisServer() {

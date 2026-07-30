@@ -110,9 +110,10 @@ TEST_F(TxQueueTest, PopSpecificIterator) {
   tx2.set_txid(2);
   tx3.set_txid(3);
   tx4.set_txid(4);
-  auto it1 = q_->Push(&tx1);
+  q_->Push(&tx1);
+
   q_->Push(&tx2);
-  auto it3 = q_->Push(&tx3);
+  q_->Push(&tx3);
   q_->Push(&tx4);
 
   EXPECT_EQ(q_->Size(), 4u);

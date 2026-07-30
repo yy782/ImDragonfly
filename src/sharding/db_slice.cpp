@@ -5,8 +5,7 @@
 #include <exception>
 #include <optional>
 
-#include "Time.hpp"
-#include "detail/conn_context.hpp"
+#include "YY/base/Time.hpp"
 #include "engine_shard.hpp"
 namespace dfly {
 
@@ -254,10 +253,10 @@ void DbSlice::ExpireAllIfNeeded() {
   }
 }
 
-void DbSlice::RegisterWatchedKey(std::string_view key,
-                                 ConnectionContext* conn_cntx) {}
+void DbSlice::RegisterWatchedKey(std::string_view /*key*/,
+                                 ConnectionContext* /*conn_cntx*/) {}
 
-void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
+void DbSlice::PostUpdate(DbIndex /*db_ind*/, std::string_view /*key*/) {
   // auto& db = *db_arr_[db_ind];
   // auto& watched_keys = db.watched_keys_;
   // if (!watched_keys.empty()) {
@@ -277,10 +276,9 @@ void DbSlice::PostUpdate(DbIndex db_ind, std::string_view key) {
   // }
 }
 
-void DbSlice::UnregisterWatchedKeys(ConnectionContext* conn_cntx,
-                                    const std::vector<std::string_view>& keys) {
-
-}
+void DbSlice::UnregisterWatchedKeys(
+    ConnectionContext* /*conn_cntx*/,
+    const std::vector<std::string_view>& /*keys*/) {}
 
 bool DbSlice::Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args) {
   if (lock_args.fps

@@ -74,8 +74,6 @@ class RESP_Buf {
   }
 
  private:
-  size_t p_ = 0;
-  ssize_t CommandByte_ = 0;
   std::vector<std::string_view> result;
 };
 
