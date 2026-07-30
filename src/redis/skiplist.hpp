@@ -4,7 +4,7 @@
 #include <functional>
 #include <optional>
 #include <vector>
-
+#include <algorithm>
 namespace dfly {
 
 template <typename T>
