@@ -67,22 +67,8 @@ std::optional<SlotId> UniqueSlotChecker::GetUniqueSlotId() const {
 using namespace detail;
 
 void InitializeCluster() {
-  std::string cluster_mode_str = "yes";  // 不确定
-
-  if (cluster_mode_str == "emulated") {
-    cluster_mode = ClusterMode::kEmulatedCluster;
-  } else if (cluster_mode_str == "yes") {
-    cluster_mode = ClusterMode::kRealCluster;
-  } else if (cluster_mode_str.empty()) {
-    cluster_mode = ClusterMode::kNoCluster;
-  } else {
-    LOG(ERROR) << "Invalid value for flag --cluster_mode. Exiting...";
-    exit(1);
-  }
-
-  if (cluster_mode != ClusterMode::kNoCluster) {
-    cluster_shard_by_slot = false;  // 不确定
-  }
+  cluster_mode = ClusterMode::kRealCluster;
+  cluster_shard_by_slot = false;  // 不确定
 }
 
 SlotId KeySlot(std::string_view key) {
