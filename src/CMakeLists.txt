@@ -1,25 +1,25 @@
-# StorageEngine/src/CMakeLists.txt
+# ImDragonfly/src/CMakeLists.txt
 
 file(GLOB_RECURSE STORAGE_SOURCES 
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
 )
 
-add_library(incomplete-imdragonfly STATIC ${STORAGE_SOURCES} )
+add_library(imdragonfly_lib STATIC ${STORAGE_SOURCES} )
 
 if(BUILD_TESTS)
-    target_compile_definitions(incomplete-imdragonfly PUBLIC UNIT_TESTS)
+    target_compile_definitions(imdragonfly_lib PUBLIC UNIT_TESTS)
 endif()
 
-target_include_directories(incomplete-imdragonfly PUBLIC
+target_include_directories(imdragonfly_lib PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/YY
     ${CMAKE_SOURCE_DIR}/YY/base
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_compile_options(incomplete-imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
+target_compile_options(imdragonfly_lib PRIVATE ${CXX_WARNING_OPTIONS})
 
-target_link_libraries(incomplete-imdragonfly PUBLIC
+target_link_libraries(imdragonfly_lib PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
     net
     base

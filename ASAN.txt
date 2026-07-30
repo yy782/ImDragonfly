@@ -1,4 +1,4 @@
-2026.7.30 -- 1
+2026.7.30 -- 1       fixed
 ==52190==ERROR: AddressSanitizer: stack-use-after-scope on address 0x7a6a824f5950 at pc 0x576e9a7415c1 bp 0x7a6a833ec350 sp 0x7a6a833ec348
 READ of size 4 at 0x7a6a824f5950 thread T32
 /usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
@@ -106,6 +106,7 @@ Shadow byte legend (one shadow byte represents 8 application bytes):
   Right alloca redzone:    cb
 ==52190==ABORTING
 yy@yy:~/programs/ImDragonfly$ 
+
 
 
 

@@ -16,7 +16,7 @@ add_executable(unit_tests
     wait_queue_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
-    incomplete-imdragonfly
+    imdragonfly_lib
     net
     third_party_deps
     GTest::gtest_main

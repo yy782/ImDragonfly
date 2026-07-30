@@ -1,5 +1,6 @@
 #pragma once
-
+#include <cstdint>
+#include <utility>
 namespace facade {
 
 enum class OpStatus : uint16_t {
