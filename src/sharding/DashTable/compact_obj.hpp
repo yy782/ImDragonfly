@@ -42,10 +42,8 @@ union CompactU {
   TtlString ttl_;
   Robj robj_;
   CompactU() : ival_{} {}
-  ~CompactU() {}  // non-trivial members require manual destruction
+  ~CompactU() {}
 };
-
-// ──── CompactObj ─────────────────────────────────────────────────────────────
 
 class CompactObj {
   void operator=(const CompactObj&) = delete;

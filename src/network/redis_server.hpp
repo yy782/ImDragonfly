@@ -39,7 +39,7 @@ class RedisSession : public yy::net::TcpConnection {
   }
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
-  Transaction* GetTransaction() { return &transaction_; }
+  std::shared_ptr<Transaction> GetTransaction() { return transaction_; }
   yy::net::EventLoop* GetProactor() { return loop(); }
   cppcoro::AsyncTask OnMessage() {
     int client_fd = this->fd();
@@ -60,11 +60,11 @@ class RedisSession : public yy::net::TcpConnection {
     // LOG(INFO) << "CmdArgListToString: " << CmdArgListToString(args_)
     //           << " fd: " << client_fd;
 
-    std::destroy_at(&transaction_);  // 事务可能还没结束
-    std::construct_at(&transaction_, ci);
-    transaction_.InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
-                            args_);
-    cmd_cntx_ = CommandContext(&transaction_, ci, &rb_);
+    transaction_.reset();  // 事务可能还没结束
+    transaction_ = std::make_shared<Transaction>(ci);
+    transaction_->InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
+                             args_);
+    cmd_cntx_ = CommandContext(transaction_, ci, &rb_);
     ci->Invoke(&cmd_cntx_, args_);
     co_return;
   }
@@ -92,7 +92,7 @@ class RedisSession : public yy::net::TcpConnection {
   RESP_Buf parser_;
   ::cmn::CmdArgList args_;
   ConnectionContext context_;
-  Transaction transaction_;
+  std::shared_ptr<Transaction> transaction_;
   ReplyBuilder rb_;
   CommandContext cmd_cntx_;
 };

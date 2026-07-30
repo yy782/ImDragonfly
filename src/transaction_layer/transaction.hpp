@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include "absl/container/inlined_vector.h"
@@ -14,6 +15,7 @@
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/op_status.hpp"
+#include "sharding/synchronization.hpp"
 using namespace base;
 namespace dfly {
 
@@ -23,30 +25,11 @@ using namespace ::cmn;
 using facade::OpResult;
 using facade::OpStatus;
 
-class Transaction {
+class Transaction : public std::enable_shared_from_this<Transaction> {
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
  public:
-  // struct RunnableResult {
-  //   enum Flag : uint16_t {
-  //     AVOID_CONCLUDING = 1,
-  //   };
-
-  //   RunnableResult(OpStatus status = OpStatus::OK, uint16_t flags = 0)
-  //       : status(status), flags(flags) {
-  //   }
-
-  //   operator OpStatus() const {
-  //     return status;
-  //   }
-
-  //   OpStatus status;
-  //   uint16_t flags;
-  // };
-
-  // static_assert(sizeof(RunnableResult) == 4);
-
   using time_point = ::std::chrono::steady_clock::time_point;
   using RunnableType = base::FunctionRef<void(Transaction* t, EngineShard*)>;
 
@@ -211,7 +194,7 @@ class Transaction {
   int id;
 #endif
 #ifdef UNIT_TESTS
-  void set_txid(int id) { txid_ = id; }
+  void set_txid(int new_id) { txid_ = new_id; }
 #endif
  private:
   struct alignas(64) PerShardData {
@@ -298,6 +281,7 @@ class Transaction {
     });
   }
 
+  //::dfly::BlockingCounter run_barrier_{0}; // 会导致极高的P99.9 延迟
   base::BlockingCounter run_barrier_{0};
 
   absl::InlinedVector<PerShardData, 4> shard_data_;
@@ -345,14 +329,20 @@ class Transaction {
       if (need_resume.load() &&
           resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
               1) {  // 多个观察者，防止反复resume
-        LOG(INFO) << "ResumeHandle";
+#ifdef UNIT_TESTS
+        LOG(INFO) << " 事务: " << id << " resume,上下文: " << context;
+#endif
         handle_.resume();
       }
     } else {  // RunCallBack
+      if (context != "RunCallBack") {
+        LOG(FATAL) << " 事务: " << id << " 上下文:" << context;
+      }
       if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        // LOG(INFO) << "事务: "<< id <<" FinishCoroTask resume coroutine,
-        // 上下文: " << context; // 临时 assert(handle_.has_value());
-        // 测试不断言，不std::nullopt的情况
+#ifdef UNIT_TESTS
+        LOG(INFO) << "事务: " << id
+                  << " 需要resume coroutine,上下文: " << context;
+#endif
         need_resume.store(true);
         // handle_ = std::nullopt;
       }

@@ -5,9 +5,19 @@ add_executable(unit_tests
     db_table_test.cpp
     tx_queue_test.cpp
     intent_lock_test.cpp
+    synchronized_test.cpp
+    cmd_arg_parser_test.cpp
+    compact_obj_test.cpp
+    op_status_test.cpp
+    reply_builder_test.cpp
+    resp_buf_test.cpp
+    skiplist_test.cpp
+    string_or_view_test.cpp
+    wait_queue_test.cpp
+    transaction_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
-    incomplete-imdragonfly
+    imdragonfly_lib
     net
     third_party_deps
     GTest::gtest_main

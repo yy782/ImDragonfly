@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include <atomic>
+#include <memory>
 
 #include "cppcoro/task.hpp"
 #include "detail/common.hpp"
@@ -52,20 +53,22 @@ class CommandContext {
  public:
   CommandContext() = default;
 
-  CommandContext(Transaction* transaction, const CommandId* cid,
+  CommandContext(std::shared_ptr<Transaction> transaction, const CommandId* cid,
                  ReplyBuilder* reply_builder)
-      : transaction_(transaction), cid_(cid), reply_builder_(reply_builder) {
+      : transaction_(std::move(transaction)),
+        cid_(cid),
+        reply_builder_(reply_builder) {
     assert(reply_builder_);
   }
   const CommandId* cid() const { return cid_; }
-  Transaction* tx() const { return transaction_; }
+  std::shared_ptr<Transaction> tx() const { return transaction_; }
   ReplyBuilder* rb() {
     assert(reply_builder_);
     return reply_builder_;
   }
 
  private:
-  Transaction* transaction_;
+  std::shared_ptr<Transaction> transaction_;
   const CommandId* cid_;
   ReplyBuilder* reply_builder_;
 };
