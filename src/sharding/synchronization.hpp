@@ -65,7 +65,6 @@ class EventCount {
            event_->kEpochShift) == epoch_) {
         waiter.handler = awaitingCoroutine;
         waiter.shard_id = EngineShard::tlocal()->shard_id();
-        assert(waiter.shard_id != -1);
         event_->wait_queue_.Link(&waiter);
         lk.unlock();
         SuspendWithResume = true;

@@ -104,7 +104,7 @@ TEST(CmdArgParserTest, NextSingleNegativeInt) {
 TEST(CmdArgParserTest, NextIntFailsOnNonNumeric) {
   std::string_view args[] = {"not_a_number"};
   CmdArgParser parser(ArgSlice(args, 1));
-  auto val = parser.Next<int64_t>();
+  (void)parser.Next<int64_t>();
   EXPECT_TRUE(parser.HasError());
 }
 
@@ -140,7 +140,7 @@ TEST(CmdArgParserTest, NextThreeValues) {
 TEST(CmdArgParserTest, NextNotEnoughArgs) {
   std::string_view args[] = {"only_one"};
   CmdArgParser parser(ArgSlice(args, 1));
-  auto [a, b] = parser.Next<std::string_view, std::string_view>();
+  (void)parser.Next<std::string_view, std::string_view>();
   EXPECT_TRUE(parser.HasError());
 }
 

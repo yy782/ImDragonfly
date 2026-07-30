@@ -194,7 +194,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   int id;
 #endif
 #ifdef UNIT_TESTS
-  void set_txid(int id) { txid_ = id; }
+  void set_txid(int new_id) { txid_ = new_id; }
 #endif
  private:
   struct alignas(64) PerShardData {

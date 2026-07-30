@@ -14,6 +14,7 @@ add_executable(unit_tests
     skiplist_test.cpp
     string_or_view_test.cpp
     wait_queue_test.cpp
+    transaction_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
     imdragonfly_lib

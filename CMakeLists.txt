@@ -47,9 +47,9 @@ else()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_link_options(-rdynamic)
     set(CXX_WARNING_OPTIONS
         -g -O0
-        -rdynamic
         -march=x86-64-v3
         -Wall
         -Wextra                 #额外警告
