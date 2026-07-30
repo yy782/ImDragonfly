@@ -54,14 +54,14 @@ Namespace& Namespaces::GetDefaultNamespace() const {
 Namespace& Namespaces::GetOrInsert(std::string_view ns) {
   {
     std::shared_lock<std::shared_mutex> lock(rw_mutex_);
-    auto it = namespaces_.find(ns);
+    auto it = namespaces_.find(std::string(ns));
     if (it != namespaces_.end()) {
       return it->second;
     }
   }
   {
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-    return namespaces_[ns];
+    return namespaces_[std::string(ns)];
   }
 }
 
