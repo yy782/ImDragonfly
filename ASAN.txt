@@ -1,165 +1,111 @@
-2026.6.3
-==1973533==ERROR: AddressSanitizer: attempting double-free on 0x50d0000090e0 in thread T3:
-    #0 0x74f3f84b6d07 in operator delete(void*) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:160
-    #1 0x59b5fe8f02f0 in CmdMSet /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:173
-    #2 0x59b5fe8ce62b in std::__n4861::coroutine_handle<void>::resume() const /usr/include/c++/11/coroutine:126
-    #3 0x59b5fe96f74b in operator() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:56
-    #4 0x59b5fe972f37 in __invoke_impl<void, dfly::Transaction::Scheduling(std::__n4861::coroutine_handle<void>, dfly::Transaction::RunnableType)::<lambda()>&> /usr/include/c++/11/bits/invoke.h:61
-    #5 0x59b5fe972dd8 in __invoke_r<void, dfly::Transaction::Scheduling(std::__n4861::coroutine_handle<void>, dfly::Transaction::RunnableType)::<lambda()>&> /usr/include/c++/11/bits/invoke.h:111
-    #6 0x59b5fe972af8 in _M_invoke /usr/include/c++/11/bits/std_function.h:290
-    #7 0x59b5fe83db15 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #8 0x59b5fe98f3a2 in util::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/net/util/task_queue.hpp:69
-    #9 0x59b5fe98b729 in base::UringProactor::DrainTasks() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:69
-    #10 0x59b5fe98c488 in base::UringProactor::loop() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:178
-    #11 0x59b5fe835a20 in base::UringProactorPool::AsyncLoop()::{lambda()#1}::operator()() const (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fa20)
-    #12 0x59b5fe85768c in void std::__invoke_impl<void, base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(std::__invoke_other, base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x6168c)
-    #13 0x59b5fe8573ef in std::__invoke_result<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>::type std::__invoke<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x613ef)
-    #14 0x59b5fe856bed in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x60bed)
-    #15 0x59b5fe855efe in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::operator()<, void>() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5fefe)
-    #16 0x59b5fe854601 in void std::__invoke_impl<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::__invoke_other, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5e601)
-    #17 0x59b5fe8529e0 in std::enable_if<is_invocable_r_v<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>, void>::type std::__invoke_r<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5c9e0)
-    #18 0x59b5fe85076f in std::_Function_handler<void (), std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()> >::_M_invoke(std::_Any_data const&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5a76f)
-    #19 0x59b5fe83db15 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #20 0x59b5fe8334a4 in util::Thread::thread_func(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3d4a4)
-    #21 0x74f3f7c94ac2 in start_thread nptl/pthread_create.c:442
-    #22 0x74f3f7d268cf  (/lib/x86_64-linux-gnu/libc.so.6+0x1268cf)
+2026.7.30 -- 1
+==52190==ERROR: AddressSanitizer: stack-use-after-scope on address 0x7a6a824f5950 at pc 0x576e9a7415c1 bp 0x7a6a833ec350 sp 0x7a6a833ec348
+READ of size 4 at 0x7a6a824f5950 thread T32
+/usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
+    #0 0x576e9a7415c0 in dfly::KeyIndex::Range() const::'lambda'(unsigned int)::operator()(unsigned int) const /home/yy/programs/ImDragonfly/src/detail/tx_base.hpp:87:44
+    #1 0x576e9a741543 in unsigned int std::__invoke_impl<unsigned int, dfly::KeyIndex::Range() const::'lambda'(unsigned int)&, unsigned int>(std::__invoke_other, dfly::KeyIndex::Range() const::'lambda'(unsigned int)&, unsigned int&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #2 0x576e9a74145c in std::__invoke_result<dfly::KeyIndex::Range() const::'lambda'(unsigned int)&, unsigned int>::type std::__invoke<dfly::KeyIndex::Range() const::'lambda'(unsigned int)&, unsigned int>(dfly::KeyIndex::Range() const::'lambda'(unsigned int)&, unsigned int&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #3 0x576e9a735451 in std::ranges::transform_view<std::ranges::iota_view<unsigned int, unsigned int>, dfly::KeyIndex::Range() const::'lambda'(unsigned int)>::_Iterator<false>::operator*() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/ranges:1837:13
+    #4 0x576e9a736929 in std::ranges::transform_view<std::ranges::transform_view<std::ranges::iota_view<unsigned int, unsigned int>, dfly::KeyIndex::Range() const::'lambda'(unsigned int)>, dfly::KeyIndex::Range(std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul> const&) const::'lambda'(unsigned int)>::_Iterator<false>::operator*() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/ranges:1837:47
+    #5 0x576e9a70939f in dfly::Transaction::InitShardData(absl::Span<dfly::Transaction::PerShardCache const>, unsigned long) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:175:28
+    #6 0x576e9a7073b8 in dfly::Transaction::InitByKeys(dfly::KeyIndex const&) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:114:3
+    #7 0x576e9a705b66 in dfly::Transaction::InitByArgs(dfly::Namespace const*, unsigned short, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:50:3
+    #8 0x576e9a6462c0 in TxQueueTest_MultiConcurrent_Test::TestBody()::$_1::operator()() const /home/yy/programs/ImDragonfly/test/tx_queue_test.cpp:259:15
+    #9 0x576e9a645ed4 in void std::__invoke_impl<void, TxQueueTest_MultiConcurrent_Test::TestBody()::$_1&>(std::__invoke_other, TxQueueTest_MultiConcurrent_Test::TestBody()::$_1&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #10 0x576e9a645e74 in std::enable_if<is_invocable_r_v<void, TxQueueTest_MultiConcurrent_Test::TestBody()::$_1&>, void>::type std::__invoke_r<void, TxQueueTest_MultiConcurrent_Test::TestBody()::$_1&>(TxQueueTest_MultiConcurrent_Test::TestBody()::$_1&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #11 0x576e9a645cdc in std::_Function_handler<void (), TxQueueTest_MultiConcurrent_Test::TestBody()::$_1>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #12 0x576e9a66d7f2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #13 0x576e9a765fd0 in base::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/YY/base/task_queue.hpp:66:9
+    #14 0x576e9a763f79 in yy::net::EventLoop::doPendingFunctions() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:100:14
+    #15 0x576e9a763d33 in yy::net::EventLoop::loop() /home/yy/programs/ImDragonfly/YY/net/EventLoop.cpp:63:7
+    #16 0x576e9a66aedb in yy::net::EventLoopThread::run()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:24:12
+    #17 0x576e9a66acb4 in void std::__invoke_impl<void, yy::net::EventLoopThread::run()::'lambda'()&>(std::__invoke_other, yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #18 0x576e9a66ac94 in std::__invoke_result<yy::net::EventLoopThread::run()::'lambda'()&>::type std::__invoke<yy::net::EventLoopThread::run()::'lambda'()&>(yy::net::EventLoopThread::run()::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #19 0x576e9a66ac68 in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:506:11
+    #20 0x576e9a66abed in void std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>::operator()<void>() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/functional:591:17
+    #21 0x576e9a66ab04 in void std::__invoke_impl<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::__invoke_other, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #22 0x576e9a66aab4 in std::enable_if<is_invocable_r_v<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>, void>::type std::__invoke_r<void, std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&>(std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #23 0x576e9a66a97c in std::_Function_handler<void (), std::_Bind<yy::net::EventLoopThread::run()::'lambda'() ()>>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #24 0x576e9a66d7f2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #25 0x576e9a66a74d in base::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:115:5
+    #26 0x576e9a5bb9ca in asan_thread_start(void*) asan_interceptors.cpp.o
+    #27 0x7a6a87494a82 in start_thread nptl/pthread_create.c:442:8
+    #28 0x7a6a8752688f  misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:81
 
-0x50d0000090e0 is located 0 bytes inside of 144-byte region [0x50d0000090e0,0x50d000009170)
-freed by thread T4 here:
-    #0 0x74f3f84b6d07 in operator delete(void*) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:160
-    #1 0x59b5fe8f02f0 in CmdMSet /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:173
-    #2 0x59b5fe8ce62b in std::__n4861::coroutine_handle<void>::resume() const /usr/include/c++/11/coroutine:126
-    #3 0x59b5fe96f74b in operator() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:56
-    #4 0x59b5fe972f37 in __invoke_impl<void, dfly::Transaction::Scheduling(std::__n4861::coroutine_handle<void>, dfly::Transaction::RunnableType)::<lambda()>&> /usr/include/c++/11/bits/invoke.h:61
-    #5 0x59b5fe972dd8 in __invoke_r<void, dfly::Transaction::Scheduling(std::__n4861::coroutine_handle<void>, dfly::Transaction::RunnableType)::<lambda()>&> /usr/include/c++/11/bits/invoke.h:111
-    #6 0x59b5fe972af8 in _M_invoke /usr/include/c++/11/bits/std_function.h:290
-    #7 0x59b5fe83db15 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #8 0x59b5fe98f3a2 in util::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/net/util/task_queue.hpp:69
-    #9 0x59b5fe98b729 in base::UringProactor::DrainTasks() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:69
-    #10 0x59b5fe98c488 in base::UringProactor::loop() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:178
-    #11 0x59b5fe835a20 in base::UringProactorPool::AsyncLoop()::{lambda()#1}::operator()() const (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fa20)
-    #12 0x59b5fe85768c in void std::__invoke_impl<void, base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(std::__invoke_other, base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x6168c)
-    #13 0x59b5fe8573ef in std::__invoke_result<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>::type std::__invoke<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x613ef)
-    #14 0x59b5fe856bed in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x60bed)
-    #15 0x59b5fe855efe in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::operator()<, void>() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5fefe)
-    #16 0x59b5fe854601 in void std::__invoke_impl<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::__invoke_other, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5e601)
-    #17 0x59b5fe8529e0 in std::enable_if<is_invocable_r_v<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>, void>::type std::__invoke_r<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5c9e0)
-    #18 0x59b5fe85076f in std::_Function_handler<void (), std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()> >::_M_invoke(std::_Any_data const&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5a76f)
-    #19 0x59b5fe83db15 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #20 0x59b5fe8334a4 in util::Thread::thread_func(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3d4a4)
-    #21 0x74f3f7c94ac2 in start_thread nptl/pthread_create.c:442
+Address 0x7a6a824f5950 is located in stack of thread T32 at offset 336 in frame
+    #0 0x576e9a70874f in dfly::Transaction::InitShardData(absl::Span<dfly::Transaction::PerShardCache const>, unsigned long) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:152
 
-previously allocated by thread T2 here:
-    #0 0x74f3f84b61e7 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:99
-    #1 0x59b5fe8ef95d in CmdMSet /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:173
-    #2 0x59b5fe8f4a5d in dfly::MSET(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:266
-    #3 0x59b5fe87f153 in decltype (((forward<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>)>)({parm#1}))((forward<dfly::CommandContext*>)({parm#2}), (forward<std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >)({parm#2}))) fu2::abi_400::detail::invocation::invoke<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/net/util/function2.hpp:222
-    #4 0x59b5fe87dfc2 in fu2::abi_400::detail::type_erasure::invocation_table::function_trait<void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const>::internal_invoker<fu2::abi_400::detail::type_erasure::box<true, void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), std::allocator<void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>)> >, true>::invoke(fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/net/util/function2.hpp:638
-    #5 0x59b5fe840c09 in decltype(auto) fu2::abi_400::detail::type_erasure::tables::vtable<fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >::invoke<0ul, fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(fu2::abi_400::detail::type_erasure::data_accessor const*&&, unsigned long const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) const /home/yy/programs/ImDragonfly/net/util/function2.hpp:1046
-    #6 0x59b5fe840d83 in decltype(auto) fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >::invoke<0ul, fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> > const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> > const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/net/util/function2.hpp:1268
-    #7 0x59b5fe840f15 in fu2::abi_400::detail::type_erasure::invocation_table::operator_impl<0ul, fu2::abi_400::detail::function<fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const>::operator()(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/net/util/function2.hpp:826
-    #8 0x59b5fe837a76 in dfly::CommandId::Invoke(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/src/command_layer/command_registry.hpp:48
-    #9 0x59b5fe82d7da in DoRead /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:80
-    #10 0x59b5fe8ce62b in std::__n4861::coroutine_handle<void>::resume() const /usr/include/c++/11/coroutine:126
-    #11 0x59b5fe98c182 in base::UringProactor::HandleCqe(io_uring_cqe*) /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:159
-    #12 0x59b5fe98c569 in base::UringProactor::loop() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:188
-    #13 0x59b5fe835a20 in base::UringProactorPool::AsyncLoop()::{lambda()#1}::operator()() const (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fa20)
-    #14 0x59b5fe85768c in void std::__invoke_impl<void, base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(std::__invoke_other, base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x6168c)
-    #15 0x59b5fe8573ef in std::__invoke_result<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>::type std::__invoke<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x613ef)
-    #16 0x59b5fe856bed in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x60bed)
-    #17 0x59b5fe855efe in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::operator()<, void>() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5fefe)
-    #18 0x59b5fe854601 in void std::__invoke_impl<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::__invoke_other, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5e601)
-    #19 0x59b5fe8529e0 in std::enable_if<is_invocable_r_v<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>, void>::type std::__invoke_r<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5c9e0)
-    #20 0x59b5fe85076f in std::_Function_handler<void (), std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()> >::_M_invoke(std::_Any_data const&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5a76f)
-    #21 0x59b5fe83db15 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #22 0x59b5fe8334a4 in util::Thread::thread_func(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3d4a4)
-    #23 0x74f3f7c94ac2 in start_thread nptl/pthread_create.c:442
+  This frame has 14 object(s):
+    [32, 48) 'shard_index'
+    [64, 65) 'ref.tmp' (line 154)
+    [80, 176) 'ref.tmp2' (line 154)
+    [208, 216) '__begin2' (line 173)
+    [240, 248) '__end2' (line 173)
+    [272, 304) 'ref.tmp55' (line 175)
+    [336, 348) 'ref.tmp56' (line 176) <== Memory access at offset 336 is inside this variable
+    [368, 392) '__begin3' (line 175)
+    [432, 456) '__end3' (line 175)
+    [496, 512) 'key' (line 175)
+    [528, 536) 'ref.tmp64' (line 177)
+    [560, 576) 'ref.tmp65' (line 177)
+    [592, 608) 'agg.tmp'
+    [624, 640) 'ref.tmp96' (line 190)
+HINT: this may be a false positive if your program uses some custom stack unwind mechanism, swapcontext or vfork
+      (longjmp and C++ exceptions *are* supported)
+Thread T32 created by T0 here:
+    #0 0x576e9a5a375d in pthread_create (/home/yy/programs/ImDragonfly/build/test/unit_tests+0xda75d) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #1 0x576e9a66a1b4 in base::Thread::Thread<yy::net::EventLoopThread::run()::'lambda'()>(char const*, yy::net::EventLoopThread::run()::'lambda'()&&) /home/yy/programs/ImDragonfly/YY/base/thread.hpp:25:9
+    #2 0x576e9a669ccf in std::__detail::_MakeUniq<base::Thread>::__single_object std::make_unique<base::Thread, char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()>(char const (&) [16], yy::net::EventLoopThread::run()::'lambda'()&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_ptr.h:1070:34
+    #3 0x576e9a669a58 in yy::net::EventLoopThread::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThread.h:17:15
+    #4 0x576e9a66959a in yy::net::EventLoopThreadPool::run() /home/yy/programs/ImDragonfly/YY/net/EventLoopThreadPool.h:35:14
+    #5 0x576e9a64d3f4 in TxQueueTest::SetUp() /home/yy/programs/ImDragonfly/test/tx_queue_test.cpp:26:11
+    #6 0x576e9a7c3ae0 in void testing::internal::HandleSehExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2faae0) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #7 0x576e9a7bbc66 in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2f2c66) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #8 0x576e9a79418f in testing::Test::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2cb18f) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #9 0x576e9a794c99 in testing::TestInfo::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2cbc99) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #10 0x576e9a79567d in testing::TestSuite::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2cc67d) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #11 0x576e9a7a6510 in testing::internal::UnitTestImpl::RunAllTests() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2dd510) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #12 0x576e9a7c4c03 in bool testing::internal::HandleSehExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2fbc03) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #13 0x576e9a7bcf0c in bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2f3f0c) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #14 0x576e9a7a465f in testing::UnitTest::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2db65f) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #15 0x576e9a780466 in RUN_ALL_TESTS() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2b7466) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #16 0x576e9a7803df in main (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x2b73df) (BuildId: fd11cf409772ece6d5cc30b47b8d8f947851ad38)
+    #17 0x7a6a87429d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
 
-Thread T3 created by T0 here:
-    #0 0x74f3f8458685 in __interceptor_pthread_create ../../../../src/libsanitizer/asan/asan_interceptors.cpp:216
-    #1 0x59b5fe84685e in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5085e)
-    #2 0x59b5fe83fb68 in std::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*&&, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x49b68)
-    #3 0x59b5fe835e0c in base::UringProactorPool::AsyncLoop() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fe0c)
-    #4 0x59b5fe83bad5 in dfly::RedisServer::Start() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x45ad5)
-    #5 0x59b5fe83055f in main /home/yy/programs/ImDragonfly/main.cpp:80
-    #6 0x74f3f7c29d8f in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
-
-Thread T4 created by T0 here:
-    #0 0x74f3f8458685 in __interceptor_pthread_create ../../../../src/libsanitizer/asan/asan_interceptors.cpp:216
-    #1 0x59b5fe84685e in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5085e)
-    #2 0x59b5fe83fb68 in std::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*&&, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x49b68)
-    #3 0x59b5fe835e0c in base::UringProactorPool::AsyncLoop() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fe0c)
-    #4 0x59b5fe83bad5 in dfly::RedisServer::Start() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x45ad5)
-    #5 0x59b5fe83055f in main /home/yy/programs/ImDragonfly/main.cpp:80
-    #6 0x74f3f7c29d8f in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
-
-Thread T2 created by T0 here:
-    #0 0x74f3f8458685 in __interceptor_pthread_create ../../../../src/libsanitizer/asan/asan_interceptors.cpp:216
-    #1 0x59b5fe84685e in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5085e)
-    #2 0x59b5fe83fb68 in std::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*&&, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x49b68)
-    #3 0x59b5fe835e0c in base::UringProactorPool::AsyncLoop() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3fe0c)
-    #4 0x59b5fe83bad5 in dfly::RedisServer::Start() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x45ad5)
-    #5 0x59b5fe83055f in main /home/yy/programs/ImDragonfly/main.cpp:80
-    #6 0x74f3f7c29d8f in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
-
-SUMMARY: AddressSanitizer: double-free ../../../../src/libsanitizer/asan/asan_new_delete.cpp:160 in operator delete(void*)
-==1973533==ABORTING
-
-AddressSanitizer:DEADLYSIGNAL
-=================================================================
-==253352==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000008 (pc 0x586501bddbb7 bp 0x7dfd31df50c0 sp 0x7dfd31df5090 T2)
-==253352==The signal is caused by a READ memory access.
-==253352==Hint: address points to the zero page.
-    #0 0x586501bddbb7 in dfly::TxQueue::LinkFree(unsigned long) /home/yy/programs/ImDragonfly/src/detail/tx_queue.cpp:38
-    #1 0x586501bde072 in dfly::TxQueue::Insert(dfly::Transaction*) /home/yy/programs/ImDragonfly/src/detail/tx_queue.cpp:71
-    #2 0x586501bc946d in dfly::Transaction::ScheduleInShard(dfly::EngineShard*, bool) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:215
-    #3 0x586501bce21f in operator()<dfly::Transaction::Slice> /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:185
-    #4 0x586501bce2b8 in operator()<dfly::Transaction::Slice, short unsigned int> /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.hpp:471
-    #5 0x586501bce3a5 in IterateShards<dfly::Transaction::IterateActiveShards<dfly::Transaction::ScheduleInternal()::<lambda(auto:59&, dfly::ShardId)> >(dfly::Transaction::ScheduleInternal()::<lambda(auto:59&, dfly::ShardId)>&&)::<lambda(auto:57&, auto:58)> > /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.hpp:460
-    #6 0x586501bcddc3 in IterateActiveShards<dfly::Transaction::ScheduleInternal()::<lambda(auto:59&, dfly::ShardId)> > /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.hpp:469
-    #7 0x586501bc8dd0 in dfly::Transaction::ScheduleInternal() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:182
-    #8 0x586501aaeac9 in void dfly::Transaction::Scheduling<dfly::cmd::Coro::SingleHopWaiterT<facade::OpResult<void> >&>(std::__n4861::coroutine_handle<void>, dfly::cmd::Coro::SingleHopWaiterT<facade::OpResult<void> >&) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.hpp:134
-    #9 0x586501aac037 in dfly::cmd::Coro::SingleHopWaiterT<facade::OpResult<void> >::await_suspend(std::__n4861::coroutine_handle<dfly::cmd::Coro>) /home/yy/programs/ImDragonfly/src/command_layer/cmd_support.hpp:88
-    #10 0x586501b3906a in CmdSet /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:193
-    #11 0x586501b38605 in CmdSet /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:176
-    #12 0x586501b3c25f in dfly::Set(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:259
-    #13 0x586501ababdd in decltype (((forward<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>)>)({parm#1}))((forward<dfly::CommandContext*>)({parm#2}), (forward<std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >)({parm#2}))) fu2::abi_400::detail::invocation::invoke<void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(void (* const&)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/net/util/function2.hpp:222
-    #14 0x586501ab94fe in fu2::abi_400::detail::type_erasure::invocation_table::function_trait<void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const>::internal_invoker<fu2::abi_400::detail::type_erasure::box<true, void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>), std::allocator<void (*)(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>)> >, true>::invoke(fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) /home/yy/programs/ImDragonfly/net/util/function2.hpp:638
-    #15 0x586501a788b7 in decltype(auto) fu2::abi_400::detail::type_erasure::tables::vtable<fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >::invoke<0ul, fu2::abi_400::detail::type_erasure::data_accessor const*, unsigned long const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(fu2::abi_400::detail::type_erasure::data_accessor const*&&, unsigned long const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) const /home/yy/programs/ImDragonfly/net/util/function2.hpp:1046
-    #16 0x586501a78a31 in decltype(auto) fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >::invoke<0ul, fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> > const&, dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul> >(fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> > const&, dfly::CommandContext*&&, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>&&) /home/yy/programs/ImDragonfly/net/util/function2.hpp:1268
-    #17 0x586501a78bc3 in fu2::abi_400::detail::type_erasure::invocation_table::operator_impl<0ul, fu2::abi_400::detail::function<fu2::abi_400::detail::config<true, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const> >, void (dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const>::operator()(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/net/util/function2.hpp:826
-    #18 0x586501a6fa76 in dfly::CommandId::Invoke(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char> > const, 18446744073709551615ul>) const /home/yy/programs/ImDragonfly/src/command_layer/command_registry.hpp:48
-    #19 0x586501a657da in DoRead /home/yy/programs/ImDragonfly/src/network/redis_server.hpp:80
-    #20 0x586501b14435 in std::__n4861::coroutine_handle<void>::resume() const /usr/include/c++/11/coroutine:126
-    #21 0x586501beb720 in base::UringProactor::HandleCqe(io_uring_cqe*) /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:159
-    #22 0x586501bebb07 in base::UringProactor::loop() /home/yy/programs/ImDragonfly/net/base/uring_proactor.cpp:188
-    #23 0x586501a6da20 in base::UringProactorPool::AsyncLoop()::{lambda()#1}::operator()() const (/home/yy/programs/ImDragonfly/build/imdragonfly+0x40a20)
-    #24 0x586501a8ee3e in void std::__invoke_impl<void, base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(std::__invoke_other, base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x61e3e)
-    #25 0x586501a8eba1 in std::__invoke_result<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>::type std::__invoke<base::UringProactorPool::AsyncLoop()::{lambda()#1}&>(base::UringProactorPool::AsyncLoop()::{lambda()#1}&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x61ba1)
-    #26 0x586501a8e39f in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::__call<void>(std::tuple<>&&, std::_Index_tuple<>) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x6139f)
-    #27 0x586501a8d6c0 in void std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>::operator()<, void>() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x606c0)
-    #28 0x586501a8bdf5 in void std::__invoke_impl<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::__invoke_other, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5edf5)
-    #29 0x586501a8a224 in std::enable_if<is_invocable_r_v<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>, void>::type std::__invoke_r<void, std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&>(std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()>&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5d224)
-    #30 0x586501a87ff9 in std::_Function_handler<void (), std::_Bind<base::UringProactorPool::AsyncLoop()::{lambda()#1} ()> >::_M_invoke(std::_Any_data const&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x5aff9)
-    #31 0x586501a757b1 in std::function<void ()>::operator()() const /usr/include/c++/11/bits/std_function.h:590
-    #32 0x586501a6b4a4 in util::Thread::thread_func(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x3e4a4)
-    #33 0x7dfd35a94ac2 in start_thread nptl/pthread_create.c:442
-    #34 0x7dfd35b268cf  (/lib/x86_64-linux-gnu/libc.so.6+0x1268cf)
-
-AddressSanitizer can not provide additional info.
-SUMMARY: AddressSanitizer: SEGV /home/yy/programs/ImDragonfly/src/detail/tx_queue.cpp:38 in dfly::TxQueue::LinkFree(unsigned long)
-Thread T2 created by T0 here:
-    #0 0x7dfd36258685 in __interceptor_pthread_create ../../../../src/libsanitizer/asan/asan_interceptors.cpp:216
-    #1 0x586501a7e276 in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x51276)
-    #2 0x586501a77804 in std::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::{lambda()#1}>(char const*&&, base::UringProactorPool::AsyncLoop()::{lambda()#1}&&) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x4a804)
-    #3 0x586501a6de0c in base::UringProactorPool::AsyncLoop() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x40e0c)
-    #4 0x586501a73771 in dfly::RedisServer::Start() (/home/yy/programs/ImDragonfly/build/imdragonfly+0x46771)
-    #5 0x586501a6855f in main /home/yy/programs/ImDragonfly/main.cpp:80
-    #6 0x7dfd35a29d8f in __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:58
-
-==253352==ABORTING
-yy@aaa:~/programs/ImDragonfly/build$ 
-
+SUMMARY: AddressSanitizer: stack-use-after-scope /home/yy/programs/ImDragonfly/src/detail/tx_base.hpp:87:44 in dfly::KeyIndex::Range() const::'lambda'(unsigned int)::operator()(unsigned int) const
+Shadow bytes around the buggy address:
+  0x7a6a824f5680: 00 00 f2 f2 00 00 f3 f3 00 00 00 00 00 00 00 00
+  0x7a6a824f5700: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7a6a824f5780: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7a6a824f5800: f1 f1 f1 f1 00 00 f2 f2 f8 f2 f8 f8 f8 f8 f8 f8
+  0x7a6a824f5880: f8 f8 f8 f8 f8 f8 f2 f2 f2 f2 00 f2 f2 f2 00 f2
+=>0x7a6a824f5900: f2 f2 00 00 00 00 f2 f2 f2 f2[f8]f8 f2 f2 00 00
+  0x7a6a824f5980: 00 f2 f2 f2 f2 f2 00 00 00 f2 f2 f2 f2 f2 00 00
+  0x7a6a824f5a00: f2 f2 f8 f2 f2 f2 f8 f8 f2 f2 00 00 f2 f2 f8 f8
+  0x7a6a824f5a80: f3 f3 f3 f3 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7a6a824f5b00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x7a6a824f5b80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==52190==ABORTING
+yy@yy:~/programs/ImDragonfly$ 
 
 
 
