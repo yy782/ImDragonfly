@@ -221,8 +221,8 @@ uint16_t Transaction::DisarmInShard(ShardId sid) {
 
 cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
                                                std::coroutine_handle<> handle) {
-  LOG(INFO) << "命令:" << CmdArgListToString(full_args_)
-            << " shard_cnt:" << unique_shard_cnt_;
+  // LOG(INFO) << "命令:" << CmdArgListToString(full_args_)
+  //           << " shard_cnt:" << unique_shard_cnt_;
   coordinator_state_ |= COORD_CONCLUDING;
   cb_ptr_ = cb;
   InitBlockingController(handle, unique_shard_cnt_);

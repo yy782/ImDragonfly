@@ -14,6 +14,7 @@
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/op_status.hpp"
+#include "sharding/synchronization.hpp"
 using namespace base;
 namespace dfly {
 
@@ -298,7 +299,7 @@ class Transaction {
     });
   }
 
-  base::BlockingCounter run_barrier_{0};
+  ::dfly::BlockingCounter run_barrier_{0};
 
   absl::InlinedVector<PerShardData, 4> shard_data_;
 
@@ -345,7 +346,7 @@ class Transaction {
       if (need_resume.load() &&
           resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
               1) {  // 多个观察者，防止反复resume
-        LOG(INFO) << "ResumeHandle";
+        //LOG(INFO) << "ResumeHandle";
         handle_.resume();
       }
     } else {  // RunCallBack

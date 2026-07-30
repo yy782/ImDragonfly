@@ -28,8 +28,6 @@ inline bool cluster_shard_by_slot = false;
 
 constexpr SlotId kMaxSlotNum = 0x3FFF;
 
-// A simple utility class that "aggregates" SlotId-s and can tell whether all
-// inputs were the same. Only works when cluster is enabled.
 class UniqueSlotChecker {
  public:
   void Add(std::string_view key);

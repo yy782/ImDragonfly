@@ -10,8 +10,7 @@
 namespace dfly {
 
 namespace {
-// Redis cluster hash tag implementation: extracts content inside { ... }
-// e.g., "{user1000}.suffix" → "user1000"
+
 struct LockTagOptions {
   static LockTagOptions& instance() {
     static LockTagOptions opts;

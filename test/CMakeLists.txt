@@ -5,6 +5,7 @@ add_executable(unit_tests
     db_table_test.cpp
     tx_queue_test.cpp
     intent_lock_test.cpp
+    Synchronized_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
     incomplete-imdragonfly
