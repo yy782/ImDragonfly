@@ -210,7 +210,7 @@ void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
   CmdTtl(cmd_cntx, args[1]);
 }
 
-void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList args) {
+void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
 }

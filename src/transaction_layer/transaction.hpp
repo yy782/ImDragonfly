@@ -216,7 +216,7 @@ class Transaction {
  private:
   struct alignas(64) PerShardData {
     PerShardData() {}
-    PerShardData(PerShardData&& other) noexcept {}
+    PerShardData(PerShardData&& /*other*/) noexcept {}
 
     uint16_t local_mask = 0;
 

@@ -6,7 +6,6 @@
 
 #include <glog/logging.h>
 
-#include "YY/net/TimerQueue.h"
 #include "db_slice.hpp"
 #include "detail/stateless_alloceator.hpp"
 #include "transaction_layer/transaction.hpp"
@@ -76,7 +75,7 @@ void EngineShard::PollExecution(Transaction* trans) {
   }
   if (trans && disarmed) {
     DCHECK(trans_mask & Transaction::OUT_OF_ORDER);
-    bool concludes = run(trans);
+    [[maybe_unused]] bool concludes = run(trans);
     assert(concludes);
   }
 }

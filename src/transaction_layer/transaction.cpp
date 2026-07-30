@@ -13,7 +13,7 @@ thread_local Transaction::TLTmpSpace Transaction::tmp_space;
 namespace {
 
 std::atomic_uint64_t op_seq{1};
-std::atomic_uint64_t ids{1};
+[[maybe_unused]] std::atomic_uint64_t ids{1};
 constexpr size_t kTransSize [[maybe_unused]] = sizeof(Transaction);
 
 struct ScheduleContext {
@@ -61,7 +61,7 @@ OpResult<KeyIndex> DetermineKeys(const CommandId* cid, CmdArgList args) {
   if (cid->opt_mask() & (CO::GLOBAL_TRANS | CO::NO_KEY_TRANSACTIONAL))
     return KeyIndex{};
 
-  int num_custom_keys = -1;
+  int num_custom_keys [[maybe_unused]] = -1;
 
   unsigned start = 0, end = 0, step = 0;
 
@@ -268,8 +268,9 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       (unique_shard_cnt_ == 1 || (cid_->opt_mask() & CO::IDEMPOTENT));  // 幂等
   auto is_active = [this](uint32_t i) { return IsActive(i); };
 
-  IterateActiveShards(
-      [](auto& sd, auto i) { DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0); });
+  IterateActiveShards([](auto& sd, auto /*i*/) {
+    DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
+  });
 
   while (true) {
     if (unique_shard_cnt_ > 1)
@@ -277,8 +278,9 @@ cppcoro::task<> Transaction::ScheduleInternal() {
     run_barrier_->Start(unique_shard_cnt_);
 
     if (CanRunInlined()) {
-      bool success = ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
-                                     "ScheduleInternal:CanRunInlined");
+      [[maybe_unused]] bool success =
+          ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
+                          "ScheduleInternal:CanRunInlined");
       assert(success);
       run_barrier_->Dec();
       break;
@@ -296,7 +298,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       shard_set->Add(unique_shard_id_, cb);
     } else {
       IterateActiveShards(
-          [cb](const auto& sd, ShardId i) { shard_set->Add(i, cb); });
+          [cb](const auto& /*sd*/, ShardId i) { shard_set->Add(i, cb); });
     }
     co_await run_barrier_->Wait();
     if (schedule_ctx.fail_cnt.load(memory_order_relaxed) == 0) {
@@ -315,7 +317,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
     shard_set->DispatchBriefInParallel(std::move(cancel), is_active);
     co_await run_barrier_->Wait();
     if (should_poll_execution.load(memory_order_relaxed)) {
-      IterateActiveShards([](const auto& sd, auto i) {
+      IterateActiveShards([](const auto& /*sd*/, auto i) {
         shard_set->Add(i,
                        [] { EngineShard::tlocal()->PollExecution(nullptr); });
       });
@@ -415,7 +417,7 @@ void Transaction::DispatchHop() {
     CHECK(namespace_ != nullptr);
     EngineShard::tlocal()->PollExecution(this);
   };
-  IterateShards([&poll_cb, &poll_flags](PerShardData& sd, auto i) {
+  IterateShards([&poll_cb, &poll_flags](PerShardData& /*sd*/, auto i) {
     if (poll_flags.test(i)) shard_set->Add(i, poll_cb);
   });
 }
