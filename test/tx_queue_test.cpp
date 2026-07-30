@@ -113,7 +113,7 @@ TEST_F(TxQueueTest, PopSpecificIterator) {
   q_->Push(&tx1);
 
   q_->Push(&tx2);
-  q_->Push(&tx3);
+  auto it3 = q_->Push(&tx3);
   q_->Push(&tx4);
 
   EXPECT_EQ(q_->Size(), 4u);
