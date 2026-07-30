@@ -273,13 +273,19 @@ cppcoro::task<> Transaction::ScheduleInternal() {
   IterateActiveShards([](auto& sd, auto /*i*/) {
     DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
   });
-
+#ifdef UNIT_TESTS
+  LOG(INFO) << " 事务 " << id << " 开始 ScheduleInternal"
+            << " 分片数:" << unique_shard_cnt_ << " 幂等:" << optimistic_exec;
+#endif
   while (true) {
     if (unique_shard_cnt_ > 1)
       txid_ = op_seq.fetch_add(1, memory_order_relaxed);
     run_barrier_->Start(unique_shard_cnt_);
 
     if (CanRunInlined()) {
+#ifdef UNIT_TESTS
+      LOG(INFO) << " 事务 " << id << " 可以内联执行";
+#endif
       [[maybe_unused]] bool success =
           ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
                           "ScheduleInternal:CanRunInlined");
@@ -297,6 +303,9 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       schedule_ctx.trans->FinishHop();
     };
     if (unique_shard_cnt_ == 1) {
+#ifdef UNIT_TESTS
+      LOG(INFO) << " 事务 " << id << " 唯一 shard 执行";
+#endif
       shard_set->Add(unique_shard_id_, cb);
     } else {
       IterateActiveShards(
@@ -306,6 +315,9 @@ cppcoro::task<> Transaction::ScheduleInternal() {
     if (schedule_ctx.fail_cnt.load(memory_order_relaxed) == 0) {
       break;
     }
+#ifdef UNIT_TESTS
+    LOG(INFO) << " 事务 " << id << " 重试";
+#endif
     atomic_bool should_poll_execution{false};
     run_barrier_->Start(unique_shard_cnt_);
 
@@ -366,7 +378,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   }
   if (lock_granted && execute_optimistic) {
     sd.local_mask |= OPTIMISTIC_EXECUTION;
-    // LOG(INFO) << "ScheduleInShard execute_optimistic";
+#ifdef UNIT_TESTS
+    LOG(INFO) << " 事务 " << id << " ScheduleInShard execute_optimistic ";
+#endif
     RunCallback(shard, context);
     if (coordinator_state_ & COORD_CONCLUDING) {
       release_fp_locks();
@@ -386,6 +400,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
     }
     return false;
   }
+#ifdef UNIT_TESTS
+  LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id() << " 入队";
+#endif
   TxQueue::Iterator it = txq->Push(shared_from_this());
   DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
   sd.pq_pos = it;
@@ -450,13 +467,15 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
     largs = GetLockArgs(idx);
     // LOG(INFO) << "准备清理lock, 分片:" << shard->shard_id();
     assert(sd.local_mask & KEYLOCK_ACQUIRED);
-    if (sd.local_mask & KEYLOCK_ACQUIRED) {  // 和源码逻辑可能不一样，注意
-      GetDbSlice(shard->shard_id()).Release(mode, largs);
-      sd.local_mask &= ~KEYLOCK_ACQUIRED;
-    }
+    GetDbSlice(shard->shard_id()).Release(mode, largs);
+    sd.local_mask &= ~KEYLOCK_ACQUIRED;
     sd.local_mask &= ~OUT_OF_ORDER;
   }
   FinishHop();
+#ifdef UNIT_TESTS
+  LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id()
+            << " RunInShard";
+#endif
   ResumeIfNeed(context);
   return is_concluding;
 }
@@ -471,7 +490,7 @@ void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
     LOG(FATAL) << "Unexpected exception " << e.what();
   }
   // LOG(INFO) << "RunCallback!";
-  ResumeIfNeed("RunCallback");
+  ResumeIfNeed("RunCallBack");
 }
 
 bool Transaction::CancelShardCb(EngineShard* shard) {

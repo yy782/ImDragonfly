@@ -5,7 +5,7 @@ add_executable(unit_tests
     db_table_test.cpp
     tx_queue_test.cpp
     intent_lock_test.cpp
-    Synchronized_test.cpp
+    synchronized_test.cpp
     cmd_arg_parser_test.cpp
     compact_obj_test.cpp
     op_status_test.cpp

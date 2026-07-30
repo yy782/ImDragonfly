@@ -22,12 +22,8 @@ const int shardNum = 5;
 
 class TxQueueTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    q_ = new TxQueue();
-  }
-  void TearDown() override {
-    delete q_;
-  }
+  void SetUp() override { q_ = new TxQueue(); }
+  void TearDown() override { delete q_; }
   TxQueue* q_;
 };
 
@@ -180,5 +176,3 @@ TEST_F(TxQueueTest, PushPopAlternating) {
   q_->Pop();  // 移除 tx3
   EXPECT_TRUE(q_->Empty());
 }
-
-

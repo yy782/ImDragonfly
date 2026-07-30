@@ -1,3 +1,5 @@
+#include "transaction_layer/transaction.hpp"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -12,7 +14,6 @@
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/namespaces.hpp"
 #include "test_util/RESP2Parser.hpp"
-#include "transaction_layer/transaction.hpp"
 
 using namespace dfly;
 using namespace yy::net;
@@ -70,8 +71,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   std::atomic<int> set_done{0};
   ReplyBuilder set_rb;
-  set_rb.SetSendCallback(
-      [&set_done](std::string&&) { set_done.store(1); });
+  set_rb.SetSendCallback([&set_done](std::string&&) { set_done.store(1); });
 
   auto set_tx = std::make_shared<Transaction>(set_cid);
   set_tx->id = 1;
@@ -149,8 +149,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   std::atomic<int> mset_done{0};
   ReplyBuilder mset_rb;
-  mset_rb.SetSendCallback(
-      [&mset_done](std::string&&) { mset_done.store(1); });
+  mset_rb.SetSendCallback([&mset_done](std::string&&) { mset_done.store(1); });
 
   auto mset_tx = std::make_shared<Transaction>(mset_cid);
   mset_tx->id = 3;
@@ -227,12 +226,11 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     std::vector<std::string> mset_strs = {"MSET"};
     std::vector<std::string> round_keys;
     for (int k = 0; k < kKeyCount; ++k) {
-      std::string key =
-          "r" + std::to_string(round) + "_k" + std::to_string(k);
+      std::string key = "r" + std::to_string(round) + "_k" + std::to_string(k);
       round_keys.push_back(key);
       mset_strs.push_back(key);
-      mset_strs.push_back("round" + std::to_string(round) +
-                          "_val" + std::to_string(k));
+      mset_strs.push_back("round" + std::to_string(round) + "_val" +
+                          std::to_string(k));
     }
 
     std::vector<std::string_view> mset_views;
@@ -267,8 +265,8 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     for (int retry = 0; retry < 500 && mset_done.load() == 0; ++retry) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_EQ(mset_done.load(), 1) << "MSET round " << round
-                                   << " did not finish";
+    ASSERT_EQ(mset_done.load(), 1)
+        << "MSET round " << round << " did not finish";
 
     // ── MGET to verify ──
     std::vector<std::string> mget_strs = {"MGET"};
@@ -301,8 +299,8 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     for (int retry = 0; retry < 500 && mget_done.load() == 0; ++retry) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_EQ(mget_done.load(), 1) << "MGET round " << round
-                                   << " did not finish";
+    ASSERT_EQ(mget_done.load(), 1)
+        << "MGET round " << round << " did not finish";
 
     // ── Verify every value matches ──
     RESP2Parser mget_parser(mget_result);
@@ -320,7 +318,7 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
 
 // ============================================================================
 // Test 3: MultiConcurrent — same keys across shards
-//         
+//
 // ============================================================================
 
 TEST_F(TransactionTest, MultiConcurrent) {
@@ -432,7 +430,7 @@ TEST_F(TransactionTest, MultiConcurrent) {
       });
 
       auto mget_tx = std::make_shared<Transaction>(mget_cid);
-      mget_tx->id = Count;
+      mget_tx->id = -1;
 
       std::vector<std::string> mget_strings;
       mget_strings.push_back("MGET");
