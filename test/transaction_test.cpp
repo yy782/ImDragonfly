@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -316,6 +317,388 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
   }
 }
 
+
+
+// ============================================================================
+// Test 4: VLLLock
+//   VLL 意向锁测试：预先持有锁，验证事务在意向锁排斥时仍能成功完成。
+//   第一组: 持有所有分片的锁 → 投放 MSET，预期事务成功。
+//   第二组: 只持有一个分片的锁 → 投放 MSET，预期事务成功。
+// ============================================================================
+TEST_F(TransactionTest, VLLLock) {
+  auto* Namespace = &namespaces->GetDefaultNamespace();
+  auto db_index = 0;
+
+  // ── 准备 MSET 参数，确保至少涉及 2 个分片 ──
+  const int kKeyCount = 6;
+  std::vector<std::string> mset_strings = {"MSET"};
+  for (int k = 0; k < kKeyCount; ++k) {
+    std::string key = "lock_opt_key_" + std::to_string(k);
+    mset_strings.push_back(key);
+    mset_strings.push_back("v" + std::to_string(k));
+  }
+
+  // ── 模拟 DetermineKeys: 用 MSET 的 first_key_pos/interleaved_step ──
+  //     从 args 中提取 key，与 Transaction::InitByArgs 内部行为完全一致
+  auto* mset_cid = CIs->Find("MSET");
+  ASSERT_NE(mset_cid, nullptr);
+  std::vector<std::string_view> mset_views;
+  for (auto& s : mset_strings) mset_views.push_back(s);
+  CmdArgList mset_args{mset_views};
+
+  int start = mset_cid->first_key_pos();   // MSET: 1
+  int step = mset_cid->interleaved_step();  // MSET: 2
+  int end = static_cast<int>(mset_args.size());
+  ASSERT_GT(start, 0);
+  ASSERT_GT(step, 0);
+
+  // ── 以分片为单位划分指纹组（严格按 DetermineKeys 提取的 key） ──
+  std::map<ShardId, std::vector<LockFp>> fps_by_shard;
+  std::set<ShardId> involved_shards;
+  for (int i = start; i < end; i += step) {
+    std::string_view key = mset_args[i];
+    ShardId sid = Shard(key, shard_set->size());
+    involved_shards.insert(sid);
+    fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
+  }
+
+  ASSERT_GE(involved_shards.size(), 2u)
+      << "Keys must span at least 2 shards";
+
+  // ========================================================================
+  // Group 1: 预先持有所有分片的锁 → 投放 MSET
+  //   意向锁排斥场景：事务拿到 key_lock_granted=false，仍应成功完成
+  // ========================================================================
+  {
+    // Step 1: 在所有涉及的分片上获取 EXCLUSIVE 锁
+    std::atomic<int> finished{0};
+    const int nshards = static_cast<int>(involved_shards.size());
+
+    for (const auto& [sid, fps] : fps_by_shard) {
+      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(sid);
+        KeyLockArgs lock_args;
+        lock_args.db_index = db_index;
+        lock_args.fps = fps;
+        db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
+        finished.fetch_add(1, std::memory_order_release);
+      });
+    }
+
+    // 测试线程等待 finished == nshards，然后继续下一步
+    for (int retry = 0; retry < 500 && finished.load() < nshards; ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(finished.load(), nshards)
+        << "Group 1: timeout waiting for lock acquisition on all shards";
+
+    // Step 2: 创建 MSET 事务，投放到分片 0
+    std::atomic<bool> mset_done{false};
+    ReplyBuilder mset_rb;
+    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+      mset_done.store(true, std::memory_order_release);
+    });
+
+    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    mset_tx->id = 2001;
+    CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
+
+    shard_set->Add(*involved_shards.begin(), [&]() {
+      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+      mset_cid->Invoke(&mset_cntx, mset_args);
+    });
+
+    // Step 3: 用 atomic_bool 轮询 MSET 是否完成
+    //   完成 → 符合预期（意向锁排斥下事务仍成功）
+    //   超时 → 测试失败
+    for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(mset_done.load())
+        << "Group 1: MSET should complete even when all shard locks are held";
+  }
+
+  // ========================================================================
+  // Group 2: 只持有一个分片的锁 → 投放 MSET
+  //   仅对一个分片加锁，验证意向锁排斥下事务仍能成功
+  // ========================================================================
+  {
+    // Step 1: 只在一个分片上获取 EXCLUSIVE 锁
+    ShardId locked_sid = *involved_shards.begin();
+    const auto& locked_fps = fps_by_shard[locked_sid];
+
+    std::atomic<int> finished{0};
+
+    shard_set->Add(locked_sid, [&, fps = locked_fps]() {
+      auto& db_slice = Namespace->GetDbSlice(locked_sid);
+      KeyLockArgs lock_args;
+      lock_args.db_index = db_index;
+      lock_args.fps = fps;
+      db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
+      finished.store(1, std::memory_order_release);
+    });
+
+    // 测试线程等待锁获取完毕
+    for (int retry = 0; retry < 500 && finished.load() == 0; ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(finished.load(), 1)
+        << "Group 2: timeout waiting for partial lock acquisition";
+
+    // Step 2: 创建 MSET 事务，投放到分片 0
+    std::atomic<bool> mset_done{false};
+    ReplyBuilder mset_rb;
+    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+      mset_done.store(true, std::memory_order_release);
+    });
+
+    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    mset_tx->id = 2002;
+    CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
+
+    shard_set->Add(*involved_shards.begin(), [&]() {
+      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+      mset_cid->Invoke(&mset_cntx, mset_args);
+    });
+
+    // Step 3: 用 atomic_bool 轮询 MSET 是否完成
+    for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(mset_done.load())
+        << "Group 2: MSET should complete even when one shard's lock is held";
+  }
+}
+
+// ============================================================================
+// Test 5: 乐观重试
+//   VLL 意向锁 + 乐观重试测试：在 VLLLock 基础上设置 committed_txid，
+//   触发事务的乐观重试路径。
+//   第一组: 持有所有分片的锁 → 投放 MSET，预期事务成功。
+//   第二组: 持有所有分片的锁，但仅一个分片设置 committed_txid → 投放 MSET。
+// ============================================================================
+TEST_F(TransactionTest, VLLLockRetry) {
+  auto* Namespace = &namespaces->GetDefaultNamespace();
+  auto db_index = 0;
+
+  // ── 准备 MSET 参数，确保至少涉及 2 个分片 ──
+  const int kKeyCount = 6;
+  std::vector<std::string> mset_strings = {"MSET"};
+  for (int k = 0; k < kKeyCount; ++k) {
+    std::string key = "retry_key_" + std::to_string(k);
+    mset_strings.push_back(key);
+    mset_strings.push_back("v" + std::to_string(k));
+  }
+
+  auto* mset_cid = CIs->Find("MSET");
+  ASSERT_NE(mset_cid, nullptr);
+  std::vector<std::string_view> mset_views;
+  for (auto& s : mset_strings) mset_views.push_back(s);
+  CmdArgList mset_args{mset_views};
+
+  int start = mset_cid->first_key_pos();
+  int step = mset_cid->interleaved_step();
+  int end = static_cast<int>(mset_args.size());
+  ASSERT_GT(start, 0);
+  ASSERT_GT(step, 0);
+
+  std::map<ShardId, std::vector<LockFp>> fps_by_shard;
+  std::set<ShardId> involved_shards;
+  for (int i = start; i < end; i += step) {
+    std::string_view key = mset_args[i];
+    ShardId sid = Shard(key, shard_set->size());
+    involved_shards.insert(sid);
+    fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
+  }
+
+  ASSERT_GE(involved_shards.size(), 2u)
+      << "Keys must span at least 2 shards";
+
+  // ========================================================================
+  // Group 1: 持有所有分片的锁，设置 committed_txid → 投放 MSET
+  // ========================================================================
+  {
+    std::atomic<int> finished{0};
+    const int nshards = static_cast<int>(involved_shards.size());
+
+    for (const auto& [sid, fps] : fps_by_shard) {
+      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(sid);
+        KeyLockArgs lock_args;
+        lock_args.db_index = db_index;
+        lock_args.fps = fps;
+        db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
+        EngineShard::tlocal()->committed_txid() = 5;
+        finished.fetch_add(1, std::memory_order_release);
+      });
+    }
+
+    for (int retry = 0; retry < 500 && finished.load() < nshards; ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(finished.load(), nshards)
+        << "Group 1: timeout waiting for lock acquisition on all shards";
+
+    std::atomic<bool> mset_done{false};
+    ReplyBuilder mset_rb;
+    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+      mset_done.store(true, std::memory_order_release);
+    });
+
+    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    mset_tx->id = 3001;
+    CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
+
+    shard_set->Add(*involved_shards.begin(), [&]() {
+      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+      mset_cid->Invoke(&mset_cntx, mset_args);
+    });
+
+    for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(mset_done.load())
+        << "Group 1: MSET should complete via retry even when all shard locks are held";
+  }
+
+  // ========================================================================
+  // Group 2: 持有所有分片的锁，但仅对一个分片设置 committed_txid → 投放 MSET
+  // ========================================================================
+  {
+    ShardId committed_sid = *involved_shards.begin();
+    std::atomic<int> finished{0};
+    const int nshards = static_cast<int>(involved_shards.size());
+
+    for (const auto& [sid, fps] : fps_by_shard) {
+      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(sid);
+        KeyLockArgs lock_args;
+        lock_args.db_index = db_index;
+        lock_args.fps = fps;
+        db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
+        if (sid == committed_sid) {
+          EngineShard::tlocal()->committed_txid() = 5;
+        }
+        finished.fetch_add(1, std::memory_order_release);
+      });
+    }
+
+    for (int retry = 0; retry < 500 && finished.load() < nshards; ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(finished.load(), nshards)
+        << "Group 2: timeout waiting for lock acquisition on all shards";
+
+    std::atomic<bool> mset_done{false};
+    ReplyBuilder mset_rb;
+    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+      mset_done.store(true, std::memory_order_release);
+    });
+
+    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    mset_tx->id = 3002;
+    CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
+
+    shard_set->Add(*involved_shards.begin(), [&]() {
+      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+      mset_cid->Invoke(&mset_cntx, mset_args);
+    });
+
+    for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_TRUE(mset_done.load())
+        << "Group 2: MSET should complete via retry when committed_txid set on only one shard";
+  }
+}
+
+// ============================================================================
+// Test 6: MultiConcurrentMGET
+//   投放大量 MGET 事务，验证所有事务在规定时间内完成。
+// ============================================================================
+TEST_F(TransactionTest, MultiConcurrentMGET) {
+  auto* Namespace = &namespaces->GetDefaultNamespace();
+  auto db_index = 0;
+
+  const int base = 10;
+  const int Count = base * shardNum;
+  const int P = Count / shardNum;
+  const int KeyCount = 5;
+
+  // ── 准备 MGET 命令字符串 ──
+  std::vector<std::vector<std::string>> all_cmd_strings(Count);
+  for (int j = 0; j < Count; ++j) {
+    auto& parts = all_cmd_strings[j];
+    parts.push_back("MGET");
+    for (int k = 0; k < KeyCount; ++k) {
+      parts.push_back("key" + std::to_string(k));
+    }
+  }
+
+  // ── 构建 string_view 层 ──
+  std::vector<std::vector<std::string_view>> all_views(Count);
+  for (int j = 0; j < Count; ++j) {
+    for (auto& s : all_cmd_strings[j]) {
+      all_views[j].push_back(s);
+    }
+  }
+
+  // ── 构建 CmdArgList ──
+  std::vector<CmdArgList> args;
+  args.reserve(Count);
+  for (int j = 0; j < Count; ++j) {
+    args.push_back(CmdArgList{all_views[j]});
+  }
+
+  auto* cid = CIs->Find("MGET");
+  ASSERT_NE(cid, nullptr);
+
+  std::atomic<int> finish_count{0};
+  std::vector<ReplyBuilder> rbs(Count);
+  std::vector<CommandContext> cmd_cntxs;
+  std::vector<std::shared_ptr<Transaction>> txs;
+  cmd_cntxs.reserve(Count);
+
+  for (int j = 0; j < Count; ++j) {
+    rbs[j].SetSendCallback([&finish_count](std::string&&) {
+      finish_count.fetch_add(1, std::memory_order_release);
+    });
+    auto tx = std::make_shared<Transaction>(cid);
+    tx->id = j;
+    txs.push_back(tx);
+    cmd_cntxs.emplace_back(tx, cid, &rbs[j]);
+  }
+
+  // ── 按分片投放 MGET 事务 ──
+  for (int s = 0; s < shardNum; ++s) {
+    shard_set->Add(s, [&, s]() {
+      for (int start = s * P; start < (s + 1) * P; ++start) {
+        auto& tx = txs[start];
+        tx->InitByArgs(Namespace, db_index, args[start]);
+        cid->Invoke(&cmd_cntxs[start], args[start]);
+      }
+    });
+  }
+
+  // ── 轮询等待所有 MGET 事务结束 ──
+  {
+    int prev = 0;
+    for (int retry = 0; retry < 1000 && finish_count.load() < Count; ++retry) {
+      int cur = finish_count.load();
+      if (cur > prev) {
+        prev = cur;
+        retry = 0;  // 有进展则重置重试计数
+      }
+      if (finish_count.load() < Count) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+  }
+
+  ASSERT_EQ(finish_count.load(), Count)
+      << "Not all MGET transactions finished";
+}
+
 // ============================================================================
 // Test 3: MultiConcurrent — same keys across shards
 //
@@ -486,3 +869,4 @@ TEST_F(TransactionTest, MultiConcurrent) {
     }
   }
 }
+
