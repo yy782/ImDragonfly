@@ -1,6 +1,7 @@
 #pragma once
 
-#include <cassert>
+#include <glog/logging.h>
+
 #include <ostream>
 
 namespace dfly {
@@ -32,7 +33,7 @@ class IntentLock {
   }
 
   void Release(Mode m, unsigned val = 1) {
-    assert(cnt_[m] >= val);
+    DCHECK_GE(cnt_[m], val);
     cnt_[m] -= val;
   }
 

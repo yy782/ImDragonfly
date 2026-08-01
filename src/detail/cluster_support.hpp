@@ -40,9 +40,7 @@ class UniqueSlotChecker {
   void Reset() { slot_id_ = kNoSlotId; }
 
  private:
-  // kNoSlotId - if slot wasn't set at all
   static constexpr SlotId kNoSlotId = kMaxSlotNum + 1;
-  // kCrossSlot - if several different slots were set
   static constexpr SlotId kCrossSlot = kNoSlotId + 1;
 
   SlotId slot_id_ = kNoSlotId;

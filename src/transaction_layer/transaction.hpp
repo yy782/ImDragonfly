@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <glog/logging.h>
+
 #include <memory>
 #include <optional>
 
@@ -313,39 +315,22 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   std::coroutine_handle<> handle_;
   std::atomic<uint16_t> blocking_count_ = 0;
   std::atomic<bool> need_resume = false;
-  std::atomic<uint16_t> resume_count_ = 1;
+  std::atomic<bool> resume_count_ = false;
 
   void InitBlockingController(std::coroutine_handle<> handle,
                               unsigned blocking_count) {
     handle_ = handle;
-    assert(blocking_count_ == 0);
+    DCHECK_EQ(blocking_count_, 0u);
     blocking_count_ = blocking_count;
   }
-  void ResumeIfNeed(std::string context) {
-    // fetch_sub(1) == 1 保证只有一个调用者看到 blocking_count_ 降到 0
-    bool watch_resume =
-        (context == "SingleHopAsync") || (context == "PollExecution");
-    if (watch_resume) {
-      if (need_resume.load() &&
-          resume_count_.fetch_sub(1, std::memory_order_acq_rel) ==
-              1) {  // 多个观察者，防止反复resume
-#ifdef UNIT_TESTS
-        LOG(INFO) << " 事务: " << id << " resume,上下文: " << context;
-#endif
-        handle_.resume();
-      }
-    } else {  // RunCallBack
-      if (context != "RunCallBack") {
-        LOG(FATAL) << " 事务: " << id << " 上下文:" << context;
-      }
-      if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-#ifdef UNIT_TESTS
-        LOG(INFO) << "事务: " << id
-                  << " 需要resume coroutine,上下文: " << context;
-#endif
-        need_resume.store(true);
-        // handle_ = std::nullopt;
-      }
+  void ResumeIfNeed() {
+    if (!need_resume.load(std::memory_order_acquire)) {
+      return;
+    }
+    bool expected = false;
+    if (resume_count_.compare_exchange_strong(expected, true,
+                                              std::memory_order_acq_rel)) {
+      handle_.resume();
     }
   }
 

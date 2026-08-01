@@ -15,7 +15,6 @@
 
 namespace dfly {
 
-// class BlockingController;
 class DbSlice;
 class EngineShard;
 
@@ -26,13 +25,9 @@ class Namespace {
   DbSlice& GetCurrentDbSlice() const;
 
   DbSlice& GetDbSlice(ShardId sid) const;
-  // BlockingController* GetOrAddBlockingController(EngineShard* shard);
-  // BlockingController* GetBlockingController(ShardId sid);
 
  private:
   std::vector<std::unique_ptr<DbSlice>> shard_db_slices_;
-  // std::vector<std::unique_ptr<BlockingController>>
-  // shard_blocking_controller_;
 
   friend class Namespaces;
 };

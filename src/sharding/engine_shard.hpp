@@ -42,8 +42,9 @@ class EngineShard {
   const TxQueue* txq() const { return &txq_; }
 
   size_t committed_txid() const { return committed_txid_; }
-  void AddCommittedTxid() { committed_txid_++; }
-
+#ifdef UNIT_TESTS
+  size_t& committed_txid() { return committed_txid_; }
+#endif
  private:
   EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap);
   void Shutdown();

@@ -1,5 +1,7 @@
 # ImDragonfly/CMakeLists.txt
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.14) 
+
+# 编译imdragonfly和unit_test时因为UNIT_TESTS宏要编译两份imdragonfly_lib, 后续改进
 
 find_program(CLANG_EXECUTABLE clang)
 find_program(CLANGXX_EXECUTABLE clang++)

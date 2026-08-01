@@ -201,7 +201,7 @@ void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
     kv_fp_.push_back(LockTag(key).Fingerprint());
 }
 
-Transaction::~Transaction() { assert(std::uncaught_exceptions() == 0); }
+Transaction::~Transaction() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
 std::pair<uint16_t, bool> Transaction::DisarmInShardWhen(
     ShardId sid, uint16_t relevant_flags) {
@@ -221,13 +221,13 @@ uint16_t Transaction::DisarmInShard(ShardId sid) {
 
 cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
                                                std::coroutine_handle<> handle) {
-  // LOG(INFO) << "命令:" << CmdArgListToString(full_args_)
-  //           << " shard_cnt:" << unique_shard_cnt_;
+  VLOG(3) << "命令:" << CmdArgListToString(full_args_)
+          << " shard_cnt:" << unique_shard_cnt_;
   coordinator_state_ |= COORD_CONCLUDING;
   cb_ptr_ = cb;
   InitBlockingController(handle, unique_shard_cnt_);
   if (unique_shard_cnt_ == 1) {
-    // LOG(INFO) << "SingleHopAsync unique_shard_cnt_ == 1";
+    VLOG(4) << "SingleHopAsync unique_shard_cnt_ == 1";
     CHECK_EQ(shard_data_.size(), 1u);
     shard_data_.front().is_armed.store(true, memory_order_relaxed);
     run_barrier_->Add(1);
@@ -238,28 +238,27 @@ cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
               self->ScheduleInShard(EngineShard::tlocal(), true, context);
           CHECK(success);
           if (self->shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
-            // LOG(INFO) << "SingleHopAsync shard_data_.front().local_mask &
-            // OPTIMISTIC_EXECUTION";
+            VLOG(4) << "SingleHopAsync OPTIMISTIC_EXECUTION";
             self->run_barrier_->Dec();
           } else {
             EngineShard::tlocal()->PollExecution(self);
           }
         };
     if (CanRunInlined()) {
-      // LOG(INFO) << "SingleHopAsync CanRunInlined";
+      VLOG(4) << "SingleHopAsync CanRunInlined";
       shard_cb("SingleHopAsync: CanRunInlined");
 
     } else {
-      // LOG(INFO) << "SingleHopAsync not CanRunInlined";
+      VLOG(4) << "SingleHopAsync not CanRunInlined";
       shard_set->Add(unique_shard_id_, shard_cb);
     }
     co_await run_barrier_->Wait();
   } else {
-    // LOG(INFO) << "SingleHopAsync unique_shard_cnt_ > 1";
+    VLOG(3) << "SingleHopAsync unique_shard_cnt_ > 1";
     co_await ScheduleInternal();
     DispatchHop();
   }
-  ResumeIfNeed("SingleHopAsync");
+  ResumeIfNeed();
 
   co_return;
 }
@@ -289,7 +288,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       [[maybe_unused]] bool success =
           ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
                           "ScheduleInternal:CanRunInlined");
-      assert(success);
+      DCHECK(success);
       run_barrier_->Dec();
       break;
     }
@@ -336,7 +335,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
                        [] { EngineShard::tlocal()->PollExecution(nullptr); });
       });
     }
-    InitTxTime();  // update time for next scheduling attempt
+    InitTxTime();
   }
   coordinator_state_ |= COORD_SCHED;
 
@@ -348,8 +347,8 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   ShardId sid = SidToId(shard->shard_id());
   auto& sd = shard_data_[sid];
 
-  // LOG(INFO) << "ScheduleInShard 在分片:" << shard->shard_id() << " sd掩码:"
-  // << sd.local_mask;
+  VLOG(3) << "ScheduleInShard 在分片:" << shard->shard_id()
+          << " sd掩码:" << sd.local_mask;
   DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
   sd.local_mask &= ~(OUT_OF_ORDER | OPTIMISTIC_EXECUTION);
 
@@ -362,8 +361,8 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   auto release_fp_locks = [&]() {
     GetDbSlice(shard->shard_id()).Release(mode, lock_args);
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
-    // LOG(INFO) << "LOCK 获取, 在分片:" << shard->shard_id() << "
-    // 由回调release_fp_locks清理";
+    VLOG(4) << "LOCK 释放, 在分片:" << shard->shard_id()
+            << " 由回调release_fp_locks清理";
   };
   lock_args = GetLockArgs(shard->shard_id());
   const bool keys_unlocked =
@@ -371,9 +370,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   lock_granted = keys_unlocked;
 
   sd.local_mask |= KEYLOCK_ACQUIRED;
-  // LOG(INFO) << "LOCK 获取, 在分片:" << shard->shard_id();
+  VLOG(4) << "LOCK 获取, 在分片:" << shard->shard_id();
   if (lock_granted) {
-    // LOG(INFO) << "ScheduleInShard lock_granted";
+    VLOG(4) << "ScheduleInShard lock_granted";
     sd.local_mask |= OUT_OF_ORDER;
   }
   if (lock_granted && execute_optimistic) {
@@ -450,7 +449,6 @@ bool Transaction::CanRunInlined() const {
 }
 
 bool Transaction::RunInShard(EngineShard* shard, std::string context) {
-  // LOG(INFO) << "RunInShard";
   DCHECK_GT(txid_, 0u);
   unsigned idx = SidToId(shard->shard_id());
   auto& sd = shard_data_[idx];
@@ -465,8 +463,8 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
   if (is_concluding) {
     KeyLockArgs largs;
     largs = GetLockArgs(idx);
-    // LOG(INFO) << "准备清理lock, 分片:" << shard->shard_id();
-    assert(sd.local_mask & KEYLOCK_ACQUIRED);
+    VLOG(4) << "准备清理lock, 分片:" << shard->shard_id();
+    DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
     GetDbSlice(shard->shard_id()).Release(mode, largs);
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
     sd.local_mask &= ~OUT_OF_ORDER;
@@ -476,7 +474,7 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
   LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id()
             << " RunInShard";
 #endif
-  ResumeIfNeed(context);
+  ResumeIfNeed();
   return is_concluding;
 }
 
@@ -489,8 +487,10 @@ void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
   } catch (std::exception& e) {
     LOG(FATAL) << "Unexpected exception " << e.what();
   }
-  // LOG(INFO) << "RunCallback!";
-  ResumeIfNeed("RunCallBack");
+  VLOG(4) << "RunCallback!";
+  if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    need_resume.store(true, std::memory_order_release);
+  }
 }
 
 bool Transaction::CancelShardCb(EngineShard* shard) {

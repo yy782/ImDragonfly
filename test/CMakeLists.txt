@@ -17,7 +17,7 @@ add_executable(unit_tests
     transaction_test.cpp
 )
 target_link_libraries(unit_tests PRIVATE
-    imdragonfly_lib
+    imdragonfly_lib_test
     net
     third_party_deps
     GTest::gtest_main

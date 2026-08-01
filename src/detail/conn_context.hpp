@@ -4,7 +4,7 @@
 
 #pragma once
 #include <absl/container/flat_hash_set.h>
-#include <assert.h>
+#include <glog/logging.h>
 
 #include <atomic>
 #include <memory>
@@ -58,12 +58,12 @@ class CommandContext {
       : transaction_(std::move(transaction)),
         cid_(cid),
         reply_builder_(reply_builder) {
-    assert(reply_builder_);
+    DCHECK(reply_builder_);
   }
   const CommandId* cid() const { return cid_; }
   std::shared_ptr<Transaction> tx() const { return transaction_; }
   ReplyBuilder* rb() {
-    assert(reply_builder_);
+    DCHECK(reply_builder_);
     return reply_builder_;
   }
 

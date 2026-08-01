@@ -1,6 +1,6 @@
 #include "db_slice.hpp"
 
-#include <assert.h>
+#include <glog/logging.h>
 
 #include <exception>
 #include <optional>
@@ -18,7 +18,7 @@ DbSlice::DbSlice(uint32_t index, bool cache_mode, EngineShard* owner)
 }
 
 DbSlice::~DbSlice() {
-  assert(std::uncaught_exceptions() == 0);
+  DCHECK_EQ(std::uncaught_exceptions(), 0);
   for (auto& db : db_arr_) {
     if (!db) continue;
     db.reset();
@@ -125,6 +125,8 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(
   try {
     it = db.prime_.InsertNew(key, PrimeValue{});
   } catch (std::bad_alloc& e) {
+    LOG(WARNING) << "AddOrFindInternal OOM for key, db_index:"
+                 << cntx.GetDbIndex() << " shard_id:" << shard_id_;
     return OpStatus::WRONG_TYPE;
   }
 

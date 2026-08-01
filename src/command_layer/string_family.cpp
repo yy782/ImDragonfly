@@ -2,6 +2,8 @@
 // See LICENSE for licensing terms.
 //
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -176,7 +178,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 
   auto cb = [key, value, sparams](Transaction* t,
                                   EngineShard* shard) -> OpResult<void> {
-    assert(EngineShard::tlocal()->shard_id() == shard->shard_id());
+    DCHECK_EQ(EngineShard::tlocal()->shard_id(), shard->shard_id());
     return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
   };
 
@@ -213,7 +215,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
 CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key = args[1]](Transaction* tx,
                             EngineShard* es) -> OpResult<StringResult> {
-    assert(EngineShard::tlocal()->shard_id() == es->shard_id());
+    DCHECK_EQ(EngineShard::tlocal()->shard_id(), es->shard_id());
     auto it_res =
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
 
