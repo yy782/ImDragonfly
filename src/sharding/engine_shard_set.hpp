@@ -4,6 +4,7 @@
 
 #pragma once
 #include <glog/logging.h>
+
 #include <latch>
 #include <memory>
 

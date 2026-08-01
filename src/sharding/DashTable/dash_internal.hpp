@@ -4,7 +4,6 @@
 #pragma once
 
 #include <glog/logging.h>
-
 #include <immintrin.h>
 
 #include "detail/memory_resource.hpp"
@@ -977,9 +976,7 @@ bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid,
     });
   }
 
-  // Finally go over stash buckets and find those entries that belong to b.
   if (b.HasStash()) {
-    // do not bother with overflow fps. Just go over all the stash buckets.
     for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
       const auto& stashb = bucket_[j];
       stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {

@@ -7,11 +7,12 @@
  *
  */
 
+#include <glog/logging.h>
+
 #include <atomic>
 #include <cstring>
 #include <exception>
 #include <functional>
-#include <glog/logging.h>
 #include <memory>
 #include <mutex>
 #include <optional>

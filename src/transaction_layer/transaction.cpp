@@ -258,7 +258,7 @@ cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
     co_await ScheduleInternal();
     DispatchHop();
   }
-  ResumeIfNeed("SingleHopAsync");
+  ResumeIfNeed();
 
   co_return;
 }
@@ -335,7 +335,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
                        [] { EngineShard::tlocal()->PollExecution(nullptr); });
       });
     }
-    InitTxTime();  、
+    InitTxTime();
   }
   coordinator_state_ |= COORD_SCHED;
 
@@ -347,8 +347,8 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   ShardId sid = SidToId(shard->shard_id());
   auto& sd = shard_data_[sid];
 
-  VLOG(3) << "ScheduleInShard 在分片:" << shard->shard_id() << " sd掩码:"
-          << sd.local_mask;
+  VLOG(3) << "ScheduleInShard 在分片:" << shard->shard_id()
+          << " sd掩码:" << sd.local_mask;
   DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
   sd.local_mask &= ~(OUT_OF_ORDER | OPTIMISTIC_EXECUTION);
 
@@ -474,7 +474,7 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
   LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id()
             << " RunInShard";
 #endif
-  ResumeIfNeed(context);
+  ResumeIfNeed();
   return is_concluding;
 }
 
@@ -488,7 +488,9 @@ void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
     LOG(FATAL) << "Unexpected exception " << e.what();
   }
   VLOG(4) << "RunCallback!";
-  ResumeIfNeed("RunCallBack");
+  if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    need_resume.store(true, std::memory_order_relaxed);
+  }
 }
 
 bool Transaction::CancelShardCb(EngineShard* shard) {

@@ -2,11 +2,12 @@
 // See LICENSE for licensing terms.
 //
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <glog/logging.h>
 #include <variant>
 
 #include "cmd_arg_parser.hpp"

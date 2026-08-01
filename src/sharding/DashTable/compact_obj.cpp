@@ -9,7 +9,7 @@ uint64_t CompactObj::HashCode() const {
     case STR_TAG:
       return std::hash<std::string>{}(u_.str_);
     case TTL_STR_TAG:
-      // Hash only the key part (same semantics as plain STR_TAG)
+
       return std::hash<std::string>{}(u_.ttl_.val);
     default:
       LOG(FATAL) << "HashCode: invalid tag " << int(tag_);

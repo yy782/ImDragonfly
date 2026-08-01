@@ -317,8 +317,6 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
   }
 }
 
-
-
 // ============================================================================
 // Test 4: VLLLock
 //   VLL 意向锁测试：预先持有锁，验证事务在意向锁排斥时仍能成功完成。
@@ -346,7 +344,7 @@ TEST_F(TransactionTest, VLLLock) {
   for (auto& s : mset_strings) mset_views.push_back(s);
   CmdArgList mset_args{mset_views};
 
-  int start = mset_cid->first_key_pos();   // MSET: 1
+  int start = mset_cid->first_key_pos();    // MSET: 1
   int step = mset_cid->interleaved_step();  // MSET: 2
   int end = static_cast<int>(mset_args.size());
   ASSERT_GT(start, 0);
@@ -362,8 +360,7 @@ TEST_F(TransactionTest, VLLLock) {
     fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
   }
 
-  ASSERT_GE(involved_shards.size(), 2u)
-      << "Keys must span at least 2 shards";
+  ASSERT_GE(involved_shards.size(), 2u) << "Keys must span at least 2 shards";
 
   // ========================================================================
   // Group 1: 预先持有所有分片的锁 → 投放 MSET
@@ -511,8 +508,7 @@ TEST_F(TransactionTest, VLLLockRetry) {
     fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
   }
 
-  ASSERT_GE(involved_shards.size(), 2u)
-      << "Keys must span at least 2 shards";
+  ASSERT_GE(involved_shards.size(), 2u) << "Keys must span at least 2 shards";
 
   // ========================================================================
   // Group 1: 持有所有分片的锁，设置 committed_txid → 投放 MSET
@@ -557,8 +553,8 @@ TEST_F(TransactionTest, VLLLockRetry) {
     for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    EXPECT_TRUE(mset_done.load())
-        << "Group 1: MSET should complete via retry even when all shard locks are held";
+    EXPECT_TRUE(mset_done.load()) << "Group 1: MSET should complete via retry "
+                                     "even when all shard locks are held";
   }
 
   // ========================================================================
@@ -608,7 +604,8 @@ TEST_F(TransactionTest, VLLLockRetry) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     EXPECT_TRUE(mset_done.load())
-        << "Group 2: MSET should complete via retry when committed_txid set on only one shard";
+        << "Group 2: MSET should complete via retry when committed_txid set on "
+           "only one shard";
   }
 }
 
@@ -695,8 +692,7 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
     }
   }
 
-  ASSERT_EQ(finish_count.load(), Count)
-      << "Not all MGET transactions finished";
+  ASSERT_EQ(finish_count.load(), Count) << "Not all MGET transactions finished";
 }
 
 // ============================================================================
@@ -705,9 +701,9 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
 // ============================================================================
 
 TEST_F(TransactionTest, MultiConcurrent) {
-  const int loopCount = 10;
+  const int loopCount = 5;
   for (int i = 0; i < loopCount; ++i) {
-    const int base = 1;
+    const int base = 4;
     const int Count = base * shardNum;
     const int KeyCount = 5;
     const int P = Count / shardNum;
@@ -869,4 +865,3 @@ TEST_F(TransactionTest, MultiConcurrent) {
     }
   }
 }
-
