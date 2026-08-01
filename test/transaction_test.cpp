@@ -413,6 +413,28 @@ TEST_F(TransactionTest, VLLLock) {
     }
     EXPECT_TRUE(mset_done.load())
         << "Group 1: MSET should complete even when all shard locks are held";
+
+    // Cleanup: 释放 Group 1 持有的所有锁，避免残留影响 Group 2
+    {
+      std::atomic<int> release_done{0};
+      const int nshards = static_cast<int>(involved_shards.size());
+      for (const auto& [sid, fps] : fps_by_shard) {
+        shard_set->Add(sid, [&, sid = sid, fps = fps]() {
+          auto& db_slice = Namespace->GetDbSlice(sid);
+          KeyLockArgs lock_args;
+          lock_args.db_index = db_index;
+          lock_args.fps = fps;
+          db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
+          release_done.fetch_add(1, std::memory_order_release);
+        });
+      }
+      for (int retry = 0; retry < 500 && release_done.load() < nshards;
+           ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      ASSERT_EQ(release_done.load(), nshards)
+          << "Group 1 cleanup: timeout releasing locks on all shards";
+    }
   }
 
   // ========================================================================
@@ -555,6 +577,30 @@ TEST_F(TransactionTest, VLLLockRetry) {
     }
     EXPECT_TRUE(mset_done.load()) << "Group 1: MSET should complete via retry "
                                      "even when all shard locks are held";
+
+    // Cleanup: 释放锁并重置 committed_txid，避免残留影响 Group 2
+    {
+      std::atomic<int> release_done{0};
+      const int nshards = static_cast<int>(involved_shards.size());
+      for (const auto& [sid, fps] : fps_by_shard) {
+        shard_set->Add(sid, [&, sid = sid, fps = fps]() {
+          auto& db_slice = Namespace->GetDbSlice(sid);
+          KeyLockArgs lock_args;
+          lock_args.db_index = db_index;
+          lock_args.fps = fps;
+          db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
+          EngineShard::tlocal()->committed_txid() = 0;
+          release_done.fetch_add(1, std::memory_order_release);
+        });
+      }
+      for (int retry = 0; retry < 500 && release_done.load() < nshards;
+           ++retry) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      ASSERT_EQ(release_done.load(), nshards)
+          << "Group 1 cleanup: timeout releasing locks and resetting "
+             "committed_txid";
+    }
   }
 
   // ========================================================================

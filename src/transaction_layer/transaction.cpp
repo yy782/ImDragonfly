@@ -489,7 +489,7 @@ void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
   }
   VLOG(4) << "RunCallback!";
   if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-    need_resume.store(true, std::memory_order_relaxed);
+    need_resume.store(true, std::memory_order_release);
   }
 }
 
