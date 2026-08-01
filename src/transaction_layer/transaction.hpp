@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <glog/logging.h>
 #include <memory>
 #include <optional>
 
@@ -318,7 +319,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   void InitBlockingController(std::coroutine_handle<> handle,
                               unsigned blocking_count) {
     handle_ = handle;
-    assert(blocking_count_ == 0);
+    DCHECK_EQ(blocking_count_, 0u);
     blocking_count_ = blocking_count;
   }
   void ResumeIfNeed(std::string context) {

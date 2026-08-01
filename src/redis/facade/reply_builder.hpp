@@ -1,6 +1,6 @@
 // reply_builder.h
 #pragma once
-#include <assert.h>
+#include <glog/logging.h>
 
 #include <exception>
 #include <functional>
@@ -13,7 +13,7 @@ class ReplyBuilder {
   using SendCallback = std::function<void(std::string&&)>;
 
   void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
-  ~ReplyBuilder() { assert(std::uncaught_exceptions() == 0); }
+  ~ReplyBuilder() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
   // ---- 每个 Build 末尾自动调 SendCallback ----
 

@@ -1,6 +1,6 @@
 #include "tx_queue.hpp"
 
-#include <cassert>
+#include <glog/logging.h>
 
 #include "transaction_layer/transaction.hpp"
 namespace dfly {
@@ -84,16 +84,16 @@ void TxQueue::Pop(Iterator& it) {
   }
 
   if (!IsInUsedList(it)) {
-    LOG(INFO) << "Pop: " << it << " is not in used list";
-    LOG(INFO) << PrintUsedList();
-    LOG(INFO) << PrintFreeList();
-    assert(false);
+    LOG(ERROR) << "Pop: " << it << " is not in used list";
+    LOG(ERROR) << PrintUsedList();
+    LOG(ERROR) << PrintFreeList();
+    DCHECK(false) << "Pop: item " << it << " not in used list";
   }
   if (IsInFreeList(it)) {
-    LOG(INFO) << "Pop: " << it << " is not in free list";
-    LOG(INFO) << PrintFreeList();
-    LOG(INFO) << PrintUsedList();
-    assert(false);
+    LOG(ERROR) << "Pop: " << it << " is not in free list";
+    LOG(ERROR) << PrintFreeList();
+    LOG(ERROR) << PrintUsedList();
+    DCHECK(false) << "Pop: item " << it << " in free list";
   }
 
   if (vec_[it].prev != kEnd) {
@@ -119,7 +119,7 @@ std::shared_ptr<Transaction> TxQueue::Front() {
     return nullptr;
   }
   auto t = vec_[head_].trans;
-  assert(t);
+  DCHECK(t) << "Front: head transaction should not be null";
   return t;
 }
 
@@ -128,7 +128,7 @@ std::shared_ptr<Transaction> TxQueue::Back() {
     return nullptr;
   }
   auto t = vec_[tail_].trans;
-  assert(t);
+  DCHECK(t) << "Back: tail transaction should not be null";
   return t;
 }
 

@@ -37,7 +37,7 @@ class RedisSession : public yy::net::TcpConnection {
 
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
   }
-  ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
+  ~RedisSession() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
   std::shared_ptr<Transaction> GetTransaction() { return transaction_; }
   yy::net::EventLoop* GetProactor() { return loop(); }

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <assert.h>
+#include <glog/logging.h>
 
 #include <boost/intrusive/list.hpp>
 #include <coroutine>
@@ -21,7 +21,7 @@ struct Waiter {
   ShardId shard_id = -1;
   bool IsLinked() const { return wait_hook.is_linked(); }
 
-  ~Waiter() { assert(!IsLinked()); }
+  ~Waiter() { DCHECK(!IsLinked()); }
 };
 
 class WaitQueue {

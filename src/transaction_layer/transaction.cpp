@@ -201,7 +201,7 @@ void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
     kv_fp_.push_back(LockTag(key).Fingerprint());
 }
 
-Transaction::~Transaction() { assert(std::uncaught_exceptions() == 0); }
+Transaction::~Transaction() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
 std::pair<uint16_t, bool> Transaction::DisarmInShardWhen(
     ShardId sid, uint16_t relevant_flags) {
@@ -289,7 +289,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       [[maybe_unused]] bool success =
           ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
                           "ScheduleInternal:CanRunInlined");
-      assert(success);
+      DCHECK(success);
       run_barrier_->Dec();
       break;
     }
@@ -466,7 +466,7 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
     KeyLockArgs largs;
     largs = GetLockArgs(idx);
     // LOG(INFO) << "准备清理lock, 分片:" << shard->shard_id();
-    assert(sd.local_mask & KEYLOCK_ACQUIRED);
+    DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
     GetDbSlice(shard->shard_id()).Release(mode, largs);
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
     sd.local_mask &= ~OUT_OF_ORDER;

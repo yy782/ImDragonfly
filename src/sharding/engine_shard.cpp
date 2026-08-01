@@ -78,7 +78,7 @@ void EngineShard::PollExecution(std::shared_ptr<Transaction> trans) {
   if (trans && disarmed) {
     DCHECK(trans_mask & Transaction::OUT_OF_ORDER);
     [[maybe_unused]] bool concludes = run(trans);
-    assert(concludes);
+    DCHECK(concludes);
   }
 }
 

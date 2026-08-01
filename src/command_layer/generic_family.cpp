@@ -54,7 +54,7 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
-  assert(!args.empty());
+  DCHECK(!args.empty());
   CmdDel(cmd_cntx, args);
   return;
 }
@@ -185,7 +185,7 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
 
     auto ttlTime = it.GetInnerIt()->first.GetExpireTime() -
                    t->GetDbContext().GetTimeNowMs() / 1000;
-    assert(ttlTime > 0);
+    DCHECK_GT(ttlTime, 0);
     return ttlTime;
   };
 

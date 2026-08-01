@@ -11,6 +11,7 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <glog/logging.h>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -320,7 +321,7 @@ DashTable<_Key, _Value, Policy>::DashTable(size_t capacity_log,
 
 template <typename _Key, typename _Value, typename Policy>
 DashTable<_Key, _Value, Policy>::~DashTable() {
-  assert(std::uncaught_exceptions() == 0);
+  DCHECK_EQ(std::uncaught_exceptions(), 0);
   Clear();
   auto* resource = segment_.get_allocator().resource();
   PMR_NS::polymorphic_allocator<SegmentType> pa(resource);
@@ -497,7 +498,7 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value,
   */
 
   while (true) {
-    assert(target_seg_id < segment_.size());
+    DCHECK_LT(target_seg_id, segment_.size());
     SegmentType* target = segment_[target_seg_id];
     __builtin_prefetch(target, 0, 1);  // 预取指令 , 预热
 
@@ -539,8 +540,8 @@ auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value,
       IncreaseDepth(global_depth_ + 1);
 
       target_seg_id = SegmentId(key_hash);
-      assert(target_seg_id < segment_.size() &&
-             segment_[target_seg_id] == target);
+      DCHECK_LT(target_seg_id, segment_.size());
+      DCHECK_EQ(segment_[target_seg_id], target);
     }
 
     ev.RecordSplit(target);  // 统计数据告诉淘汰策略
@@ -609,8 +610,8 @@ void DashTable<_Key, _Value, Policy>::IncreaseDepth(unsigned new_depth) {
       也就是global_depth_对于KEY的哈希值往后多移了一位
 
   */
-  assert(!segment_.empty());
-  assert(new_depth > global_depth_);
+  DCHECK(!segment_.empty());
+  DCHECK_GT(new_depth, global_depth_);
   size_t prev_sz = segment_.size();
   size_t repl_cnt = 1ul << (new_depth - global_depth_);
   segment_.resize(1ul << new_depth);
@@ -658,7 +659,7 @@ template <bool IsConst, bool IsSingleBucket>
 void DashTable<_Key, _Value,
                Policy>::Iterator<IsConst, IsSingleBucket>::Seek2Occupied() {
   if (owner_ == nullptr) return;
-  assert(seg_id_ < owner_->segment_.size());
+  DCHECK_LT(seg_id_, owner_->segment_.size());
 
   if constexpr (IsSingleBucket) {
     const auto& b = owner_->segment_[seg_id_]->GetBucket(bucket_id_);
@@ -697,7 +698,7 @@ auto DashTable<_Key, _Value, Policy>::Traverse(Cursor curs, Cb&& cb) -> Cursor {
   bool fetched = false;
   do {
     SegmentType* s = segment_[sid];
-    assert(s);
+    DCHECK(s);
 
     auto dt_cb = [&](const SegmentIterator& it) {
       cb(iterator{this, sid, it.index, it.slot});
