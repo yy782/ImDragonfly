@@ -336,9 +336,6 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
         handle_.resume();
       }
     } else {  // RunCallBack
-      if (context != "RunCallBack") {
-        LOG(FATAL) << " 事务: " << id << " 上下文:" << context;
-      }
       if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
 #ifdef UNIT_TESTS
         LOG(INFO) << "事务: " << id

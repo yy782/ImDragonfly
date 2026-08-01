@@ -59,13 +59,13 @@ void EngineShard::PollExecution(std::shared_ptr<Transaction> trans) {
 
   std::shared_ptr<Transaction> head = nullptr;
 
-  // LOG(INFO) << "PollExecution in shard:"<< shard_id() << "txq_.Size(): "<<
-  // txq_.size();
+  VLOG(3) << "PollExecution in shard:" << shard_id()
+          << " txq_.Size(): " << txq_.Size();
   while (!txq_.Empty()) {
     head = txq_.Front();
     bool should_run = (head == trans && disarmed) || head->DisarmInShard(sid);
     if (!should_run) {
-      // LOG(INFO) << "PollExecution should_run false";
+      VLOG(4) << "PollExecution should_run false";
       break;
     }
     if (head == trans) trans = nullptr;
