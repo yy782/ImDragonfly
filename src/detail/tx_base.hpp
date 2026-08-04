@@ -22,7 +22,7 @@ class LockTag {
   std::string_view str_;
 
  public:
-  using is_stackonly = void;  // marks that this object does not use heap.
+  using is_stackonly = void;  
 
   LockTag() = default;
   explicit LockTag(std::string_view key);
@@ -30,12 +30,6 @@ class LockTag {
   explicit operator std::string_view() const { return str_; }
 
   LockFp Fingerprint() const;
-
-  // To make it hashable.
-  template <typename H>
-  friend H AbslHashValue(H h, const LockTag& tag) {
-    return H::combine(std::move(h), tag.str_);
-  }
 
   bool operator==(const LockTag& o) const { return str_ == o.str_; }
 };

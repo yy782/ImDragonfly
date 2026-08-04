@@ -32,10 +32,10 @@ class WaitQueue {
 
   void Unlink(Waiter* waiter);
 
-  // Return true if a waiter existed and was notified
+
   bool NotifyOne();
 
-  // Return true if any waiter was notified
+
   bool NotifyAll();
 
  private:

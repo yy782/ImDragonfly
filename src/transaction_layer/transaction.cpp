@@ -85,12 +85,12 @@ void Transaction::InitByKeys(const KeyIndex& key_index) {
   if ((key_index.end - key_index.start) == 0)  // 不确定
     return;
   DCHECK_LT(key_index.start, full_args_.size());
-  unique_slot_checker_.Reset();
+
   if ((key_index.NumArgs() == 1)) {
     StoreKeysInArgs(key_index);
     unique_shard_cnt_ = 1;
     string_view akey = full_args_[*key_index];
-    unique_slot_checker_.Add(akey);
+
     unique_shard_id_ = Shard(akey, shard_set->size());
     shard_data_.resize(1);
     shard_data_[SidToId(unique_shard_id_)].local_mask |= ACTIVE;
@@ -135,7 +135,7 @@ void Transaction::BuildShardIndex(const KeyIndex& key_index,
   auto& shard_index = *out;
   for (unsigned i : key_index.Range()) {
     string_view key = full_args_[i];
-    unique_slot_checker_.Add(key);
+
     ShardId sid = Shard(key, shard_data_.size());
     unsigned step = key_index.step;
     shard_index[sid].key_step = step;
@@ -535,9 +535,7 @@ string_view Transaction::Name() const {
 
 ShardId Transaction::GetUniqueShard() const { return unique_shard_id_; }
 
-optional<SlotId> Transaction::GetUniqueSlotId() const {
-  return unique_slot_checker_.GetUniqueSlotId();
-}
+
 bool Transaction::IsActive(ShardId sid) const {
   if (unique_shard_cnt_ == 0) return false;
   if (unique_shard_cnt_ == 1) {
