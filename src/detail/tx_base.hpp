@@ -22,7 +22,7 @@ class LockTag {
   std::string_view str_;
 
  public:
-  using is_stackonly = void;  
+  using is_stackonly = void;
 
   LockTag() = default;
   explicit LockTag(std::string_view key);

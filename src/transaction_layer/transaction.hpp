@@ -12,7 +12,6 @@
 #include "absl/container/inlined_vector.h"
 #include "base/function.hpp"
 #include "command_layer/command_registry.hpp"
-
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
@@ -106,7 +105,6 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   ShardId GetUniqueShard() const;
 
-
   bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
 
   DbContext GetDbContext() const {
@@ -148,7 +146,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
             idx_ = cur_->first;
           }
         }
-        val_ = {args_[idx_], idx_}; // 会越界
+        val_ = {args_[idx_], idx_};  // 会越界
         return *this;
       }
 

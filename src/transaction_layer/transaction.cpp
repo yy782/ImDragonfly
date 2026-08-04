@@ -535,7 +535,6 @@ string_view Transaction::Name() const {
 
 ShardId Transaction::GetUniqueShard() const { return unique_shard_id_; }
 
-
 bool Transaction::IsActive(ShardId sid) const {
   if (unique_shard_cnt_ == 0) return false;
   if (unique_shard_cnt_ == 1) {

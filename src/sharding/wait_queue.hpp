@@ -32,9 +32,7 @@ class WaitQueue {
 
   void Unlink(Waiter* waiter);
 
-
   bool NotifyOne();
-
 
   bool NotifyAll();
 
