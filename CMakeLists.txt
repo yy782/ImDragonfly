@@ -49,7 +49,6 @@ else()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_link_options(-rdynamic)
     set(CXX_WARNING_OPTIONS
         -g -O0
         -march=x86-64-v3
@@ -77,7 +76,7 @@ else()
     )
 endif()    
 
-add_subdirectory(YY)
+add_subdirectory(net)
 
 add_subdirectory(src)
 
@@ -88,15 +87,12 @@ endif()
 add_executable(imdragonfly main.cpp)
 target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/YY
-    ${CMAKE_SOURCE_DIR}/YY/base
+    ${CMAKE_SOURCE_DIR}/util
 )
 target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
     imdragonfly_lib
     net
-    base
-    thread
-    third_party_deps 
+    third_party_deps
 )

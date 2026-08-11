@@ -202,8 +202,8 @@ std::string TxQueue::PrintTxLock() const {
   uint32_t it = head_;
   std::string lock_str;
   while (it != kEnd) {
-    auto& t = vec_[it].trans;
 #ifdef UNIT_TESTS
+    auto& t = vec_[it].trans;
     lock_str += "事务: ";
     lock_str += std::to_string(t->id);
 #endif

@@ -9,8 +9,8 @@ add_executable(unit_tests
     cmd_arg_parser_test.cpp
     compact_obj_test.cpp
     op_status_test.cpp
+    parse_resp_test.cpp
     reply_builder_test.cpp
-    resp_buf_test.cpp
     skiplist_test.cpp
     string_or_view_test.cpp
     wait_queue_test.cpp

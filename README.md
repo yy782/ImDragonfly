@@ -71,7 +71,7 @@ struct IntentLock {
 
 | 技术领域      | 实现方案              | 核心优势        |
 | --------- | ----------------- | ----------- |
-| **网络 IO** | epoll + C++20 协程   | 事件驱动，高并发处理 |
+| **网络 IO** | io_uring + C++20 协程   | 事件驱动，高并发处理 |
 | **并发模型**  | C++ 20 Coroutines | 轻量级线程调度 |
 | **内存管理**  | mimalloc + PMR    | 低碎片、高性能分配   |
 | **协议兼容**  | Redis RESP     | 无缝对接现有生态    |
@@ -119,18 +119,19 @@ struct IntentLock {
 > - Insert 比 unordered_map 快 **36%**
 > - 内存占用比 unordered_map 降低 **47%**
 
-### 端到端吞吐基准 (epoll, 4 分片)
+### 端到端吞吐基准 (io_uring, 4 分片)
 
 | 指标 | 数值 |
 |------|------|
-| 总 Ops/sec | **354,881** |
-| SET 吞吐 | 177,447 ops/s |
-| GET 吞吐 | 177,434 ops/s |
-| 平均延迟 | 2.25 ms |
-| p50 延迟 | 1.86 ms |
-| p99 延迟 | 7.87 ms |
-| 峰值 CPU 利用率 | 399.5% (4 线程) |
-| 测试配置 | 4 线程 × 200 连接, 30 秒 |
+| 总 Ops/sec | **392,043** |
+| SET 吞吐 | 196,024 ops/s |
+| GET 吞吐 | 196,018 ops/s |
+| 平均延迟 | 1.02 ms |
+| p50 延迟 | 0.90 ms |
+| p99 延迟 | 1.79 ms |
+| p99.9 延迟 | 5.73 ms |
+| 峰值 CPU 利用率 | 400.0% (4 线程) |
+| 测试配置 | 4 线程 × 100 连接, 30 秒 |
 ***
 
 ## 🚀 快速开始
@@ -155,18 +156,21 @@ redis-cli -p 6379
 
 #### 环境要求
 
-- **操作系统**: Linux (内核 >= 3.9，支持 epoll)
+- **操作系统**: Linux (内核 >= 5.18，支持 `IORING_SETUP_SINGLE_ISSUER`)
+- **liburing**: >= 2.2
 - **编译器**: Clang 17+ (或 GCC 11+)
 - **构建工具**: CMake 3.20+
 
 #### 安装依赖
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu/Debian (推荐 Ubuntu 22.04+)
 sudo apt-get install -y clang cmake ninja-build \
-    libmimalloc-dev libboost-dev \
+    liburing-dev libmimalloc-dev libboost-dev \
     libgoogle-glog-dev libabsl-dev
 ```
+
+> **注意**：项目默认启用 `IORING_SETUP_SINGLE_ISSUER`（需 Linux 5.18+）。如果内核版本较低，需在 `UringConfig` 中设置 `use_single_issuer = false` 和 `use_defer_taskrun = false`。
 
 #### 构建安装
 

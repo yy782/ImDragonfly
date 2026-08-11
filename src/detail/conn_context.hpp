@@ -1,6 +1,3 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
 
 #pragma once
 #include <absl/container/flat_hash_set.h>

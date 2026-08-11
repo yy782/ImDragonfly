@@ -9,8 +9,7 @@ add_library(imdragonfly_lib STATIC ${STORAGE_SOURCES})
 
 target_include_directories(imdragonfly_lib PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/YY
-    ${CMAKE_SOURCE_DIR}/YY/base
+    ${CMAKE_SOURCE_DIR}/util
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -19,9 +18,7 @@ target_compile_options(imdragonfly_lib PRIVATE ${CXX_WARNING_OPTIONS})
 target_link_libraries(imdragonfly_lib PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
     net
-    base
-    thread
-    third_party_deps 
+    third_party_deps
 )
 
 # 测试库: 带 UNIT_TESTS，仅链接到 unit_tests 可执行文件
@@ -30,16 +27,13 @@ if(BUILD_TESTS)
     target_compile_definitions(imdragonfly_lib_test PRIVATE UNIT_TESTS)
     target_include_directories(imdragonfly_lib_test PUBLIC
         ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/YY
-        ${CMAKE_SOURCE_DIR}/YY/base
+        ${CMAKE_SOURCE_DIR}/util
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_compile_options(imdragonfly_lib_test PRIVATE ${CXX_WARNING_OPTIONS})
     target_link_libraries(imdragonfly_lib_test PUBLIC
         ${CMAKE_THREAD_LIBS_INIT}
         net
-        base
-        thread
-        third_party_deps 
+        third_party_deps
     )
 endif()

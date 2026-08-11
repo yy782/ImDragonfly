@@ -14,11 +14,9 @@
 #include "test_util/RESP2Parser.hpp"
 #include "transaction_layer/transaction.hpp"
 using namespace dfly;
-using namespace yy::net;
+
 using namespace dfly::cmn;
 using namespace ::cmn;
-
-const int shardNum = 5;
 
 class TxQueueTest : public ::testing::Test {
  protected:

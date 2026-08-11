@@ -15,8 +15,6 @@ class ReplyBuilder {
   void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
   ~ReplyBuilder() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
-  // ---- 每个 Build 末尾自动调 SendCallback ----
-
   void BuildNull() {
     reply_ = "$-1\r\n";
     DoSend();
@@ -65,7 +63,7 @@ class ReplyBuilder {
     reply_.append(std::to_string(items.size()));
     reply_.append("\r\n");
     for (const auto& item : items) {
-      AppendBulkStringRaw(item);  // 不触发 send，拼完统一发
+      AppendBulkStringRaw(item);
     }
     DoSend();
   }
@@ -76,7 +74,7 @@ class ReplyBuilder {
     reply_.append(std::to_string(items.size()));
     reply_.append("\r\n");
     for (const auto& item : items) {
-      reply_.append(item);  // 各 item 已是编好的 RESP 片段
+      reply_.append(item);
     }
     DoSend();
   }

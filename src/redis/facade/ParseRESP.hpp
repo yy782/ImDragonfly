@@ -1,16 +1,15 @@
-#include <cctype>
 
-#include "YY/net/TcpBuffer.h"
+#include <cctype>
+#include <string>
+#include <string_view>
+#include <vector>
 namespace dfly {
 
-class RESP_Buf {
- public:
-  std::vector<std::string_view>& ParseRESP(yy::net::TcpBuffer& buf) {
+struct ParseRESP {
+  std::vector<std::string_view>& Parse(const char* data, size_t bytes) {
     result.clear();
-    char* data = buf.begin();
-    size_t size = buf.write_index_;
-    size_t pos = buf.read_index_;
-    if (pos >= size) {
+    size_t pos = 0;
+    if (pos >= bytes) {
       return result;
     }
 
@@ -20,12 +19,12 @@ class RESP_Buf {
     pos++;
 
     int64_t num_elements = 0;
-    while (pos < size && std::isdigit(data[pos])) {
+    while (pos < bytes && std::isdigit(data[pos])) {
       num_elements = num_elements * 10 + (data[pos] - '0');
       pos++;
     }
 
-    if (num_elements <= 0 || pos + 2 > size) {
+    if (num_elements <= 0 || pos + 2 > bytes) {
       return result;
     }
 
@@ -35,7 +34,7 @@ class RESP_Buf {
     pos += 2;
 
     for (int64_t i = 0; i < num_elements; i++) {
-      if (pos >= size) return result;
+      if (pos >= bytes) return result;
 
       if (data[pos] != '$') {
         return result;
@@ -43,12 +42,12 @@ class RESP_Buf {
       pos++;
 
       int64_t len = 0;
-      while (pos < size && std::isdigit(data[pos])) {
+      while (pos < bytes && std::isdigit(data[pos])) {
         len = len * 10 + (data[pos] - '0');
         pos++;
       }
 
-      if (len < 0 || pos + 2 > size) {
+      if (len < 0 || pos + 2 > bytes) {
         return result;
       }
 
@@ -57,23 +56,19 @@ class RESP_Buf {
       }
       pos += 2;
 
-      if (pos + len + 2 > size) {
+      if (pos + static_cast<size_t>(len) + 2 > bytes) {
         return result;
       }
       result.emplace_back(data + pos, len);
       pos += len;
 
-      if (pos + 2 > size || data[pos] != '\r' || data[pos + 1] != '\n') {
+      if (pos + 2 > bytes || data[pos] != '\r' || data[pos + 1] != '\n') {
         return result;
       }
       pos += 2;
     }
-    size_t consumed = pos - buf.read_index_;
-    buf.consume(consumed);
     return result;
   }
-
- private:
   std::vector<std::string_view> result;
 };
 

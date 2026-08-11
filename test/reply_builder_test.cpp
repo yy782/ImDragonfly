@@ -14,7 +14,6 @@ using namespace dfly;
 
 namespace {
 
-// Helper: capture the output sent via callback
 struct Capture {
   std::string last;
   void reset() { last.clear(); }
@@ -25,8 +24,6 @@ struct Capture {
 
 }  // namespace
 
-// ---- BuildNull ----
-
 TEST(ReplyBuilderTest, BuildNull) {
   Capture cap;
   ReplyBuilder r;
@@ -34,8 +31,6 @@ TEST(ReplyBuilderTest, BuildNull) {
   r.BuildNull();
   EXPECT_EQ(cap.last, "$-1\r\n");
 }
-
-// ---- BuildSimpleString ----
 
 TEST(ReplyBuilderTest, BuildSimpleString) {
   Capture cap;
@@ -53,8 +48,6 @@ TEST(ReplyBuilderTest, BuildSimpleStringEmpty) {
   EXPECT_EQ(cap.last, "+\r\n");
 }
 
-// ---- BuildError ----
-
 TEST(ReplyBuilderTest, BuildError) {
   Capture cap;
   ReplyBuilder r;
@@ -70,8 +63,6 @@ TEST(ReplyBuilderTest, BuildErrorEmpty) {
   r.BuildError("");
   EXPECT_EQ(cap.last, "-ERR \r\n");
 }
-
-// ---- BuildInteger ----
 
 TEST(ReplyBuilderTest, BuildInteger) {
   Capture cap;
@@ -96,8 +87,6 @@ TEST(ReplyBuilderTest, BuildIntegerZero) {
   r.BuildInteger(0);
   EXPECT_EQ(cap.last, ":0\r\n");
 }
-
-// ---- BuildBulkString ----
 
 TEST(ReplyBuilderTest, BuildBulkString) {
   Capture cap;

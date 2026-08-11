@@ -34,7 +34,7 @@ Transaction::Transaction(const CommandId* cid) : cid_{cid} {
 #endif
   InitTxTime();
 }
-void Transaction::InitTxTime() { time_now_ms_ = base::GetCurrentTimeMs(); }
+void Transaction::InitTxTime() { time_now_ms_ = util::GetCurrentTimeMs(); }
 
 OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
                                  CmdArgList args) {

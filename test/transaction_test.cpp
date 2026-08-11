@@ -17,7 +17,6 @@
 #include "test_util/RESP2Parser.hpp"
 
 using namespace dfly;
-using namespace yy::net;
 using namespace dfly::cmn;
 using namespace ::cmn;
 
@@ -26,7 +25,8 @@ const int shardNum = 5;
 class TransactionTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_.run();
+    pool_.AsyncLoop();
+    sleep(1);
     shard_set = new EngineShardSet(&pool_);
     shard_set->Init(pool_.size());
     CIs = new CommandRegistry();
@@ -47,7 +47,7 @@ class TransactionTest : public ::testing::Test {
     CIs = nullptr;
   }
 
-  EventLoopThreadPool pool_{shardNum};
+  base::UringProactorPool pool_{shardNum};
 };
 
 // ============================================================================
@@ -745,7 +745,7 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
 // Test 3: MultiConcurrent — same keys across shards
 //
 // ============================================================================
-
+// 多事务操作同一键，验证所有事务完后后键不可出现中间态
 TEST_F(TransactionTest, MultiConcurrent) {
   const int loopCount = 5;
   for (int i = 0; i < loopCount; ++i) {
