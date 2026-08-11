@@ -5,8 +5,8 @@
 #include <exception>
 #include <optional>
 
-#include "YY/base/Time.hpp"
 #include "engine_shard.hpp"
+#include "util/Time.hpp"
 namespace dfly {
 
 DbSlice::DbSlice(uint32_t index, bool cache_mode, EngineShard* owner)
@@ -243,7 +243,7 @@ void DbSlice::ExpireAllIfNeeded() {
 
     auto cb = [&](PrimeTable::iterator prime_it) {
       if (prime_it->first.HasExpire()) {
-        ExpireIfNeeded(Context(nullptr, db_index, base::GetCurrentTimeMs()),
+        ExpireIfNeeded(Context(nullptr, db_index, util::GetCurrentTimeMs()),
                        prime_it);
       }
     };

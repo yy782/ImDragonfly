@@ -8,9 +8,9 @@
 #include <latch>
 #include <memory>
 
-#include "Time.hpp"
-#include "YY/net/EventLoopThreadPool.h"
 #include "engine_shard.hpp"
+#include "net/uring_proactor_pool.hpp"
+#include "util/Time.hpp"
 namespace dfly {
 class TieredStorage;
 class ShardDocIndices;
@@ -19,9 +19,9 @@ class EngineShardSet;
 
 class EngineShardSet {
  public:
-  explicit EngineShardSet(yy::net::EventLoopThreadPool* pp) : pp_(pp) {}
+  explicit EngineShardSet(base::UringProactorPool* pp) : pp_(pp) {}
   uint32_t size() const { return size_; }
-  yy::net::EventLoopThreadPool* pool() { return pp_; }
+  base::UringProactorPool* pool() { return pp_; }
   void Init(uint32_t size);
   void PreShutdown();
   void Shutdown();
@@ -67,11 +67,9 @@ class EngineShardSet {
     }
   }
 
-  yy::net::EventLoop* pool(int idx) const { return pp_->at(idx); }
-
  private:
-  void InitThreadLocal(yy::net::EventLoop* pb);
-  yy::net::EventLoopThreadPool* pp_;
+  void InitThreadLocal(base::UringProactor* pb);
+  base::UringProactorPool* pp_;
   std::unique_ptr<EngineShard*[]> shards_;
   uint32_t size_ = 0;
 };

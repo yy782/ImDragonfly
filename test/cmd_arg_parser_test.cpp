@@ -6,8 +6,8 @@
 #include <string_view>
 #include <vector>
 
-#include "Strings.hpp"
 #include "command_layer/cmn_types.hpp"
+#include "util/Strings.hpp"
 
 using namespace cmd;
 
@@ -16,22 +16,22 @@ using namespace cmd;
 // ============================================================================
 
 TEST(CmdArgUtilTest, EqualsIgnoreCaseExact) {
-  EXPECT_TRUE(base::EqualsIgnoreCaseStd(std::string_view("hello"),
+  EXPECT_TRUE(util::EqualsIgnoreCaseStd(std::string_view("hello"),
                                         std::string("hello")));
 }
 
 TEST(CmdArgUtilTest, EqualsIgnoreCaseDifferentCase) {
-  EXPECT_TRUE(base::EqualsIgnoreCaseStd(std::string_view("HELLO"),
+  EXPECT_TRUE(util::EqualsIgnoreCaseStd(std::string_view("HELLO"),
                                         std::string("hello")));
 }
 
 TEST(CmdArgUtilTest, EqualsIgnoreCaseMismatch) {
-  EXPECT_FALSE(base::EqualsIgnoreCaseStd(std::string_view("hello"),
+  EXPECT_FALSE(util::EqualsIgnoreCaseStd(std::string_view("hello"),
                                          std::string("world")));
 }
 
 TEST(CmdArgUtilTest, EqualsIgnoreCaseDifferentLength) {
-  EXPECT_FALSE(base::EqualsIgnoreCaseStd(std::string_view("hello"),
+  EXPECT_FALSE(util::EqualsIgnoreCaseStd(std::string_view("hello"),
                                          std::string("helloo")));
 }
 
@@ -275,7 +275,7 @@ TEST(CmdArgParserTest, TryMapNextNoMatch) {
   CmdArgParser parser(ArgSlice(args, 1));
   auto result = parser.TryMapNext("NX", 100, "XX", 200);
   EXPECT_FALSE(result.has_value());
-  EXPECT_FALSE(parser.HasError());  // TryMapNext does NOT report error
+  EXPECT_FALSE(parser.HasError());
 }
 
 // ============================================================================

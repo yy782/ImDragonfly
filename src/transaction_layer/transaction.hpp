@@ -8,16 +8,17 @@
 
 #include <memory>
 #include <optional>
+#include <span>
+#include <vector>
 
-#include "absl/container/inlined_vector.h"
-#include "base/function.hpp"
 #include "command_layer/command_registry.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/op_status.hpp"
 #include "sharding/synchronization.hpp"
-using namespace base;
+#include "util/function.hpp"
+using namespace util;
 namespace dfly {
 
 using namespace cmn;
@@ -32,7 +33,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
  public:
   using time_point = ::std::chrono::steady_clock::time_point;
-  using RunnableType = base::FunctionRef<void(Transaction* t, EngineShard*)>;
+  using RunnableType = util::FunctionRef<void(Transaction* t, EngineShard*)>;
 
   static constexpr std::nullopt_t kShardArgs{std::nullopt};
 
@@ -123,7 +124,6 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   const CommandId* GetCId() const { return cid_; }
 
-  // traverse (key, keyId) pairs on a shard
   class Slice {
    public:
     struct Iterator {
@@ -180,7 +180,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
     DbSlice& GetDbSlice() const { return trans_->GetDbSlice(sid_); }
     DbContext GetDbContext() const { return trans_->GetDbContext(); }
 
-    absl::Span<const IndexSlice> slices_;
+    std::span<const IndexSlice> slices_;
     unsigned step_ = 1;
     CmdArgList args_;
   };
@@ -236,7 +236,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   void BuildShardIndex(const KeyIndex& keys, std::vector<PerShardCache>* out);
 
-  void InitShardData(absl::Span<const PerShardCache> shard_index,
+  void InitShardData(std::span<const PerShardCache> shard_index,
                      size_t num_args);
 
   void StoreKeysInArgs(const KeyIndex& key_index);
@@ -281,15 +281,15 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   }
 
   //::dfly::BlockingCounter run_barrier_{0}; // 会导致极高的P99.9 延迟
-  base::BlockingCounter run_barrier_{0};
+  BlockingCounter run_barrier_{0};
 
-  absl::InlinedVector<PerShardData, 4> shard_data_;
+  std::vector<PerShardData> shard_data_;
 
-  absl::InlinedVector<IndexSlice, 4> args_slices_;
+  std::vector<IndexSlice> args_slices_;
 
-  absl::InlinedVector<Slice, 4> key_slices_;
+  std::vector<Slice> key_slices_;
 
-  absl::InlinedVector<LockFp, 4> kv_fp_;
+  std::vector<LockFp> kv_fp_;
 
   CmdArgList full_args_;
 
@@ -320,7 +320,8 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
     blocking_count_ = blocking_count;
   }
   void ResumeIfNeed() {
-    if (!need_resume.load(std::memory_order_acquire)) {
+    if (!need_resume.load(
+            std::memory_order_acquire)) {  // 保证事务完全结束后才resume协程
       return;
     }
     bool expected = false;

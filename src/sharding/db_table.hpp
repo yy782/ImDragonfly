@@ -2,10 +2,10 @@
 // See LICENSE for licensing terms.
 //
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
+#include <unordered_map>
 
 #include "DashTable/compact_obj.hpp"
 #include "DashTable/dash_table.hpp"
@@ -73,7 +73,7 @@ class LockTable {
   auto end() const { return locks_.cend(); }
 
  private:
-  absl::flat_hash_map<LockFp, IntentLock> locks_;
+  std::unordered_map<LockFp, IntentLock> locks_;
 };
 
 struct DbTable

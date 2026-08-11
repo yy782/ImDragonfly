@@ -6,14 +6,13 @@
 #define OBJ_ZSET 3U /* Sorted set object. */
 #define OBJ_HASH 4U /* Hash object. */
 
-#include <absl/container/flat_hash_map.h>
-#include <absl/container/flat_hash_set.h>
-
 #include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "skiplist.hpp"
@@ -175,14 +174,14 @@ class HashObject {
 
   bool Empty() const { return data_.empty(); }
 
-  absl::flat_hash_map<std::string, std::string>& Data() { return data_; }
+  std::unordered_map<std::string, std::string>& Data() { return data_; }
 
-  const absl::flat_hash_map<std::string, std::string>& Data() const {
+  const std::unordered_map<std::string, std::string>& Data() const {
     return data_;
   }
 
  private:
-  absl::flat_hash_map<std::string, std::string> data_;
+  std::unordered_map<std::string, std::string> data_;
 };
 
 class SetObject {
@@ -205,12 +204,12 @@ class SetObject {
 
   bool Empty() const { return data_.empty(); }
 
-  absl::flat_hash_set<std::string>& Data() { return data_; }
+  std::unordered_set<std::string>& Data() { return data_; }
 
-  const absl::flat_hash_set<std::string>& Data() const { return data_; }
+  const std::unordered_set<std::string>& Data() const { return data_; }
 
  private:
-  absl::flat_hash_set<std::string> data_;
+  std::unordered_set<std::string> data_;
 };
 
 struct ZSetEntry {
@@ -341,7 +340,7 @@ class ZSetObject {
 
  private:
   SkipList<ZSetEntry, ZSetCompare> skip_list_;
-  absl::flat_hash_map<std::string, double> score_map_;
+  std::unordered_map<std::string, double> score_map_;
 };
 
 }  // namespace dfly

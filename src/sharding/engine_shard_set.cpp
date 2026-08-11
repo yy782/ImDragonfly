@@ -9,8 +9,8 @@
 #include <functional>
 
 #include "detail/common.hpp"
-#include "maths.hpp"
 #include "namespaces.hpp"
+#include "util/maths.hpp"
 
 namespace dfly {
 
@@ -21,7 +21,9 @@ void EngineShardSet::Init(uint32_t sz) {
   shards_.reset(new EngineShard*[sz]);
   size_ = sz;
 
-  pp_->AwaitOnAll([this](yy::net::EventLoop* pb) { InitThreadLocal(pb); });
+  pp_->AwaitOnAll([this](std::shared_ptr<base::UringProactor> pb) {
+    InitThreadLocal(pb.get());
+  });
 
   namespaces = new Namespaces();
   namespaces->init();
@@ -39,11 +41,11 @@ void EngineShardSet::Shutdown() {
   namespaces = nullptr;
 }
 
-void EngineShardSet::InitThreadLocal(yy::net::EventLoop* pb) {
+void EngineShardSet::InitThreadLocal(base::UringProactor* pb) {
   EngineShard::InitThreadLocal(pb);
   EngineShard* es = EngineShard::tlocal();
   shards_[es->shard_id()] = es;
-  base::Thread::set_cpu_affinity(es->shard_id());
+  util::Thread::set_cpu_affinity(es->shard_id());
 }
 
 }  // namespace dfly

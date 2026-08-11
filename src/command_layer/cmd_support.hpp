@@ -11,15 +11,15 @@
 #include "command_layer/cmn_types.hpp"
 #include "cppcoro/task.hpp"
 #include "detail/conn_context.hpp"
-#include "function.hpp"
 #include "sharding/engine_shard.hpp"
 #include "sharding/op_status.hpp"
 #include "transaction_layer/transaction.hpp"
+#include "util/function.hpp"
 
 namespace dfly::cmd {
 using ::cmn::CmdArgList;
 template <typename RT>
-using SingleHopSentinelT = base::FunctionRef<RT(Transaction*, EngineShard*)>;
+using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, EngineShard*)>;
 
 auto SingleHopT(const auto& f)
     -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {

@@ -1,0 +1,71 @@
+#pragma once
+
+#include <latch>
+#include <memory>
+#include <vector>
+
+#include "uring_proactor.hpp"
+#include "util/thread.hpp"
+
+namespace base {
+
+class UringProactorPool {
+ public:
+  UringProactorPool(uint32_t size, UringConfig cfg = {})
+      : cfg_(cfg), proactors_(size) {
+    for (std::size_t i = 0; i < proactors_.size(); ++i) {
+      threads_.emplace_back();
+    }
+  }
+  void AsyncLoop() {
+    std::string base_name = "proactor_thread_";
+    for (std::size_t i = 0; i < proactors_.size(); ++i) {
+      threads_[i] = std::make_unique<util::Thread>(
+          (base_name + std::to_string(i)).c_str(), [this, i] {
+            proactors_[i] = std::make_shared<UringProactor>(cfg_, i);
+            proactors_[i]->loop();
+          });
+    }
+  }
+
+  void stop() {
+    DispatchBrief([](std::shared_ptr<UringProactor> p) { p->stop(); });
+
+    for (std::size_t i = 0; i < proactors_.size(); ++i) {
+      threads_[i]->join();
+    }
+  }
+
+  size_t size() const { return proactors_.size(); }
+
+  template <typename Func>
+  void DispatchBrief(Func&& f) {
+    for (std::size_t i = 0; i < size(); ++i) {
+      auto& p = proactors_[i];
+
+      p->DispatchBrief([p, f]() mutable { f(p); });
+    }
+  }
+  template <typename Func>
+  void AwaitOnAll(Func&& func) {
+    std::latch latch(size());
+    auto cb = [func = std::forward<Func>(func),
+               &latch](std::shared_ptr<UringProactor> p) mutable {
+      func(p);
+      latch.count_down();
+    };
+    DispatchBrief(std::move(cb));
+    latch.wait();
+  }
+
+  auto at(size_t index) const { return proactors_[index]; }
+
+  auto operator[](size_t index) const { return at(index); }
+
+ private:
+  UringConfig cfg_;
+  std::vector<std::shared_ptr<UringProactor>> proactors_;
+  std::vector<std::unique_ptr<util::Thread>> threads_;
+};
+
+}  // namespace base

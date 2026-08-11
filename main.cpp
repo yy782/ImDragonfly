@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <memory>
 
+#include "net/fd_wrapper.hpp"
 #include "src/network/redis_server.hpp"
 
 using namespace dfly;
@@ -55,10 +56,13 @@ allocation (over 64MiB)) mimalloc和ASAN冲突
 
 int main(int argc, char *argv[]) {
   // 先初始化 glog（先输出到 stderr，确保后续 LOG 可用）
+
+  // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
+  // <gflags/gflags.h>，所以不可用
+
   FLAGS_logtostderr = true;
   FLAGS_alsologtostderr = false;
   FLAGS_minloglevel = 0;
-  FLAGS_v = 2;
 #ifndef NDEBUG
   FLAGS_logbufsecs = 0;
 #endif
@@ -79,13 +83,18 @@ int main(int argc, char *argv[]) {
   if (argc > 1) {
     num = std::atoi(argv[1]);
   }
-  yy::net::EventLoop loop;
-  RedisServer server(6379, &loop, num);
-  std::string str =
-      "RedisServer initialized with  " + std::to_string(num) + " shards";
-  LOG(INFO) << str;
+
+  int listenFd = base::ListenFd();
+  if (listenFd < 0) {
+    LOG(ERROR) << "Failed to create listen socket";
+    google::ShutdownGoogleLogging();
+    return 1;
+  }
+
+  RedisServer server(listenFd, num);
+  LOG(INFO) << "RedisServer initialized with " << num << " shards";
   server.Start();
-  loop.loop();
+
   LOG(INFO) << "ImDragonfly server shutting down...";
   google::ShutdownGoogleLogging();
   return 0;

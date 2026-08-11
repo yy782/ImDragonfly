@@ -8,8 +8,8 @@
 #include <string>
 #include <string_view>
 
-#include "base/function.hpp"
 #include "command_layer/cmn_types.hpp"
+#include "util/function.hpp"
 namespace facade {
 
 class CommandId {
@@ -61,7 +61,7 @@ class CommandId : public facade::CommandId {
   using CmdArgList = ::cmn::CmdArgList;
 
   using Handler =
-      base::function_base<true, true, fu2::capacity_default, false, false,
+      util::function_base<true, true, fu2::capacity_default, false, false,
                           void(CommandContext*, CmdArgList) const>;
 
   CommandId(const char* name, uint32_t mask, int8_t first_key, int8_t last_key);

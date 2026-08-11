@@ -156,7 +156,7 @@ TEST(CompactObjTest, GetSliceFromInt) {
 TEST(CompactObjTest, GetSliceFromStr) {
   CompactObj obj(true);
   obj.SetString(std::string_view("direct slice"));
-  std::string scratch;  // unused for STR_TAG
+  std::string scratch;
   EXPECT_EQ(obj.GetSlice(&scratch), "direct slice");
 }
 
@@ -204,7 +204,7 @@ TEST(CompactObjTest, MoveConstructor) {
   CompactObj a(true);
   a.SetString(std::string_view("source"));
   CompactObj b(std::move(a));
-  EXPECT_TRUE(a.IsEmpty());  // moved-from is empty
+  EXPECT_TRUE(a.IsEmpty());
   EXPECT_TRUE(b.IsStr());
   EXPECT_EQ(b.AsStr(), "source");
 }

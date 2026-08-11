@@ -4,7 +4,7 @@
 #include "src/sharding/engine_shard.hpp"
 
 using namespace dfly;
-using namespace yy::net;
+
 class IntentLockTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -21,7 +21,7 @@ class IntentLockTest : public ::testing::Test {
     }
     return true;
   }
-  EventLoop loop_;
+  base::UringProactor loop_;
   std::unique_ptr<DbSlice> slice_;
 };
 

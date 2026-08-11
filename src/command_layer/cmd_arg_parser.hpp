@@ -76,7 +76,7 @@ class CmdArgParser {
     if (cur_i_ >= args_.size()) return false;
 
     std::string_view arg = SafeSV(cur_i_);
-    if (!base::EqualsIgnoreCaseStd(arg, tag)) return false;
+    if (!util::EqualsIgnoreCaseStd(arg, tag)) return false;
 
     ++cur_i_;
 
@@ -116,7 +116,7 @@ class CmdArgParser {
   std::optional<std::decay_t<T>> MapImpl(std::string_view arg,
                                          std::string_view tag, T&& value,
                                          Cases&&... cases) {
-    if (base::EqualsIgnoreCaseStd(arg, tag)) return std::forward<T>(value);
+    if (util::EqualsIgnoreCaseStd(arg, tag)) return std::forward<T>(value);
 
     if constexpr (sizeof...(cases) > 0) return MapImpl(arg, cases...);
 

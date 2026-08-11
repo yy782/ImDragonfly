@@ -3,10 +3,10 @@
 //
 
 #pragma once
-#include <absl/container/flat_hash_map.h>
 
 #include <functional>
 #include <optional>
+#include <unordered_map>
 
 #include "command_layer/cmn_types.hpp"
 #include "command_layer/command_id.hpp"
@@ -44,7 +44,7 @@ class CommandRegistry {
   FamiliesVec GetFamilies();
 
  private:
-  absl::flat_hash_map<std::string, CommandId> cmd_map_;
+  std::unordered_map<std::string, CommandId> cmd_map_;
 
   FamiliesVec family_of_commands_;
   size_t bit_index_;

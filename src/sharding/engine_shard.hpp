@@ -7,12 +7,12 @@
 
 #include <cstdint>
 
-#include "YY/net/EventLoop.h"
-#include "base/task_queue.hpp"
 #include "cppcoro/async_task.hpp"
 #include "detail/intent_lock.hpp"
 #include "detail/mi_memory_resource.hpp"
 #include "detail/tx_queue.hpp"
+#include "net/uring_proactor.hpp"
+#include "util/task_queue.hpp"
 
 namespace dfly {
 
@@ -27,14 +27,13 @@ class EngineShard {
  public:
   friend class EngineShardSet;
 
-  static void InitThreadLocal(yy::net::EventLoop* pb);
+  static void InitThreadLocal(base::UringProactor* pb);
   static void DestroyThreadLocal();
   static EngineShard* tlocal() { return shard_; }
   bool IsMyThread() const { return this == shard_; }
   ShardId shard_id() const { return shard_id_; }
   PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
-  base::TaskQueue* GetQueue() { return proactor_->GetTaskQueue(); }
-  yy::net::EventLoop* GetLoop() { return proactor_; }
+  util::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }
 
   void PollExecution(std::shared_ptr<Transaction> trans);
 
@@ -46,9 +45,9 @@ class EngineShard {
   size_t& committed_txid() { return committed_txid_; }
 #endif
  private:
-  EngineShard(yy::net::EventLoop* pb, mi_heap_t* heap);
+  EngineShard(base::UringProactor* pb, mi_heap_t* heap);
   void Shutdown();
-  yy::net::EventLoop* proactor_;
+  base::UringProactor* proactor_;
   ShardId shard_id_;
   MiMemoryResource mi_resource_;
   static thread_local EngineShard* shard_;

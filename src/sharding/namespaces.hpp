@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <absl/container/node_hash_map.h>
-
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "detail/common_types.hpp"
@@ -44,7 +43,7 @@ class Namespaces {
 
  private:
   std::shared_mutex rw_mutex_;
-  absl::node_hash_map<std::string, Namespace> namespaces_;
+  std::unordered_map<std::string, Namespace> namespaces_;
   Namespace* default_namespace_ = nullptr;
 };
 
