@@ -82,7 +82,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         LOG(INFO) << "Connection closed by client, fd: " << fd;
         break;
       } else {
-        LOG(ERROR) << "Read error on fd: " << fd << ", error" << res.bytes;
+        LOG(WARNING) << "Read error on fd: " << fd << ", error" << res.bytes;
         break;
       }
     }
@@ -106,7 +106,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
     assert(util::Thread::current_tid() == pId_);
     [[maybe_unused]] auto wr =
         co_await socket_.AsyncWrite(multi_res_.data(), multi_res_.size());
-    assert(wr == multi_res_.size());
+    assert(static_cast<size_t>(wr) == multi_res_.size());
     co_return;
   }
 

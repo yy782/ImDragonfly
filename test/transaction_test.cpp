@@ -372,11 +372,11 @@ TEST_F(TransactionTest, VLLLock) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(sid);
+      shard_set->Add(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(s);
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
-        lock_args.fps = fps;
+        lock_args.fps = f;
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         finished.fetch_add(1, std::memory_order_release);
       });
@@ -417,22 +417,21 @@ TEST_F(TransactionTest, VLLLock) {
     // Cleanup: 释放 Group 1 持有的所有锁，避免残留影响 Group 2
     {
       std::atomic<int> release_done{0};
-      const int nshards = static_cast<int>(involved_shards.size());
+      const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_set->Add(sid, [&, sid = sid, fps = fps]() {
-          auto& db_slice = Namespace->GetDbSlice(sid);
+        shard_set->Add(sid, [&, s = sid, f = fps]() {
+          auto& db_slice = Namespace->GetDbSlice(s);
           KeyLockArgs lock_args;
           lock_args.db_index = db_index;
-          lock_args.fps = fps;
+          lock_args.fps = f;
           db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
           release_done.fetch_add(1, std::memory_order_release);
         });
       }
-      for (int retry = 0; retry < 500 && release_done.load() < nshards;
-           ++retry) {
+      for (int retry = 0; retry < 500 && release_done.load() < total; ++retry) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      ASSERT_EQ(release_done.load(), nshards)
+      ASSERT_EQ(release_done.load(), total)
           << "Group 1 cleanup: timeout releasing locks on all shards";
     }
   }
@@ -540,11 +539,11 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(sid);
+      shard_set->Add(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(s);
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
-        lock_args.fps = fps;
+        lock_args.fps = f;
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         EngineShard::tlocal()->committed_txid() = 5;
         finished.fetch_add(1, std::memory_order_release);
@@ -581,23 +580,22 @@ TEST_F(TransactionTest, VLLLockRetry) {
     // Cleanup: 释放锁并重置 committed_txid，避免残留影响 Group 2
     {
       std::atomic<int> release_done{0};
-      const int nshards = static_cast<int>(involved_shards.size());
+      const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_set->Add(sid, [&, sid = sid, fps = fps]() {
-          auto& db_slice = Namespace->GetDbSlice(sid);
+        shard_set->Add(sid, [&, s = sid, f = fps]() {
+          auto& db_slice = Namespace->GetDbSlice(s);
           KeyLockArgs lock_args;
           lock_args.db_index = db_index;
-          lock_args.fps = fps;
+          lock_args.fps = f;
           db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
           EngineShard::tlocal()->committed_txid() = 0;
           release_done.fetch_add(1, std::memory_order_release);
         });
       }
-      for (int retry = 0; retry < 500 && release_done.load() < nshards;
-           ++retry) {
+      for (int retry = 0; retry < 500 && release_done.load() < total; ++retry) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
-      ASSERT_EQ(release_done.load(), nshards)
+      ASSERT_EQ(release_done.load(), total)
           << "Group 1 cleanup: timeout releasing locks and resetting "
              "committed_txid";
     }
@@ -612,13 +610,13 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, sid = sid, fps = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(sid);
+      shard_set->Add(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = Namespace->GetDbSlice(s);
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
-        lock_args.fps = fps;
+        lock_args.fps = f;
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
-        if (sid == committed_sid) {
+        if (s == committed_sid) {
           EngineShard::tlocal()->committed_txid() = 5;
         }
         finished.fetch_add(1, std::memory_order_release);
