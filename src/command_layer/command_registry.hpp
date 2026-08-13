@@ -30,14 +30,6 @@ class CommandRegistry {
     return it == cmd_map_.end() ? nullptr : &it->second;
   }
 
-  using TraverseCb = std::function<void(std::string_view, const CommandId&)>;
-
-  void Traverse(TraverseCb cb) {
-    for (const auto& k_v : cmd_map_) {
-      cb(k_v.first, k_v.second);
-    }
-  }
-
   void StartFamily();
 
   using FamiliesVec = std::vector<std::vector<std::string>>;

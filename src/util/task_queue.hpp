@@ -4,15 +4,20 @@
 
 #include <atomic>
 #include <functional>
+#include <stdexcept>
 
 #include "cppcoro/async_task.hpp"
-#include "util/lock_free_queue.hpp"
+#include "detail/memory_resource.hpp"
+#include "util/mpmc_queue.hpp"
 #include "util/synchronization.hpp"
 namespace util {
 
 class TaskQueue {
  public:
-  explicit TaskQueue(unsigned queue_size = 128) : queue_(queue_size) {}
+  explicit TaskQueue(
+      unsigned queue_size = 128,
+      PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
+      : queue_(queue_size, mr) {}
 
   template <typename F>
   bool TryAdd(F&& f) {
@@ -43,7 +48,7 @@ class TaskQueue {
     pull_ec_.notifyAll();
   }
 
-  void Run() {
+  void Run() {  // 目前没用这个接口，pull_ec_是多余了
     CbFunc func;
     while (true) {
       pull_ec_.wait();
@@ -63,8 +68,11 @@ class TaskQueue {
     CbFunc func;
     while (queue_.try_dequeue(func)) {
       push_ec_.notify();
-
-      func();
+      try {
+        func();
+      } catch (std::exception& e) {
+        LOG(WARNING) << "TaskQueue::TryDrain exception: " << e.what();
+      }
     }
     return true;
   }
@@ -76,7 +84,7 @@ class TaskQueue {
   using CbFunc = std::function<void()>;
 
  private:
-  using FuncQ = util::mpmc_bounded_queue<CbFunc>;
+  using FuncQ = util::mpmc_queue<CbFunc>;
 
   FuncQ queue_;
 

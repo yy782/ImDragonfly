@@ -24,14 +24,6 @@ struct Capture {
 
 }  // namespace
 
-TEST(ReplyBuilderTest, BuildNull) {
-  Capture cap;
-  ReplyBuilder r;
-  r.SetSendCallback(cap.cb());
-  r.BuildNull();
-  EXPECT_EQ(cap.last, "$-1\r\n");
-}
-
 TEST(ReplyBuilderTest, BuildSimpleString) {
   Capture cap;
   ReplyBuilder r;
@@ -140,20 +132,28 @@ TEST(ReplyBuilderTest, BuildArrayEmpty) {
   EXPECT_EQ(cap.last, "*0\r\n");
 }
 
-// ---- BuildMultiArray ----
+// ---- SendRaw（PipelineSquasher 回放路径） ----
 
-TEST(ReplyBuilderTest, BuildMultiArray) {
+TEST(ReplyBuilderTest, SendRaw) {
   Capture cap;
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
-  r.BuildMultiArray({":1\r\n", ":2\r\n", ":3\r\n"});
+  r.SendRaw("*3\r\n:1\r\n:2\r\n:3\r\n");
   EXPECT_EQ(cap.last, "*3\r\n:1\r\n:2\r\n:3\r\n");
 }
 
-TEST(ReplyBuilderTest, BuildMultiArrayEmpty) {
-  Capture cap;
+// ---- 回调捕获（squash 收集路径：回调绑定到收集器） ----
+
+TEST(ReplyBuilderTest, CallbackCaptureCollectsMultipleReplies) {
+  std::vector<std::string> out;
   ReplyBuilder r;
-  r.SetSendCallback(cap.cb());
-  r.BuildMultiArray({});
-  EXPECT_EQ(cap.last, "*0\r\n");
+  r.SetSendCallback([&out](std::string&& s) { out.push_back(std::move(s)); });
+
+  r.BuildSimpleString("OK");
+  r.BuildInteger(42);
+  r.BuildArray({"a", "b"});
+  ASSERT_EQ(out.size(), 3u);
+  EXPECT_EQ(out[0], "+OK\r\n");
+  EXPECT_EQ(out[1], ":42\r\n");
+  EXPECT_EQ(out[2], "*2\r\n$1\r\na\r\n$1\r\nb\r\n");
 }

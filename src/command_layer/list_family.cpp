@@ -434,61 +434,20 @@ CoroTask CmdLInsert(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// 命令处理函数包装器
-void LPush(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLPush(cmd_cntx, args);
-}
-
-void RPush(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdRPush(cmd_cntx, args);
-}
-
-void LPop(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLPop(cmd_cntx, args);
-}
-
-void RPop(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdRPop(cmd_cntx, args);
-}
-
-void LLen(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLLen(cmd_cntx, args);
-}
-
-void LIndex(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLIndex(cmd_cntx, args);
-}
-
-void LSet(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLSet(cmd_cntx, args);
-}
-
-void LRange(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLRange(cmd_cntx, args);
-}
-
-void LRem(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLRem(cmd_cntx, args);
-}
-
-void LInsert(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdLInsert(cmd_cntx, args);
-}
-
 }  // namespace
 
 void RegisterListFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(LPush)
-            << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(RPush)
-            << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(LPop)
-            << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(RPop)
-            << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(LLen)
-            << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(LIndex)
-            << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(LSet)
-            << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(LRange)
-            << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(LRem)
-            << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(LInsert);
+  *registry << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(CmdLPush)
+            << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(CmdRPush)
+            << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(CmdLPop)
+            << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(CmdRPop)
+            << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(CmdLLen)
+            << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(CmdLIndex)
+            << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(CmdLSet)
+            << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(CmdLRange)
+            << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(CmdLRem)
+            << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(CmdLInsert);
 }
 
 }  // namespace dfly

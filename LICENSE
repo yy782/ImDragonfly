@@ -1,21 +1,89 @@
-MIT License
+Business Source License 1.1
 
-Copyright (c) 2026 yy782
+Parameters
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Licensor:             yy782
+Licensed Work:        ImDragonfly
+                      (https://github.com/yy782/ImDragonfly)
+                      A high-performance, multi-threaded, in-memory
+                      key-value store compatible with the Redis protocol.
+Additional Use Grant: You may use the Licensed Work in any non-production
+                      environment, including development, testing,
+                      evaluation, and academic research. You may use the
+                      Licensed Work in a production environment solely as
+                      part of your own application, provided that your
+                      application is not a database, data store, caching
+                      service, or any other product whose primary purpose
+                      is to provide the same functionality as the
+                      Licensed Work, and provided that you do not offer
+                      the Licensed Work as a hosted or managed service
+                      to third parties.
+Change Date:          November 1, 2030
+Change License:       Apache License, Version 2.0
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+For information about alternative licensing arrangements for the Licensed
+Work, please contact yy782.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Notice
+
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
+
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+-----------------------------------------------------------------------------
+
+Terms
+
+The Licensor hereby grants you a non-exclusive, non-transferable, limited
+right to use, modify, and redistribute the Licensed Work, subject to the
+terms of this License. You may not use, modify, or redistribute the Licensed
+Work in any manner that is not within the terms of this License.
+
+You should have received a copy of the License with this source code. If you
+did not receive a copy, you may also obtain a copy of the License at
+https://mariadb.com/bsl11/
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON
+AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license
+your works, and to refer to it using the trademark "Business Source License",
+as long as you comply with the Covenants of Licensor below.
+
+Covenants of Licensor
+
+In consideration of the License, the Licensor covenants to MariaDB, and all
+other parties receiving a copy of the Licensed Work and this License
+collectively ("the Recipients"), that:
+
+1. The Licensed Work is substantially different from any other work licensed
+   under the terms of this License, or a substantially similar license;
+
+2. The Licensor will not use the trademark "Business Source License" or the
+   trademark "MariaDB" in a way that is misleading with respect to the
+   Licensed Work or this License;
+
+3. The Licensor will not claim that the Licensed Work is an original work of
+   MariaDB or that the Licensed Work is part of MariaDB's products or
+   services; and
+
+4. The Licensor will not use MariaDB's name or trademark in a way that is
+   misleading with respect to the Licensed Work or this License.
+
+The Licensor represents that it has the right to grant the rights set out in
+the License, and that it has taken all steps necessary to ensure that the
+rights granted herein do not infringe on the rights of any third party.
+
+-----------------------------------------------------------------------------
+
+NOTICE: 本仓库部分文件（src/sharding/ 下 engine_shard、engine_shard_set、
+namespaces 系列文件）衍生自 DragonflyDB（https://github.com/dragonflydb/
+dragonfly），其原始版权归 DragonflyDB authors 所有，原始版权声明保留在
+各文件头部，并继续按 BSL 1.1 的条款授权。此外，src/util/ 下 vendored 的
+第三方库（cppcoro、function2、expected 等）适用各自原始许可证。

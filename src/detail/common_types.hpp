@@ -26,4 +26,8 @@ class CommandContext;
 class Namespace;
 class CommandRegistry;
 class Interpreter;
+
+namespace cmd {
+struct CoroTask;
+}
 }  // namespace dfly

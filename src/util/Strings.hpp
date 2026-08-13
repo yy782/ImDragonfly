@@ -14,6 +14,16 @@ StrType2 StrToUpper(StrType1&& str) {
   return result;
 }
 
+inline std::string ToUpperIfNeeded(std::string_view str) {
+  if (str.empty() || str.front() < 'a' || str.front() > 'z') {
+    return {};
+  }
+  std::string result(str.size(), '\0');
+  std::transform(str.begin(), str.end(), result.begin(),
+                 [](unsigned char c) { return std::toupper(c); });
+  return result;
+}
+
 template <typename StrType1, typename StrType2>
 bool EqualsIgnoreCaseStd(StrType1&& a, StrType2&& b) {
   // TODO 检测a,b的类型，支持char*

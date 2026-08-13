@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(unit_tests
     db_table_test.cpp
     tx_queue_test.cpp
+    task_queue_test.cpp
     intent_lock_test.cpp
     synchronized_test.cpp
     cmd_arg_parser_test.cpp

@@ -15,48 +15,9 @@
 
 using namespace dfly;
 
-/*
-mimalloc: warning: mi_usable_size: pointer might not point to a valid heap
-region: 0x7aacbc020000 (this may still be a valid very large allocation (over
-64MiB)) mimalloc: warning: (yes, the previous pointer 0x7aacbc020000 was valid
-after all) mimalloc: warning: mi_usable_size: pointer might not point to a valid
-heap region: 0x7aacbc020000 (this may still be a valid very large allocation
-(over 64MiB)) mimalloc: warning: mimalloc: warning: mi_usable_size: pointer
-might not point to a valid heap region: 0x7aacb8020000 (this may still be a
-valid very large allocation (over 64MiB)) mimalloc: warning: (yes, the previous
-pointer 0x7aacb8020000 was valid after all) mimalloc: warning: mi_usable_size:
-pointer might not point to a valid heap region: 0x7aacb8020000 (this may still
-be a valid very large allocation (over 64MiB)) mimalloc: warning: (yes, the
-previous pointer 0x7aacb8020000 was valid after all) mimalloc: warning:
-mi_usable_size: pointer might not point to a valid heap region: 0x7aacb8030080
-(this may still be a valid very large allocation (over 64MiB))
-mimalloc: warning: (yes, the previous pointer 0x7aacb8030080 was valid after
-all) mimalloc: warning: mi_usable_size: pointer might not point to a valid heap
-region: 0x7aacb8030080 (this may still be a valid very large allocation (over
-64MiB)) mimalloc: warning: (yes, the previous pointer 0x7aacb8030080 was valid
-after all) (yes, the previous pointer 0x7aacbc020000 was valid after all)
-mimalloc: warning: mi_usable_size: pointer might not point to a valid heap
-region: 0x7aacbc030080 (this may still be a valid very large allocation (over
-64MiB)) mimalloc: warning: (yes, the previous pointer 0x7aacbc030080 was valid
-after all) mimalloc: warning: mi_usable_size: pointer might not point to a valid
-heap region: 0x7aacbc030080 (this may still be a valid very large allocation
-(over 64MiB)) mimalloc: warning: (yes, the previous pointer 0x7aacbc030080 was
-valid after all) mimalloc: warning: mi_usable_size: pointer might not point to a
-valid heap region: 0x7aacb4020000 (this may still be a valid very large
-allocation (over 64MiB)) mimalloc和ASAN冲突
-*/
-
-/*
-程序结束时ASAN会报内存泄漏的错误，但是这实际上不是错误，是堆内存操作没有执行完时，程序被终止时的正常情况，ASAN无法区分这种情况和真正的内存泄漏，所以会误报内存泄漏错误。
-*/
-
-// export
-// ASAN_OPTIONS="detect_leaks=1:leak_check_at_exit=0:leak_check_interval=1024:halt_on_error=0:log_path=/home/yy/programs/ImDragonfly/build/asan.log"
-// ./imdragonfly
+// ASAN对协程有误报，注意一下
 
 int main(int argc, char *argv[]) {
-  // 先初始化 glog（先输出到 stderr，确保后续 LOG 可用）
-
   // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
   // <gflags/gflags.h>，所以不可用
 
@@ -68,7 +29,6 @@ int main(int argc, char *argv[]) {
 #endif
   google::InitGoogleLogging(argv[0]);
 
-  // 创建日志目录，再切换到文件日志
   int ret = mkdir("./logs", 0755);
   if (ret != 0 && errno != EEXIST) {
     LOG(ERROR) << "Failed to create logs directory: " << strerror(errno);

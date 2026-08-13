@@ -217,35 +217,15 @@ CoroTask CmdSIsMember(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-void SAdd(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSAdd(cmd_cntx, args);
-}
-
-void SRem(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSRem(cmd_cntx, args);
-}
-
-void SMembers(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSMembers(cmd_cntx, args);
-}
-
-void SCard(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSCard(cmd_cntx, args);
-}
-
-void SIsMember(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSIsMember(cmd_cntx, args);
-}
-
 }  // namespace
 
 void RegisterSetFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"SADD", CO::JOURNALED, 1, 1}.SetHandler(SAdd)
-            << CI{"SREM", CO::JOURNALED, 1, 1}.SetHandler(SRem)
-            << CI{"SMEMBERS", CO::READONLY, 1, 1}.SetHandler(SMembers)
-            << CI{"SCARD", CO::READONLY, 1, 1}.SetHandler(SCard)
-            << CI{"SISMEMBER", CO::READONLY, 1, 1}.SetHandler(SIsMember);
+  *registry << CI{"SADD", CO::JOURNALED, 1, 1}.SetHandler(CmdSAdd)
+            << CI{"SREM", CO::JOURNALED, 1, 1}.SetHandler(CmdSRem)
+            << CI{"SMEMBERS", CO::READONLY, 1, 1}.SetHandler(CmdSMembers)
+            << CI{"SCARD", CO::READONLY, 1, 1}.SetHandler(CmdSCard)
+            << CI{"SISMEMBER", CO::READONLY, 1, 1}.SetHandler(CmdSIsMember);
 }
 
 }  // namespace dfly

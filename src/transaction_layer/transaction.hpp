@@ -11,7 +11,7 @@
 #include <span>
 #include <vector>
 
-#include "command_layer/command_registry.hpp"
+#include "command_layer/cmn_types.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
 #include "sharding/engine_shard_set.hpp"
@@ -20,6 +20,8 @@
 #include "util/function.hpp"
 using namespace util;
 namespace dfly {
+
+class CommandId;
 
 using namespace cmn;
 using namespace ::cmn;
@@ -144,9 +146,14 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
           ++cur_;
           if (cur_ < end_) {
             idx_ = cur_->first;
+          } else {
+            // 已越过最后一个 key，此时 idx_ == end().idx_，
+            // 不可再读取 args_[idx_]，否则越界（range-for 会在 ++ 后判 !=
+            // end）。
+            return *this;
           }
         }
-        val_ = {args_[idx_], idx_};  // 会越界
+        val_ = {args_[idx_], idx_};
         return *this;
       }
 

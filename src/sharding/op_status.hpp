@@ -11,6 +11,7 @@ enum class OpStatus : uint16_t {
   NO_KEY,
   OUT_OF_RANGE,
   SYNTAX_ERROR,
+  INVALID_VALUE,  // 值存在但格式不正确（如 INCR 作用于非整数字符串）
 };
 
 class OpResultBase {

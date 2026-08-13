@@ -30,9 +30,11 @@ class EngineShardSet {
   auto Add(ShardId sid, F&& f) {
     DCHECK_LT(sid, size_);
     bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
-    // 暂时使用TryAdd,
-    // 以后测试了AsyncAdd()函数的准确性，再切换，release下出错，切debug模式就ok了
-    DCHECK(success);
+    if (!success) {
+      // 队列满溢：非阻塞 TryAdd 失败，任务被丢弃会导致等待方永久挂起。
+      // Debug/Release 行为一致，统一用 LOG(FATAL) 暴露问题。
+      LOG(FATAL) << "Shard " << sid << " task queue overflow, TryAdd failed";
+    }
     return success;
   }
   template <typename U>
