@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-IMDRAGONFLY_BIN="${1:-./build/imdragonfly}"
+IMDRAGONFLY_BIN="${1:-./build/imdragonfly}" # 可能会启动失败，在CI远端复现
 PORT="${2:-6379}"
 TEST_DIR="${3:-test/redis-py}"
 LOG_DIR="./logs"
