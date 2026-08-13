@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmimalloc-dev \
     libboost-dev \
     libgoogle-glog-dev \
-    libabsl-dev \
     libprotobuf-dev \
     protobuf-compiler \
     libgtest-dev \
@@ -52,7 +51,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmimalloc2.0 \
     libgoogle-glog0v6t64 \
     libprotobuf32t64 \
-    libabsl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建非 root 用户

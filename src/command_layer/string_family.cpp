@@ -26,23 +26,9 @@ using CI = CommandId;
 
 constexpr uint32_t kMaxStrLen [[maybe_unused]] = 1 << 28;
 
-using StringResult = std::string;
-
-StringResult ReadString(DbIndex dbid, std::string_view key,
-                        const PrimeValue& pv, EngineShard* es) {
-  (void)dbid;
-  (void)key;
-  (void)es;
-  // 分层存储扩展
-  // LOG(INFO) << "ReadString" << key << " " << pv.ToString();
-
-  return StringResult{pv.ToString()};
-}
-
 using ::cmd::CmdArgParser;
 using cmd::CoroTask;
 using Slice = Transaction::Slice;
-// Helper for performing SET operations with various options
 
 class SetCmd {  // SET 命令处理器
  public:
@@ -56,8 +42,7 @@ class SetCmd {  // SET 命令处理器
 
   struct SetParams {
     uint16_t flags_ = SET_ALWAYS;
-    uint64_t expire_after_ms_ =
-        0;  // Relative value based on now. 0 means no expiration.
+    uint64_t expire_after_ms_ = 0;
 
     constexpr bool IsConditionalSet() const { return false; }
   };
@@ -127,14 +112,14 @@ void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it,
   }
 }
 
-struct NegativeExpire {};  // Returned if relative expiry was in the past
+struct NegativeExpire {};
 struct ErrorReply {};
 std::variant<SetCmd::SetParams, ErrorReply, NegativeExpire> ParseSetParams(
     CmdArgParser parser, const CommandContext* cmd_cntx) {
   SetCmd::SetParams sparams;
   (void)cmd_cntx;
   while (parser.HasNext()) {
-    if (parser.Check("EX")) {  // not same
+    if (parser.Check("EX")) {
       if (parser.HasError()) return ErrorReply{};
 
       sparams.flags_ |= SetCmd::SET_EXPIRE_AFTER_MS;
@@ -165,7 +150,7 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);  // Skip command name
+  args = args.subspan(1);
 
   CmdArgParser parser{args};
 
@@ -200,8 +185,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
       if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
         vec[keyId - 1] = "";  // args第一个参数是MGET,与vec不同，要减一
       } else {
-        vec[keyId - 1] =
-            ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es);
+        vec[keyId - 1] = it_res.GetInnerIt()->second.ToString();
       }
     }
     return {};
@@ -214,7 +198,7 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
 }
 CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key = args[1]](Transaction* tx,
-                            EngineShard* es) -> OpResult<StringResult> {
+                            EngineShard* es) -> OpResult<std::string> {
     DCHECK_EQ(EngineShard::tlocal()->shard_id(), es->shard_id());
     auto it_res =
         tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
@@ -224,7 +208,7 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
       return OpStatus::KEY_NOTFOUND;
     }
 
-    return {ReadString(tx->GetDbIndex(), key, it_res.GetInnerIt()->second, es)};
+    return {it_res.GetInnerIt()->second.ToString()};
   };
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();

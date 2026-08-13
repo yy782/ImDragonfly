@@ -48,18 +48,24 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
   }
 
-  cppcoro::AsyncTask DoRead() {
+  cppcoro::AsyncTask DoRead() {  // 不支持管道， 要支持管道，复杂度高
     socket_.RegisterRecvBuf();
     pId_ = socket_.Proactor()->GetLoopThreadId();
     int fd = socket_.fd();
+    size_t recv_offset = 0;
     while (true) {
-      auto res = co_await socket_.AsyncRead();
+      auto res = co_await socket_.AsyncRead(recv_offset);
       assert(util::Thread::current_tid() == pId_);
       if (res.bytes > 0) {
-        auto& com = parser_.Parse(res.data, res.bytes);
-        if (com.empty()) continue;
+        size_t total = recv_offset + res.bytes;
+        auto& com = parser_.Parse(res.data, total);  // todo 没有记忆
+        if (com.empty()) {
+          recv_offset = total;
+          continue;
+        }
+        recv_offset = 0;
 
-        VLOG(4) << " fd: " << fd << " com: " << util::VecToStr(com);
+        VLOG(3) << " fd: " << fd << " com: " << util::VecToStr(com);
 
         args_ = ::cmn::CmdArgList(com);
         auto ci = CIs->Find(args_[0]);
@@ -104,9 +110,16 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
   cppcoro::AsyncTask DoWrite() {
     assert(util::Thread::current_tid() == pId_);
-    [[maybe_unused]] auto wr =
-        co_await socket_.AsyncWrite(multi_res_.data(), multi_res_.size());
-    assert(static_cast<size_t>(wr) == multi_res_.size());
+    size_t written = 0;
+    while (written < multi_res_.size()) {
+      auto wr = co_await socket_.AsyncWrite(multi_res_.data() + written,
+                                            multi_res_.size() - written);
+      if (wr <= 0) {
+        LOG(WARNING) << "Write error on fd: " << fd() << ", error: " << wr;
+        break;
+      }
+      written += static_cast<size_t>(wr);
+    }
     co_return;
   }
 

@@ -3,6 +3,8 @@
 //
 #include "transaction_layer/transaction.hpp"
 
+#include <bitset>
+
 #include "network/redis_server.hpp"
 
 namespace dfly {
@@ -99,7 +101,8 @@ void Transaction::InitByKeys(const KeyIndex& key_index) {
     auto& sl = key_slices_[0];
     sl.trans_ = this;
     sl.sid_ = unique_shard_id_;
-    sl.slices_ = absl::MakeConstSpan(args_slices_.data(), args_slices_.size());
+    sl.slices_ =
+        std::span<const IndexSlice>(args_slices_.data(), args_slices_.size());
     sl.step_ = key_index.step;
     sl.args_ = full_args_;
     return;
@@ -148,7 +151,7 @@ void Transaction::BuildShardIndex(const KeyIndex& key_index,
   }
 }
 
-void Transaction::InitShardData(absl::Span<const PerShardCache> shard_index,
+void Transaction::InitShardData(std::span<const PerShardCache> shard_index,
                                 size_t num_args) {
   args_slices_.reserve(num_args);
   DCHECK(kv_fp_.empty());
@@ -187,9 +190,9 @@ void Transaction::InitShardData(absl::Span<const PerShardCache> shard_index,
     auto& sl = key_slices_[i];
     sl.trans_ = this;
     sl.sid_ = static_cast<ShardId>(i);
-    sl.slices_ =
-        absl::MakeConstSpan(args_slices_.data() + shard_data_[i].slice_start,
-                            shard_data_[i].slice_count);
+    sl.slices_ = std::span<const IndexSlice>(
+        args_slices_.data() + shard_data_[i].slice_start,
+        shard_data_[i].slice_count);
     sl.step_ = shard_index[i].key_step;
     sl.args_ = full_args_;
   }

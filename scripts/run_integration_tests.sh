@@ -82,7 +82,10 @@ python3 -m venv "$VENV_DIR"
 # ── 运行集成测试 ─────────────────────────────────────────
 echo ""
 echo "=== Running integration tests ==="
-"$VENV_DIR/bin/python" -m pytest "$TEST_DIR/test_all.py" -v \
+"$VENV_DIR/bin/python" -m pytest \
+    "$TEST_DIR/test_all.py" \
+    "$TEST_DIR/test_half_packet.py" \
+    -v \
     --redis-host=127.0.0.1 \
     --redis-port="$PORT" \
     --tb=short \

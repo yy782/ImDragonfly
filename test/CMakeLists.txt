@@ -25,7 +25,8 @@ target_link_libraries(unit_tests PRIVATE
 )
 target_include_directories(unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/net
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/util
 )
 target_compile_options(unit_tests PRIVATE ${CXX_WARNING_OPTIONS})
 target_compile_definitions(unit_tests PRIVATE UNIT_TESTS)

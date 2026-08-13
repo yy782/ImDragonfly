@@ -167,7 +167,7 @@ redis-cli -p 6379
 # Ubuntu/Debian (推荐 Ubuntu 22.04+)
 sudo apt-get install -y clang cmake ninja-build \
     liburing-dev libmimalloc-dev libboost-dev \
-    libgoogle-glog-dev libabsl-dev
+    libgoogle-glog-dev
 ```
 
 > **注意**：项目默认启用 `IORING_SETUP_SINGLE_ISSUER`（需 Linux 5.18+）。如果内核版本较低，需在 `UringConfig` 中设置 `use_single_issuer = false` 和 `use_defer_taskrun = false`。

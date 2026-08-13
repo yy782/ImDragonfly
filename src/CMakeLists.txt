@@ -9,7 +9,8 @@ add_library(imdragonfly_lib STATIC ${STORAGE_SOURCES})
 
 target_include_directories(imdragonfly_lib PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/util
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/util
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -27,7 +28,8 @@ if(BUILD_TESTS)
     target_compile_definitions(imdragonfly_lib_test PRIVATE UNIT_TESTS)
     target_include_directories(imdragonfly_lib_test PUBLIC
         ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/util
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/util
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_compile_options(imdragonfly_lib_test PRIVATE ${CXX_WARNING_OPTIONS})

@@ -34,9 +34,13 @@ struct ParseRESP {
     pos += 2;
 
     for (int64_t i = 0; i < num_elements; i++) {
-      if (pos >= bytes) return result;
+      if (pos >= bytes) {
+        result.clear();
+        return result;
+      }
 
       if (data[pos] != '$') {
+        result.clear();
         return result;
       }
       pos++;
@@ -48,21 +52,25 @@ struct ParseRESP {
       }
 
       if (len < 0 || pos + 2 > bytes) {
+        result.clear();
         return result;
       }
 
       if (data[pos] != '\r' || data[pos + 1] != '\n') {
+        result.clear();
         return result;
       }
       pos += 2;
 
       if (pos + static_cast<size_t>(len) + 2 > bytes) {
+        result.clear();
         return result;
       }
       result.emplace_back(data + pos, len);
       pos += len;
 
       if (pos + 2 > bytes || data[pos] != '\r' || data[pos + 1] != '\n') {
+        result.clear();
         return result;
       }
       pos += 2;

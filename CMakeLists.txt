@@ -36,7 +36,7 @@ if(USE_ASAN)
     set(ASAN_FLAGS 
         -fsanitize=address 
         -fno-omit-frame-pointer
-        -DNDEBUG_SANITIZER  # 关闭对absl的检查
+        -DNDEBUG_SANITIZER  # 关闭 sanitizer 场景下的断言检查
     )
     set(ASAN_LDFLAGS -fsanitize=address)
     add_compile_options(${ASAN_FLAGS})
@@ -76,7 +76,7 @@ else()
     )
 endif()    
 
-add_subdirectory(net)
+add_subdirectory(src/net)
 
 add_subdirectory(src)
 
@@ -87,7 +87,8 @@ endif()
 add_executable(imdragonfly main.cpp)
 target_include_directories(imdragonfly PRIVATE
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/util
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/util
 )
 target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
