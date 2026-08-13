@@ -79,9 +79,22 @@ echo "Setting up Python virtual environment..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install -q redis pytest pytest-timeout
 
+# ── 检查 ImDragonfly 进程存活（启动后到测试前可能崩溃）────────────────
+check_server_alive() {
+    if ! kill -0 "$IMDRAGONFLY_PID" 2>/dev/null; then
+        echo "ERROR: ImDragonfly process (pid=$IMDRAGONFLY_PID) has exited."
+        echo "--- Server logs (./logs) ---"
+        for f in ./logs/*.INFO ./logs/*.WARNING ./logs/*.ERROR; do
+            [ -f "$f" ] && { echo ">>> $f"; tail -n 50 "$f"; }
+        done
+        exit 1
+    fi
+}
+
 # ── 运行集成测试 ─────────────────────────────────────────
 echo ""
 echo "=== Running integration tests ==="
+check_server_alive
 "$VENV_DIR/bin/python" -m pytest \
     "$TEST_DIR/test_all.py" \
     "$TEST_DIR/test_half_packet.py" \
