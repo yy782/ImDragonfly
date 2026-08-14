@@ -47,7 +47,9 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
     });
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
   }
-
+  // 不打算实现持久化，MUTLI,EXEC等实现以后完成
+  // 目前DashTable,事务调度，协程，SIMD，以及各种第三方boost,function_base都够吃一壶的了
+  // 一个人开发难度大，AI还看不懂代码
   cppcoro::AsyncTask DoRead() {  // 不支持管道， 要支持管道，复杂度高
     socket_.RegisterRecvBuf();
     pId_ = socket_.Proactor()->GetLoopThreadId();
@@ -68,7 +70,9 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         VLOG(3) << " fd: " << fd << " com: " << util::VecToStr(com);
 
         args_ = ::cmn::CmdArgList(com);
-        auto ci = CIs->Find(args_[0]);
+        std::string upper_cmd =
+            util::ToUpperIfNeeded(args_[0]);  // 防止传入小写的set,找不到
+        auto ci = CIs->Find(upper_cmd.empty() ? args_[0] : upper_cmd);
         if (!ci) {
           LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << fd;
           rb_.BuildError("unknown command:" + std::string(args_[0]));
@@ -82,7 +86,9 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         transaction_ = std::make_shared<Transaction>(ci);
         transaction_->InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
                                  args_);
-        cmd_cntx_ = CommandContext(transaction_, ci, &rb_);
+        cmd_cntx_ = CommandContext(
+            transaction_, ci,
+            &rb_);  // 并不安全，但是目前是安全的，生命周期应该是transaction_保管更好
         ci->Invoke(&cmd_cntx_, args_);
       } else if (res.bytes == 0 || res.bytes == -104) {
         LOG(INFO) << "Connection closed by client, fd: " << fd;
@@ -105,7 +111,13 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
   void SendImp(std::string&& s) {
     auto p = socket_.Proactor();
     multi_res_ = std::move(s);
-    p->DispatchBrief([this]() mutable { DoWrite(); });
+    auto self = shared_from_this();
+    std::weak_ptr<RedisSession> weak_self = self;
+    p->DispatchBrief([weak_self]() mutable {
+      auto self = weak_self.lock();
+      if (!self) return;
+      self->DoWrite();
+    });
   }
 
   cppcoro::AsyncTask DoWrite() {
@@ -153,6 +165,8 @@ class RedisServer {
   }
 
   static base::UringConfig CreateOptimizedRedisConfig() {
+    // TODO 改用文件读取配置更好
+    // 应用层必须保证目前有多少连接在使用，这样可以使用io_uring的注册缓冲区，性能更好,不然连接超过registered_buf_count就UB了
     base::UringConfig config;
     config.queue_depth = 4096;
     config.use_defer_taskrun = true;

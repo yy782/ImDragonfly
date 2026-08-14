@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <functional>
+#include <stdexcept>
 
 #include "cppcoro/async_task.hpp"
 #include "util/lock_free_queue.hpp"
@@ -43,7 +44,7 @@ class TaskQueue {
     pull_ec_.notifyAll();
   }
 
-  void Run() {
+  void Run() {  // 目前没用这个接口，pull_ec_是多余了
     CbFunc func;
     while (true) {
       pull_ec_.wait();
@@ -63,8 +64,11 @@ class TaskQueue {
     CbFunc func;
     while (queue_.try_dequeue(func)) {
       push_ec_.notify();
-
-      func();
+      try {
+        func();
+      } catch (std::exception& e) {
+        LOG(WARNING) << "TaskQueue::TryDrain exception: " << e.what();
+      }
     }
     return true;
   }

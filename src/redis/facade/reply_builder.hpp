@@ -89,7 +89,11 @@ class ReplyBuilder {
   }
 
   void DoSend() {
-    if (send_cb_) send_cb_(std::move(reply_));  // TODO try 捕捉
+    if (send_cb_) try {
+        send_cb_(std::move(reply_));
+      } catch (std::exception& e) {
+        LOG(WARNING) << "ReplyBuilder::DoSend exception: " << e.what();
+      }
   }
 
   std::string reply_;

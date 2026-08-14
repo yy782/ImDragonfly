@@ -1,10 +1,9 @@
 #!/bin/bash
 # 启动 ImDragonfly 并运行 memtier_benchmark 压测
 # 用法: bash scripts/run_benchmark.sh [二进制路径] [端口]
-#
 # 示例:
 #   bash scripts/run_benchmark.sh
-#   bash scripts/run_benchmark.sh ./build/imdragonfly 6379
+#   bash scripts/run_benchmark.sh ./build/imdragonfly
 
 set -euo pipefail
 
@@ -69,7 +68,7 @@ run_bench_set_get() {
         return 1
     fi
 
-    # 如果 memtier_benchmark 还在跑，Ctrl+C 中断 开24核不能正常关闭连接，但是4核却可以，有问题，留意一下
+    # 如果 memtier_benchmark 还在跑，Ctrl+C 中断 
     if kill -0 "$MEMTIER_PID" 2>/dev/null; then
         echo "memtier_benchmark (pid=$MEMTIER_PID) still running, interrupting..."
         kill -INT "$MEMTIER_PID" 2>/dev/null || true

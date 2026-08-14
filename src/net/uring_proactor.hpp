@@ -24,7 +24,10 @@ struct UringConfig {
   bool use_sqpoll = false;
   uint32_t sqpoll_idle_ms = 1000;
   bool use_registered_bufs = true;
+  // 为减少代码复杂度简化设计了，这里false就UB，目前实现只能使用缓冲区注册，
+  // 这是一个事务调度和存储为核心的作品，网络层要完整实现要写网络库了，目前的代码量已经很大了
   int registered_buf_count = 256;
+  // 这里应该要应用层自己感知，一个事件循环只能注册那么多连接，需要多少缓冲区应用层决定
   int registered_buf_size = 65536;
   int cqe_batch_size = 32;
   int task_queue_size = 1024;

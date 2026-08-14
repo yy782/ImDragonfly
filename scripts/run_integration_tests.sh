@@ -79,7 +79,34 @@ echo "Setting up Python virtual environment..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install -q redis pytest pytest-timeout
 
-# yy@yy:~/programs/ImDragonfly$ bash scripts/run_integration_tests.sh 远端CI会出问题，本地倒是没事，不知道啥毛病
+#远端CI会出问题，本地倒是没事，不知道啥毛病,找问题又要开PR,在CI上测，太浪费时间了，以后推送要求必须在本地测通过
+# Run bash scripts/run_integration_tests.sh
+# Detected CPU cores: 4
+# Starting ImDragonfly (./build/imdragonfly 4)...
+# Waiting for ImDragonfly to be ready on port 6379...
+# ImDragonfly is ready (pid=2881, port=6379)
+# Setting up Python virtual environment...
+
+# === Running integration tests ===
+# ============================= test session starts ==============================
+# platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /tmp/imdragonfly_integration_venv/bin/python
+# cachedir: .pytest_cache
+# rootdir: /home/runner/work/ImDragonfly/ImDragonfly/test/redis-py
+# configfile: pytest.ini
+# plugins: timeout-2.4.0
+# timeout: 120.0s
+# timeout method: signal
+# timeout func_only: False
+# collecting ... collected 25 items
+
+# test/redis-py/test_all.py::test_set_and_get 
+
+# !!!!!!!! _pytest.outcomes.Exit: 无法连接到 Redis (127.0.0.1:6379)，请确认服务器正在运行 !!!!!!!!
+# ============================ no tests ran in 5.10s =============================
+# Stopping ImDragonfly (pid=2881)...
+# ImDragonfly stopped.
+
+# yy@yy:~/programs/ImDragonfly$ bash scripts/run_integration_tests.sh
 # Detected CPU cores: 24
 # Starting ImDragonfly (./build/imdragonfly 24)...
 # Waiting for ImDragonfly to be ready on port 6379...
@@ -136,8 +163,7 @@ echo "=== Running integration tests ==="
 # 注意: 脚本顶部 set -euo pipefail, 若直接调用 pytest, 其失败会立即终止脚本,
 # 后面的"失败视为成功"逻辑永远执行不到, 因此必须用 if 捕获退出码
 if "$VENV_DIR/bin/python" -m pytest \
-    "$TEST_DIR/test_all.py" \
-    "$TEST_DIR/test_half_packet.py" \
+    "$TEST_DIR" \
     -v \
     --redis-host=127.0.0.1 \
     --redis-port="$PORT" \

@@ -157,6 +157,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto [key, value] = parser.Next<std::string_view, std::string_view>();
   auto params_result = ParseSetParams(
       parser, cmd_cntx);  // 解析 SET 命令的选项（如 EX 、 PX 、 NX 等）
+  // 没用实现完整的SET解析，只解析了EX，实现本身不难
 
   auto& sparams = std::get<SetCmd::SetParams>(
       params_result);  // 获取解析后的 SetParams 结构体

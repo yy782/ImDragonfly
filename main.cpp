@@ -55,8 +55,6 @@ allocation (over 64MiB)) mimalloc和ASAN冲突
 // ./imdragonfly
 
 int main(int argc, char *argv[]) {
-  // 先初始化 glog（先输出到 stderr，确保后续 LOG 可用）
-
   // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
   // <gflags/gflags.h>，所以不可用
 
@@ -68,7 +66,6 @@ int main(int argc, char *argv[]) {
 #endif
   google::InitGoogleLogging(argv[0]);
 
-  // 创建日志目录，再切换到文件日志
   int ret = mkdir("./logs", 0755);
   if (ret != 0 && errno != EEXIST) {
     LOG(ERROR) << "Failed to create logs directory: " << strerror(errno);
