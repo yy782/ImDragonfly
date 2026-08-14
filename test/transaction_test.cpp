@@ -28,11 +28,10 @@ class TransactionTest : public ::testing::Test {
     pool_.AsyncLoop();
     sleep(1);
     shard_set = new EngineShardSet(&pool_);
-    shard_set->Init(pool_.size());
+    shard_set->Init(pool_.size());  // Init 内部已创建全局 namespaces
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
-    namespaces = new Namespaces();
-    namespaces->init();
+    // 之前namespaces 单独new 了，内存泄漏了
   }
 
   void TearDown() override {

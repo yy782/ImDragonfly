@@ -113,7 +113,7 @@ yy@yy:~/programs/ImDragonfly$
 
 
 
-// 未修复，暂时没影响
+// fixed(事务测试多写了一次namespace = new XXX)
 /usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
 
 =================================================================
@@ -355,3 +355,74 @@ yy@yy:~/programs/ImDragonfly$
 
 
 
+/usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
+
+=================================================================
+==76580==ERROR: LeakSanitizer: detected memory leaks
+
+Indirect leak of 152 byte(s) in 1 object(s) allocated from:
+    #0 0x5a231c1e41ad in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x19e1ad) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #1 0x5a231c2c76fc in cppcoro::task<bool> util::EventCount::await<std::function<bool ()>>(std::function<bool ()>) /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:110:23
+    #2 0x5a231c2976b6 in util::EmbeddedBlockingCounter::Wait() (.resume) /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:233:18
+    #3 0x5a231c2c21eb in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #4 0x5a231c2afb03 in util::EventCount::notifyAll() /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:73:11
+    #5 0x5a231c2b0c8b in util::EmbeddedBlockingCounter::Dec() /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:242:24
+    #6 0x5a231c25ecc2 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody() /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:394:12
+    #7 0x5a231c569456 in void testing::internal::HandleSehExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x523456) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #8 0x5a231c5618dc in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x51b8dc) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #9 0x5a231c53a29f in testing::Test::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f429f) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #10 0x5a231c53ad2f in testing::TestInfo::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f4d2f) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #11 0x5a231c53b713 in testing::TestSuite::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f5713) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #12 0x5a231c54c5a6 in testing::internal::UnitTestImpl::RunAllTests() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x5065a6) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #13 0x5a231c56a52b in bool testing::internal::HandleSehExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x52452b) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #14 0x5a231c562b5e in bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x51cb5e) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #15 0x5a231c54a6f5 in testing::UnitTest::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x5046f5) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #16 0x5a231c5264fd in RUN_ALL_TESTS() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4e04fd) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #17 0x5a231c526476 in main (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4e0476) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #18 0x7537ccc29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+Indirect leak of 112 byte(s) in 1 object(s) allocated from:
+    #0 0x5a231c1e41ad in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x19e1ad) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #1 0x5a231c2c68f1 in util::EmbeddedBlockingCounter::Wait() /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:231:23
+    #2 0x5a231c2a7e22 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_4::operator()() const::'lambda'()::operator()() const (.resume) /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:372:25
+    #3 0x5a231c2c21eb in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #4 0x5a231c2afb03 in util::EventCount::notifyAll() /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:73:11
+    #5 0x5a231c2b0c8b in util::EmbeddedBlockingCounter::Dec() /home/yy/programs/ImDragonfly/src/util/synchronization.hpp:242:24
+    #6 0x5a231c25ecc2 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody() /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:394:12
+    #7 0x5a231c569456 in void testing::internal::HandleSehExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x523456) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #8 0x5a231c5618dc in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x51b8dc) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #9 0x5a231c53a29f in testing::Test::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f429f) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #10 0x5a231c53ad2f in testing::TestInfo::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f4d2f) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #11 0x5a231c53b713 in testing::TestSuite::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4f5713) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #12 0x5a231c54c5a6 in testing::internal::UnitTestImpl::RunAllTests() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x5065a6) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #13 0x5a231c56a52b in bool testing::internal::HandleSehExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x52452b) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #14 0x5a231c562b5e in bool testing::internal::HandleExceptionsInMethodIfSupported<testing::internal::UnitTestImpl, bool>(testing::internal::UnitTestImpl*, bool (testing::internal::UnitTestImpl::*)(), char const*) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x51cb5e) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #15 0x5a231c54a6f5 in testing::UnitTest::Run() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x5046f5) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #16 0x5a231c5264fd in RUN_ALL_TESTS() (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4e04fd) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #17 0x5a231c526476 in main (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x4e0476) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #18 0x7537ccc29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+Indirect leak of 80 byte(s) in 1 object(s) allocated from:
+    #0 0x5a231c1e41ad in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x19e1ad) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #1 0x5a231c275ba2 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_4::operator()() const::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:369:17
+    #2 0x5a231c275249 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_4::operator()() const /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:376:14
+    #3 0x5a231c276eac in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2::operator()() const /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:389:5
+    #4 0x5a231c276da4 in void std::__invoke_impl<void, BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>(std::__invoke_other, BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #5 0x5a231c276d64 in std::__invoke_result<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>::type std::__invoke<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>(BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #6 0x5a231c276d3c in void std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>::_M_invoke<0ul>(std::_Index_tuple<0ul>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:292:13
+    #7 0x5a231c276d14 in std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>::operator()() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:299:11
+    #8 0x5a231c276c58 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>>::_M_run() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:244:13
+    #9 0x7537cd0f6ca5  (/lib/x86_64-linux-gnu/libstdc++.so.6+0xf6ca5) (BuildId: 110d46b888a9f02658a881fbb351212cc7458220)
+
+Indirect leak of 56 byte(s) in 1 object(s) allocated from:
+    #0 0x5a231c1e41ad in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/test/unit_tests+0x19e1ad) (BuildId: 61b5eebaf7dbd02eb64684f9149aabc1a08c121f)
+    #1 0x5a231c274e87 in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_4::operator()() const /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:368:16
+    #2 0x5a231c276eac in BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2::operator()() const /home/yy/programs/ImDragonfly/test/synchronized_test.cpp:389:5
+    #3 0x5a231c276da4 in void std::__invoke_impl<void, BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>(std::__invoke_other, BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #4 0x5a231c276d64 in std::__invoke_result<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>::type std::__invoke<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>(BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:96:14
+    #5 0x5a231c276d3c in void std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>::_M_invoke<0ul>(std::_Index_tuple<0ul>) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:292:13
+    #6 0x5a231c276d14 in std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>::operator()() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:299:11
+    #7 0x5a231c276c58 in std::thread::_State_impl<std::thread::_Invoker<std::tuple<BlockingCounterTest_ReWaitAfterNotifyAllNoDeadlock_Test::TestBody()::$_2>>>::_M_run() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_thread.h:244:13
+    #8 0x7537cd0f6ca5  (/lib/x86_64-linux-gnu/libstdc++.so.6+0xf6ca5) (BuildId: 110d46b888a9f02658a881fbb351212cc7458220)
+
+SUMMARY: AddressSanitizer: 400 byte(s) leaked in 4 allocation(s).
