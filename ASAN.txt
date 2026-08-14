@@ -354,7 +354,7 @@ yy@yy:~/programs/ImDragonfly$
 
 
 
-
+fixed(测试多写了一个线程启动协程导致协程没结束，内存泄漏)
 /usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
 
 =================================================================

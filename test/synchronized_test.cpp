@@ -385,14 +385,7 @@ TEST_F(BlockingCounterTest, ReWaitAfterNotifyAllNoDeadlock) {
 
   counter_.Dec();
 
-  std::thread t2([&]() {
-    entry();
-    woken.fetch_add(1);
-  });
-  WaitUntil([&] { return woken.load() >= 2; });
-
   counter_.Dec();
 
   t1.join();
-  t2.join();
 }
