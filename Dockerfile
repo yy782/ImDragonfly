@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     cmake \
     make \
-    ninja-build \
     liburing-dev \
     libmimalloc-dev \
     libboost-dev \
@@ -24,8 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# 先复制 YY 子模块和 cmake 配置（依赖层，利用 Docker 缓存）
-COPY YY/ ./YY/
+# 先复制 cmake 配置（依赖层，利用 Docker 缓存）
 COPY cmake/ ./cmake/
 COPY CMakeLists.txt ./
 

@@ -45,8 +45,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install system dependencies
         run: |
@@ -55,7 +53,6 @@ jobs:
             clang-16 \
             cmake \
             make \
-            ninja-build \
             liburing-dev \
             libmimalloc-dev \
             libboost-dev \

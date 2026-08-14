@@ -165,7 +165,7 @@ redis-cli -p 6379
 
 ```bash
 # Ubuntu/Debian (推荐 Ubuntu 22.04+)
-sudo apt-get install -y clang cmake ninja-build \
+sudo apt-get install -y clang cmake make \
     liburing-dev libmimalloc-dev libboost-dev \
     libgoogle-glog-dev
 ```
@@ -176,7 +176,7 @@ sudo apt-get install -y clang cmake ninja-build \
 
 ```bash
 # 克隆项目
-git clone --recurse-submodules https://github.com/yy782/ImDragonfly.git
+git clone https://github.com/yy782/ImDragonfly.git
 cd ImDragonfly
 
 # 构建

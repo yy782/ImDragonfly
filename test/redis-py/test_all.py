@@ -64,6 +64,160 @@ def test_exists_and_del(clean_redis):
 
 
 # ═══════════════════════════════════════════════════════════
+# 字符串命令 (String)
+# ═══════════════════════════════════════════════════════════
+
+@pytest.mark.string
+def test_append_and_strlen(clean_redis):
+    r, track = clean_redis
+    key = "test:string:ap"
+    track(key)
+    assert r.append(key, "hello") == 5
+    assert r.append(key, " world") == 11
+    assert r.get(key) == "hello world"
+    assert r.strlen(key) == 11
+    assert r.strlen("test:string:nope") == 0
+
+
+@pytest.mark.string
+def test_incr_decr(clean_redis):
+    r, track = clean_redis
+    key = "test:string:incr"
+    track(key)
+    assert r.incr(key) == 1
+    assert r.incr(key, 5) == 6
+    assert r.incrby(key, 4) == 10
+    assert r.decr(key) == 9
+    assert r.decrby(key, 5) == 4
+    assert r.get(key) == "4"
+    # 对非整数字符串 INCR 应报错
+    r.set(key, "abc")
+    with pytest.raises(redis.ResponseError):
+        r.incr(key)
+
+
+@pytest.mark.string
+def test_setnx(clean_redis):
+    r, track = clean_redis
+    key = "test:string:setnx"
+    track(key)
+    assert r.setnx(key, "v1") is True
+    assert r.setnx(key, "v2") is False
+    assert r.get(key) == "v1"
+
+
+@pytest.mark.string
+def test_getset(clean_redis):
+    r, track = clean_redis
+    key = "test:string:getset"
+    track(key)
+    assert r.getset(key, "new") is None
+    assert r.get(key) == "new"
+    assert r.getset(key, "newer") == "new"
+    assert r.get(key) == "newer"
+
+
+@pytest.mark.string
+def test_getrange_setrange(clean_redis):
+    r, track = clean_redis
+    key = "test:string:range"
+    track(key)
+    r.set(key, "Hello World")
+    assert r.getrange(key, 0, 4) == "Hello"
+    assert r.getrange(key, -5, -1) == "World"
+    assert r.getrange(key, 6, -1) == "World"
+    assert r.getrange(key, 0, -1) == "Hello World"
+    assert r.getrange(key, 0, 100) == "Hello World"
+    assert r.getrange("test:string:range-nope", 0, -1) == ""
+    assert r.setrange(key, 6, "Redis") == 11
+    assert r.get(key) == "Hello Redis"
+    # 中间空洞用 \x00 填充
+    pad = "test:string:range-pad"
+    track(pad)
+    assert r.setrange(pad, 5, "x") == 6
+    assert r.get(pad) == "\x00\x00\x00\x00\x00x"
+
+
+@pytest.mark.string
+def test_getdel(clean_redis):
+    r, track = clean_redis
+    key = "test:string:getdel"
+    track(key)
+    assert r.getdel(key) is None
+    r.set(key, "v")
+    assert r.getdel(key) == "v"
+    assert r.exists(key) == 0
+
+
+@pytest.mark.string
+def test_set_options(clean_redis):
+    r, track = clean_redis
+    key = "test:string:setopt"
+    track(key)
+    assert r.set(key, "v1", nx=True) is True
+    assert r.set(key, "v2", nx=True) is None   # NX 命中已有 key
+    assert r.get(key) == "v1"
+    assert r.set(key, "v3", xx=True) is True
+    assert r.get(key) == "v3"
+    k2 = "test:string:setopt2"
+    track(k2)
+    assert r.set(k2, "v", xx=True) is None     # XX 未命中
+    assert r.exists(k2) == 0
+    k3 = "test:string:setopt3"
+    track(k3)
+    assert r.set(k3, "v", ex=100) is True
+    assert r.ttl(k3) > 0  # 本项目 TTL 返回绝对过期时间戳(ms)，仅断言存在过期
+    # KEEPTTL: 保留已有 TTL，不被清除
+    r.expire(k3, 200)
+    ttl_before = r.ttl(k3)
+    assert ttl_before > 0
+    assert r.set(k3, "v2", keepttl=True) is True
+    assert r.ttl(k3) == ttl_before
+
+
+@pytest.mark.string
+def test_set_multi_options(clean_redis):
+    r, track = clean_redis
+    # 合法组合：EX/PX 与 NX/XX 可任意组合
+    k1 = "test:string:setmulti1"
+    track(k1)
+    assert r.set(k1, "v1", ex=100, nx=True) is True
+    assert r.set(k1, "v2", ex=100, nx=True) is None   # NX 未命中
+    assert r.get(k1) == "v1"
+    assert r.ttl(k1) > 0                              # EX 生效
+
+    k2 = "test:string:setmulti2"
+    track(k2)
+    assert r.set(k2, "v1", px=100000, xx=True) is None  # XX 未命中
+    assert r.exists(k2) == 0
+    r.set(k2, "v1")
+    assert r.set(k2, "v2", px=100000, xx=True) is True
+    assert r.get(k2) == "v2"
+    assert r.ttl(k2) > 0                              # PX 生效
+
+    k3 = "test:string:setmulti3"
+    track(k3)
+    assert r.set(k3, "v1") is True
+    r.expire(k3, 100)
+    ttl_before = r.ttl(k3)
+    assert r.set(k3, "v2", keepttl=True, xx=True) is True  # KEEPTTL + XX
+    assert r.get(k3) == "v2"
+    assert r.ttl(k3) == ttl_before                    # TTL 保留
+
+    # 非法组合：互斥选项应报语法错误，且不创建 key
+    # (redis-py 客户端自身会拦截 ex+px/ex+keepttl，须用 execute_command 发原始命令测服务端)
+    k4 = "test:string:setmulti4"
+    track(k4)
+    with pytest.raises(redis.ResponseError):
+        r.execute_command("SET", k4, "v", "EX", 1, "PX", 100)   # EX 与 PX 互斥
+    with pytest.raises(redis.ResponseError):
+        r.execute_command("SET", k4, "v", "EX", 1, "KEEPTTL")    # EX 与 KEEPTTL 互斥
+    with pytest.raises(redis.ResponseError):
+        r.execute_command("SET", k4, "v", "NX", "XX")            # NX 与 XX 互斥
+    assert r.exists(k4) == 0                          # 报错的 SET 不应创建 key
+
+
+# ═══════════════════════════════════════════════════════════
 # 过期命令
 # ═══════════════════════════════════════════════════════════
 
