@@ -12,7 +12,7 @@ ImDragonfly 是一款模仿Dragonfly的高性能键值存储数据库，通过�
 
 ### 2️⃣ 解决高并发场景下的 IO 阻塞
 
-ImDragonfly 基于 **epoll + 协程** 实现高性能网络 IO，支持数万级并发连接。
+ImDragonfly 基于 **io_uring + 协程** 实现高性能网络 IO，支持数万级并发连接。
 
 ### 3️⃣ 优化内存管理，降低运营成本
 
@@ -91,7 +91,7 @@ struct IntentLock {
 │         分片管理 / 内存表  / 数据同步                         │
 ├─────────────────────────────────────────────────────────────┤
 │                      网络层 (Network Layer)                │
-│         epoll 事件驱动 / 协程调度                             │
+│         io_uring 事件驱动 / 协程调度                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -218,7 +218,7 @@ ImDragonfly/
 │   └── detail/            # 内部实现细节
 ├── test/                  # 测试套件
 ├── CMakeLists.txt         # 构建配置
-└── LICENSE                # MIT 许可证
+└── LICENSE                # BSL 1.1 许可证
 ```
 
 ***
@@ -237,7 +237,11 @@ ImDragonfly/
 
 ## 📜 许可证
 
-MIT License - 详见 [LICENSE](LICENSE)
+本项目采用 **Business Source License 1.1 (BSL 1.1)**，详见 [LICENSE](LICENSE)。
+
+- Change Date：2030-11-01，届时将转为 Apache License 2.0
+- 非生产环境（开发/测试/学习）使用不受限
+- 部分文件衍生自 [DragonflyDB](https://github.com/dragonflydb/dragonfly)，版权归 DragonflyDB authors 所有
 
 ***
 
