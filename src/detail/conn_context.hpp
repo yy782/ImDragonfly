@@ -1,12 +1,12 @@
-
 #pragma once
 #include <glog/logging.h>
 
-#include <atomic>
+#include <coroutine>
 #include <memory>
 
 #include "cppcoro/task.hpp"
 #include "detail/common.hpp"
+#include "net/uring_proactor.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard_set.hpp"
@@ -14,6 +14,8 @@ namespace dfly {
 
 class Connection;
 class Transaction;
+class EngineShard;
+class PipelineSquasher;
 
 class ConnectionContext {
  public:
@@ -63,10 +65,19 @@ class CommandContext {
     return reply_builder_;
   }
 
+  void Reset() noexcept { continuation_ = nullptr; }
+  void SetContinuation(std::coroutine_handle<> h) noexcept {
+    continuation_ = h;
+  }
+  std::coroutine_handle<> TakeContinuation() noexcept {
+    return std::exchange(continuation_, nullptr);
+  }
+
  private:
   std::shared_ptr<Transaction> transaction_;
   const CommandId* cid_;
   ReplyBuilder* reply_builder_;
+  std::coroutine_handle<> continuation_{};
 };
 
 }  // namespace dfly

@@ -11,11 +11,11 @@
 
 namespace dfly {
 
+namespace {
+
 using CI = CommandId;
 using cmd::CoroTask;
 using Slice = Transaction::Slice;
-
-namespace {
 
 ZSetObject* GetOrCreateZSet(Transaction* tx, EngineShard* es,
                             std::string_view key) {
@@ -367,50 +367,18 @@ CoroTask CmdZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-void ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZAdd(cmd_cntx, args);
-}
-
-void ZCard(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZCard(cmd_cntx, args);
-}
-
-void ZScore(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZScore(cmd_cntx, args);
-}
-
-void ZRem(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZRem(cmd_cntx, args);
-}
-
-void ZRank(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZRank(cmd_cntx, args);
-}
-
-void ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZRevRank(cmd_cntx, args);
-}
-
-void ZRange(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZRange(cmd_cntx, args);
-}
-
-void ZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdZRevRange(cmd_cntx, args);
-}
-
 }  // namespace
 
 void RegisterZSetFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"ZADD", CO::JOURNALED, 1, 1}.SetHandler(ZAdd)
-            << CI{"ZCARD", CO::READONLY, 1, 1}.SetHandler(ZCard)
-            << CI{"ZSCORE", CO::READONLY, 1, 1}.SetHandler(ZScore)
-            << CI{"ZREM", CO::JOURNALED, 1, 1}.SetHandler(ZRem)
-            << CI{"ZRANK", CO::READONLY, 1, 1}.SetHandler(ZRank)
-            << CI{"ZREVRANK", CO::READONLY, 1, 1}.SetHandler(ZRevRank)
-            << CI{"ZRANGE", CO::READONLY, 1, 1}.SetHandler(ZRange)
-            << CI{"ZREVRANGE", CO::READONLY, 1, 1}.SetHandler(ZRevRange);
+  *registry << CI{"ZADD", CO::JOURNALED, 1, 1}.SetHandler(CmdZAdd)
+            << CI{"ZCARD", CO::READONLY, 1, 1}.SetHandler(CmdZCard)
+            << CI{"ZSCORE", CO::READONLY, 1, 1}.SetHandler(CmdZScore)
+            << CI{"ZREM", CO::JOURNALED, 1, 1}.SetHandler(CmdZRem)
+            << CI{"ZRANK", CO::READONLY, 1, 1}.SetHandler(CmdZRank)
+            << CI{"ZREVRANK", CO::READONLY, 1, 1}.SetHandler(CmdZRevRank)
+            << CI{"ZRANGE", CO::READONLY, 1, 1}.SetHandler(CmdZRange)
+            << CI{"ZREVRANGE", CO::READONLY, 1, 1}.SetHandler(CmdZRevRange);
 }
 
 }  // namespace dfly

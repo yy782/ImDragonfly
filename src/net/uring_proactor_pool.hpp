@@ -23,13 +23,13 @@ class UringProactorPool {
       threads_[i] = std::make_unique<util::Thread>(
           (base_name + std::to_string(i)).c_str(), [this, i] {
             proactors_[i] = std::make_shared<UringProactor>(cfg_, i);
-            proactors_[i]->loop();
+            proactors_[i]->Run();
           });
     }
   }
 
   void stop() {
-    DispatchBrief([](std::shared_ptr<UringProactor> p) { p->stop(); });
+    DispatchBrief([](std::shared_ptr<UringProactor> p) { p->Shutdown(); });
 
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i]->join();

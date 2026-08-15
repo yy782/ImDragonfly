@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "command_layer/cmd_support.hpp"
 #include "command_layer/cmn_types.hpp"
 #include "util/function.hpp"
 namespace facade {
@@ -62,14 +63,14 @@ class CommandId : public facade::CommandId {
 
   using Handler =
       util::function_base<true, true, fu2::capacity_default, false, false,
-                          void(CommandContext*, CmdArgList) const>;
+                          cmd::CoroTask(CommandContext*, CmdArgList) const>;
 
   CommandId(const char* name, uint32_t mask, int8_t first_key, int8_t last_key);
 
   CommandId(CommandId&& o) = default;
 
-  void Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
-    handler_(cmd_cntx, args);
+  cmd::CoroTask Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
+    return handler_(cmd_cntx, args);
   }
 
   // bool IsTransactional() const;

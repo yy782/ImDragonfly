@@ -1,9 +1,16 @@
 #!/bin/bash
 # 启动 ImDragonfly 并运行 memtier_benchmark 压测
 # 用法: bash scripts/run_benchmark.sh [二进制路径] [端口]
+# 环境变量:
+#   BENCH_TESTS       选择测试列表，默认 "set_get pipeline_stress"
+#   BENCH_DURATION    单测试最长等待秒数，默认 60
+#   PIPELINE_DEPTH    pipeline 深度，默认 50
+#   BENCH_THREADS     pipeline 测试线程数，默认 8
+#   BENCH_CONNECTIONS pipeline 测试连接数，默认 100
 # 示例:
 #   bash scripts/run_benchmark.sh
 #   bash scripts/run_benchmark.sh ./build/imdragonfly
+#   BENCH_TESTS=pipeline_stress PIPELINE_DEPTH=100 bash scripts/run_benchmark.sh
 
 set -euo pipefail
 
@@ -82,13 +89,73 @@ run_bench_set_get() {
     return 0
 }
 
+# 管道压力测试：验证 pipeline 下服务不崩溃（曾因幽灵 CQE 在此场景崩溃）
+# pipeline 深度可用环境变量 PIPELINE_DEPTH 覆盖，默认 50（高强度）
+run_pipeline_stress() {
+    local NAME="PIPELINE_STRESS"
+    local RESULT_FILE="$RESULT_DIR/${NAME}_${TIMESTAMP}.log"
+    local PIPE="${PIPELINE_DEPTH:-50}"
+    local THREADS="${BENCH_THREADS:-8}"
+    local CONNS="${BENCH_CONNECTIONS:-100}"
+
+    echo ""
+    echo "================================================"
+    echo "  Test: $NAME"
+    echo "  Description: 50% SET + 50% GET, $THREADS threads, $CONNS conns,"
+    echo "               pipeline=$PIPE, ${BENCH_DURATION}s"
+    echo "  Result: $RESULT_FILE"
+    echo "================================================"
+
+    # 后台启动 memtier_benchmark，test-time 设长一些，由脚本控制停止时间
+    memtier_benchmark -s 127.0.0.1 -p "$PORT" \
+        --pipeline="$PIPE" \
+        --command="SET __key__ __data__" --command-key-pattern=R --command-ratio=1 \
+        --command="GET __key__" --command-key-pattern=R --command-ratio=1 \
+        -t "$THREADS" -c "$CONNS" \
+        -d 100 \
+        --test-time=30 \
+        --hide-histogram \
+        > "$RESULT_FILE" 2>&1 &
+    MEMTIER_PID=$!
+    echo "memtier_benchmark started (pid=$MEMTIER_PID), waiting ${BENCH_DURATION}s..."
+
+    sleep "$BENCH_DURATION"
+
+    # 检查 ImDragonfly 是否还活着（pipeline 压测的核心验证点：不崩溃）
+    echo ""
+    echo "=== Checking ImDragonfly process ==="
+    if kill -0 "$IMDRAGONFLY_PID" 2>/dev/null; then
+        echo "ImDragonfly is still running (pid=$IMDRAGONFLY_PID)."
+    else
+        echo "ERROR: ImDragonfly process (pid=$IMDRAGONFLY_PID) is DEAD!"
+        echo "This likely indicates a crash during the pipeline stress test."
+        kill "$MEMTIER_PID" 2>/dev/null || true
+        wait "$MEMTIER_PID" 2>/dev/null || true
+        MEMTIER_PID=""
+        return 1
+    fi
+
+    # 如果 memtier_benchmark 还在跑，Ctrl+C 中断
+    if kill -0 "$MEMTIER_PID" 2>/dev/null; then
+        echo "memtier_benchmark (pid=$MEMTIER_PID) still running, interrupting..."
+        kill -INT "$MEMTIER_PID" 2>/dev/null || true
+        wait "$MEMTIER_PID" 2>/dev/null || true
+        echo "memtier_benchmark stopped."
+    else
+        echo "memtier_benchmark finished on its own."
+    fi
+    MEMTIER_PID=""
+
+    return 0
+}
+
 # TODO: 将来在这里添加更多测试用例
 # run_bench_get_only() { ... }
 # run_bench_set_only() { ... }
 
 # ── 选择要运行的测试 ───────────────────────────────────────
 # 可通过环境变量 BENCH_TESTS 指定，默认跑全部
-DEFAULT_TESTS="set_get"
+DEFAULT_TESTS="set_get pipeline_stress"
 TESTS="${BENCH_TESTS:-$DEFAULT_TESTS}"
 
 # ── 检查依赖 ───────────────────────────────────────────────
@@ -166,6 +233,13 @@ for test in $TESTS; do
             RESULT_FILE="$RESULT_DIR/SET_GET_${TIMESTAMP}.log"
             ;;
         # TODO: 新增的测试在这里加一个 case 分支
+        pipeline_stress)
+            set +e
+            run_pipeline_stress
+            BENCH_EXIT=$?
+            set -e
+            RESULT_FILE="$RESULT_DIR/PIPELINE_STRESS_${TIMESTAMP}.log"
+            ;;
         # get_only)
         #     set +e
         #     run_bench_get_only

@@ -15,8 +15,10 @@ class ReplyBuilder {
   void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
   ~ReplyBuilder() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
-  void BuildNull() {
-    reply_ = "$-1\r\n";
+  // 发送一个已构建好的原始 RESP 字符串（回放用）。该字符串直接作为
+  // 整条回复发出，不再包装。
+  void SendRaw(std::string s) {
+    reply_ = std::move(s);
     DoSend();
   }
 
@@ -68,17 +70,6 @@ class ReplyBuilder {
     DoSend();
   }
 
-  void BuildMultiArray(const std::vector<std::string>& items) {
-    reply_.clear();
-    reply_.append("*");
-    reply_.append(std::to_string(items.size()));
-    reply_.append("\r\n");
-    for (const auto& item : items) {
-      reply_.append(item);
-    }
-    DoSend();
-  }
-
  private:
   void AppendBulkStringRaw(std::string_view s) {
     reply_.append("$");
@@ -89,11 +80,13 @@ class ReplyBuilder {
   }
 
   void DoSend() {
-    if (send_cb_) try {
+    if (send_cb_) {
+      try {
         send_cb_(std::move(reply_));
       } catch (std::exception& e) {
         LOG(WARNING) << "ReplyBuilder::DoSend exception: " << e.what();
       }
+    }
   }
 
   std::string reply_;

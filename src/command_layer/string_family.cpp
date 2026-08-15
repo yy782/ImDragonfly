@@ -342,45 +342,45 @@ CoroTask IncrByImpl(CommandContext* cmd_cntx, std::string_view key,
   co_return;
 }
 
-void Incr(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask Incr(CommandContext* cmd_cntx, CmdArgList args) {
   args = args.subspan(1);
   CmdArgParser parser{args};
   std::string_view key = parser.Next<std::string_view>();
-  IncrByImpl(cmd_cntx, key, 1);
+  return IncrByImpl(cmd_cntx, key, 1);
 }
 
-void Decr(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask Decr(CommandContext* cmd_cntx, CmdArgList args) {
   args = args.subspan(1);
   CmdArgParser parser{args};
   std::string_view key = parser.Next<std::string_view>();
-  IncrByImpl(cmd_cntx, key, -1);
+  return IncrByImpl(cmd_cntx, key, -1);
 }
 
-void IncrBy(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask IncrBy(CommandContext* cmd_cntx, CmdArgList args) {
   args = args.subspan(1);
   CmdArgParser parser{args};
   auto [key, delta] = parser.Next<std::string_view, int64_t>();
   if (parser.HasError()) {
     cmd_cntx->rb()->BuildError("syntax error");
-    return;
+    return CoroTask{};
   }
-  IncrByImpl(cmd_cntx, key, delta);
+  return IncrByImpl(cmd_cntx, key, delta);
 }
 
-void DecrBy(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask DecrBy(CommandContext* cmd_cntx, CmdArgList args) {
   args = args.subspan(1);
   CmdArgParser parser{args};
   auto [key, delta] = parser.Next<std::string_view, int64_t>();
   if (parser.HasError()) {
     cmd_cntx->rb()->BuildError("syntax error");
-    return;
+    return CoroTask{};
   }
   int64_t ndelta;
   if (__builtin_sub_overflow((int64_t)0, delta, &ndelta)) {
     cmd_cntx->rb()->BuildError("increment or decrement would overflow");
-    return;
+    return CoroTask{};
   }
-  IncrByImpl(cmd_cntx, key, ndelta);
+  return IncrByImpl(cmd_cntx, key, ndelta);
 }
 
 CoroTask CmdAppend(CommandContext* cmd_cntx, CmdArgList args) {
@@ -639,58 +639,19 @@ CoroTask CmdGetdel(CommandContext* cmd_cntx, CmdArgList args) {
 
 }  // namespace
 
-void Set(CommandContext* cmd_cntx, CmdArgList args) { CmdSet(cmd_cntx, args); }
-
-void Get(CommandContext* cmd_cntx, CmdArgList args) { CmdGet(cmd_cntx, args); }
-void MSET(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdMSet(cmd_cntx, args);
-}
-
-void MGET(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdMGet(cmd_cntx, args);
-}
-
-void Append(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdAppend(cmd_cntx, args);
-}
-
-void Strlen(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdStrlen(cmd_cntx, args);
-}
-
-void Setnx(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSetnx(cmd_cntx, args);
-}
-
-void Getset(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdGetset(cmd_cntx, args);
-}
-
-void Getrange(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdGetrange(cmd_cntx, args);
-}
-
-void Setrange(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdSetrange(cmd_cntx, args);
-}
-
-void Getdel(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdGetdel(cmd_cntx, args);
-}
-
 void RegisterStringFamily(CommandRegistry* registry) {
   registry->StartFamily();
   *registry
       << CI{"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Set)
-      << CI{"GET", CO::READONLY, 1, 1}.SetHandler(Get)
-      << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(MGET)
+             .SetHandler(CmdSet)
+      << CI{"GET", CO::READONLY, 1, 1}.SetHandler(CmdGet)
+      << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(CmdMGet)
       << CI{"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1}
              .SetInterleavedStep(2)
-             .SetHandler(MSET)
+             .SetHandler(CmdMSet)
       << CI{"APPEND", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Append)
-      << CI{"STRLEN", CO::READONLY, 1, 1}.SetHandler(Strlen)
+             .SetHandler(CmdAppend)
+      << CI{"STRLEN", CO::READONLY, 1, 1}.SetHandler(CmdStrlen)
       << CI{"INCR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
              .SetHandler(Incr)
       << CI{"INCRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
@@ -700,14 +661,14 @@ void RegisterStringFamily(CommandRegistry* registry) {
       << CI{"DECRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
              .SetHandler(DecrBy)
       << CI{"SETNX", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Setnx)
+             .SetHandler(CmdSetnx)
       << CI{"GETSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Getset)
-      << CI{"GETRANGE", CO::READONLY, 1, 1}.SetHandler(Getrange)
+             .SetHandler(CmdGetset)
+      << CI{"GETRANGE", CO::READONLY, 1, 1}.SetHandler(CmdGetrange)
       << CI{"SETRANGE", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Setrange)
+             .SetHandler(CmdSetrange)
       << CI{"GETDEL", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Getdel);
+             .SetHandler(CmdGetdel);
 }
 
 }  // namespace dfly

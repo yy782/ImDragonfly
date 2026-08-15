@@ -110,11 +110,11 @@ python3 -m venv "$VENV_DIR"
 # Detected CPU cores: 24
 # Starting ImDragonfly (./build/imdragonfly 24)...
 # Waiting for ImDragonfly to be ready on port 6379...
-# ImDragonfly is ready (pid=113405, port=6379)
+# ImDragonfly is ready (pid=22609, port=6379)
 # Setting up Python virtual environment...
 
 # === Running integration tests ===
-# ============================================ test session starts =============================================
+# ============================================= test session starts =============================================
 # platform linux -- Python 3.10.12, pytest-9.1.1, pluggy-1.6.0 -- /tmp/imdragonfly_integration_venv/bin/python
 # cachedir: .pytest_cache
 # rootdir: /home/yy/programs/ImDragonfly/test/redis-py
@@ -123,49 +123,49 @@ python3 -m venv "$VENV_DIR"
 # timeout: 120.0s
 # timeout method: signal
 # timeout func_only: False
-# collected 34 items                                                                                           
+# collected 35 items                                                                                            
 
-# test/redis-py/test_all.py::test_set_and_get PASSED                                                     [  2%]
-# test/redis-py/test_all.py::test_mset_and_mget PASSED                                                   [  5%]
-# test/redis-py/test_all.py::test_exists_and_del PASSED                                                  [  8%]
-# test/redis-py/test_all.py::test_append_and_strlen PASSED                                               [ 11%]
-# test/redis-py/test_all.py::test_incr_decr PASSED                                                       [ 14%]
-# test/redis-py/test_all.py::test_setnx PASSED                                                           [ 17%]
-# test/redis-py/test_all.py::test_getset PASSED                                                          [ 20%]
-# test/redis-py/test_all.py::test_getrange_setrange PASSED                                               [ 23%]
-# test/redis-py/test_all.py::test_getdel PASSED                                                          [ 26%]
-# test/redis-py/test_all.py::test_set_options PASSED                                                     [ 29%]
-# test/redis-py/test_all.py::test_set_multi_options PASSED                                               [ 32%]
-# test/redis-py/test_all.py::test_expire_and_ttl PASSED                                                  [ 35%]
-# test/redis-py/test_all.py::test_expiretime PASSED                                                      [ 38%]
-# test/redis-py/test_all.py::test_lpush_and_llen PASSED                                                  [ 41%]
-# test/redis-py/test_all.py::test_lrange_and_lindex PASSED                                               [ 44%]
-# test/redis-py/test_all.py::test_rpush PASSED                                                           [ 47%]
-# test/redis-py/test_all.py::test_lset PASSED                                                            [ 50%]
-# test/redis-py/test_all.py::test_lpop_rpop PASSED                                                       [ 52%]
-# test/redis-py/test_all.py::test_lrem PASSED                                                            [ 55%]
-# test/redis-py/test_all.py::test_linsert PASSED                                                         [ 58%]
-# test/redis-py/test_all.py::test_hset_and_hget PASSED                                                   [ 61%]
-# test/redis-py/test_all.py::test_hexists_and_hlen PASSED                                                [ 64%]
-# test/redis-py/test_all.py::test_hdel PASSED                                                            [ 67%]
-# test/redis-py/test_all.py::test_sadd_and_scard PASSED                                                  [ 70%]
-# test/redis-py/test_all.py::test_srem PASSED                                                            [ 73%]
-# test/redis-py/test_all.py::test_zadd_and_zcard PASSED                                                  [ 76%]
-# test/redis-py/test_all.py::test_zscore PASSED                                                          [ 79%]
-# test/redis-py/test_all.py::test_zrank_zrevrank PASSED                                                  [ 82%]
-# test/redis-py/test_all.py::test_zrange PASSED                                                          [ 85%]
-# test/redis-py/test_all.py::test_zrem PASSED                                                            [ 88%]
-# test/redis-py/test_all.py::test_concurrent_mset_mget PASSED                                            [ 91%]
-# test/redis-py/test_case_insensitive.py::test_set_case_insensitive PASSED                               [ 94%]
-# test/redis-py/test_half_packet.py::test_half_packet_set PASSED                                         [ 97%]
-# test/redis-py/test_half_packet.py::test_half_packet_multiple_breaks PASSED                             [100%]
+# test/redis-py/test_all.py::test_set_and_get PASSED                                                      [  2%]
+# test/redis-py/test_all.py::test_mset_and_mget PASSED                                                    [  5%]
+# test/redis-py/test_all.py::test_exists_and_del PASSED                                                   [  8%]
+# test/redis-py/test_all.py::test_append_and_strlen PASSED                                                [ 11%]
+# test/redis-py/test_all.py::test_incr_decr PASSED                                                        [ 14%]
+# test/redis-py/test_all.py::test_setnx PASSED                                                            [ 17%]
+# test/redis-py/test_all.py::test_getset PASSED                                                           [ 20%]
+# test/redis-py/test_all.py::test_getrange_setrange PASSED                                                [ 22%]
+# test/redis-py/test_all.py::test_getdel PASSED                                                           [ 25%]
+# test/redis-py/test_all.py::test_set_options PASSED                                                      [ 28%]
+# test/redis-py/test_all.py::test_set_multi_options PASSED                                                [ 31%]
+# test/redis-py/test_all.py::test_expire_and_ttl PASSED                                                   [ 34%]
+# test/redis-py/test_all.py::test_expiretime PASSED                                                       [ 37%]
+# test/redis-py/test_all.py::test_lpush_and_llen PASSED                                                   [ 40%]
+# test/redis-py/test_all.py::test_lrange_and_lindex PASSED                                                [ 42%]
+# test/redis-py/test_all.py::test_rpush PASSED                                                            [ 45%]
+# test/redis-py/test_all.py::test_lset PASSED                                                             [ 48%]
+# test/redis-py/test_all.py::test_lpop_rpop PASSED                                                        [ 51%]
+# test/redis-py/test_all.py::test_lrem PASSED                                                             [ 54%]
+# test/redis-py/test_all.py::test_linsert PASSED                                                          [ 57%]
+# test/redis-py/test_all.py::test_hset_and_hget PASSED                                                    [ 60%]
+# test/redis-py/test_all.py::test_hexists_and_hlen PASSED                                                 [ 62%]
+# test/redis-py/test_all.py::test_hdel PASSED                                                             [ 65%]
+# test/redis-py/test_all.py::test_sadd_and_scard PASSED                                                   [ 68%]
+# test/redis-py/test_all.py::test_srem PASSED                                                             [ 71%]
+# test/redis-py/test_all.py::test_zadd_and_zcard PASSED                                                   [ 74%]
+# test/redis-py/test_all.py::test_zscore PASSED                                                           [ 77%]
+# test/redis-py/test_all.py::test_zrank_zrevrank PASSED                                                   [ 80%]
+# test/redis-py/test_all.py::test_zrange PASSED                                                           [ 82%]
+# test/redis-py/test_all.py::test_zrem PASSED                                                             [ 85%]
+# test/redis-py/test_all.py::test_concurrent_mset_mget PASSED                                             [ 88%]
+# test/redis-py/test_case_insensitive.py::test_set_case_insensitive PASSED                                [ 91%]
+# test/redis-py/test_half_packet.py::test_half_packet_set PASSED                                          [ 94%]
+# test/redis-py/test_half_packet.py::test_half_packet_multiple_breaks PASSED                              [ 97%]
+# test/redis-py/test_pipeline.py::test_pipeline_set_get_mset_mget PASSED                                  [100%]
 
-# ============================================ 34 passed in 12.73s =============================================
+# ============================================= 35 passed in 25.64s =============================================
 
 # === All integration tests passed ===
-# Stopping ImDragonfly (pid=113405)...
+# Stopping ImDragonfly (pid=22609)...
 # ImDragonfly stopped.
-# yy@yy:~/programs/ImDragonfly$ 
 
 # ── 运行集成测试 ─────────────────────────────────────────
 echo ""

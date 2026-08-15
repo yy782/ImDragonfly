@@ -53,19 +53,19 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-void GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask GenericFamily::Delex(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK(!args.empty());
-  CmdDel(cmd_cntx, args);
-  return;
+  return CmdDel(cmd_cntx, args);
 }
 
-void GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask GenericFamily::Ping(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (args.size() > 1) {
     rb->BuildError("ERR");
-    return;
+    co_return;
   }
   rb->BuildSimpleString("PONG");
+  co_return;
 }
 
 CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
@@ -103,8 +103,8 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-void GenericFamily::Exists(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdExists(cmd_cntx, args);
+CoroTask GenericFamily::Exists(CommandContext* cmd_cntx, CmdArgList args) {
+  return CmdExists(cmd_cntx, args);
 }
 
 CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key,
@@ -130,11 +130,11 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key,
   co_return;
 }
 
-void GenericFamily::Expire(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask GenericFamily::Expire(CommandContext* cmd_cntx, CmdArgList args) {
   std::string_view key = args[1];
   std::string_view sec = args[2];
   int64_t int_arg = std::atoi(sec.data());
-  CmdExpire(cmd_cntx, key, int_arg);
+  return CmdExpire(cmd_cntx, key, int_arg);
 }
 
 // void GenericFamily::Keys(CmdArgList args, CommandContext* cmd_cntx) {
@@ -171,8 +171,8 @@ CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
   co_return;
 }
 
-void GenericFamily::ExpireTime(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdExpireTime(cmd_cntx, args[1]);
+CoroTask GenericFamily::ExpireTime(CommandContext* cmd_cntx, CmdArgList args) {
+  return CmdExpireTime(cmd_cntx, args[1]);
 }
 
 CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
@@ -206,16 +206,21 @@ CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
   co_return;
 }
 
-void GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdTtl(cmd_cntx, args[1]);
+CoroTask GenericFamily::Ttl(CommandContext* cmd_cntx, CmdArgList args) {
+  return CmdTtl(cmd_cntx, args[1]);
 }
 
-void GenericFamily::Client_Info(CommandContext* cmd_cntx, CmdArgList /*args*/) {
+CoroTask GenericFamily::Client_Info(CommandContext* cmd_cntx,
+                                    CmdArgList /*args*/) {
   auto* rb = cmd_cntx->rb();
   rb->BuildSimpleString("OK");
+  co_return;
 }
 
-void GenericFamily::ShutDown(CommandContext*, CmdArgList) { ser->Stop(); }
+CoroTask GenericFamily::ShutDown(CommandContext*, CmdArgList) {
+  ser->Stop();
+  co_return;
+}
 
 // void GenericFamily::Select(CmdArgList args, CommandContext* cmd_cntx) {
 //   // TODO

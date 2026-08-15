@@ -219,35 +219,15 @@ CoroTask CmdHLen(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-void HSet(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdHSet(cmd_cntx, args);
-}
-
-void HGet(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdHGet(cmd_cntx, args);
-}
-
-void HDel(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdHDel(cmd_cntx, args);
-}
-
-void HExists(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdHExists(cmd_cntx, args);
-}
-
-void HLen(CommandContext* cmd_cntx, CmdArgList args) {
-  CmdHLen(cmd_cntx, args);
-}
-
 }  // namespace
 
 void RegisterHashFamily(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(HSet)
-            << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(HGet)
-            << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(HDel)
-            << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(HExists)
-            << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(HLen);
+  *registry << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(CmdHSet)
+            << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(CmdHGet)
+            << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(CmdHDel)
+            << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(CmdHExists)
+            << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(CmdHLen);
 }
 
 }  // namespace dfly

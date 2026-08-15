@@ -36,7 +36,6 @@ if(USE_ASAN)
     set(ASAN_FLAGS 
         -fsanitize=address 
         -fno-omit-frame-pointer
-        -DNDEBUG_SANITIZER  # 关闭 sanitizer 场景下的断言检查
     )
     set(ASAN_LDFLAGS -fsanitize=address)
     add_compile_options(${ASAN_FLAGS})

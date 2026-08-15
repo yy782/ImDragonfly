@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <glog/logging.h>
 #include <unistd.h>
 
 #include "uring_proactor.hpp"
@@ -32,6 +33,9 @@ class UringSocket {
 
   IoAwaitable AsyncWrite(const void* data, size_t len, int /*flags*/ = 0) {
     return proactor_->AsyncSend(fd_, data, len);
+  }
+  IoAwaitable AsyncWriteV(const struct msghdr* msg) {
+    return proactor_->AsyncSendV(fd_, msg);
   }
   AcceptAwaitable AsyncAccept() { return proactor_->AsyncAccept(fd_); }
 

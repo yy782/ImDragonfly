@@ -3,9 +3,10 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-#include <cstring>
+#include <deque>
 #include <exception>
 #include <memory>
+#include <mutex>
 
 #include "command_layer/command_families.hpp"
 #include "command_layer/command_registry.hpp"
@@ -15,6 +16,7 @@
 #include "net/uring_proactor.hpp"
 #include "net/uring_proactor_pool.hpp"
 #include "net/uring_socket.hpp"
+#include "network/pipeline_squasher.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/engine_shard_set.hpp"
@@ -24,6 +26,7 @@
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
+
 class RedisServer;
 inline RedisServer* ser = nullptr;
 
@@ -39,57 +42,66 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
   void init() {
     auto self = shared_from_this();
     std::weak_ptr<RedisSession> weak_self = self;
-    rb_.SetSendCallback([weak_self](std::string&& s) {
+    send_cb_ = [weak_self](std::string&& s) {
       auto self = weak_self.lock();
       if (!self) return;
       VLOG(3) << "fd:" << self->fd() << " send:" << s;
-      self->SendImp(std::move(s));
-    });
+      auto p = self->GetProactor();
+      p->DispatchBrief(
+          [self, s = std::move(s)]() mutable { self->SendImp(std::move(s)); });
+    };
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
+    // 一次构造、连接生命周期内复用：避免每批命令都重建
+    // dispatched_ 数组（按 shard 数 resize）与 ReplyBuilder 回调。
+    squasher_.Init(context_.GetNamespace(), context_.GetDbIndex(), send_cb_,
+                   socket_.Proactor().get());
   }
   // 不打算实现持久化，MUTLI,EXEC等实现以后完成
   // 目前DashTable,事务调度，协程，SIMD，以及各种第三方boost,function_base都够吃一壶的了
   // 一个人开发难度大，AI还看不懂代码
-  cppcoro::AsyncTask DoRead() {  // 不支持管道， 要支持管道，复杂度高
+  cppcoro::AsyncTask DoRead() {
     socket_.RegisterRecvBuf();
     pId_ = socket_.Proactor()->GetLoopThreadId();
     int fd = socket_.fd();
     size_t recv_offset = 0;
+    std::vector<QCmd> queue;
+    size_t qidx = 0;
+
     while (true) {
+      if (qidx < queue.size()) {
+        co_await squasher_.Run(std::move(queue));
+        queue.clear();
+        qidx = 0;
+      }
+
       auto res = co_await socket_.AsyncRead(recv_offset);
       assert(util::Thread::current_tid() == pId_);
       if (res.bytes > 0) {
+        recv_count++;
         size_t total = recv_offset + res.bytes;
-        auto& com = parser_.Parse(res.data, total);  // todo 没有记忆
-        if (com.empty()) {
-          recv_offset = total;
-          continue;
-        }
-        recv_offset = 0;
+        auto pr = parser_.ParseAll(res.data, total);
 
-        VLOG(3) << " fd: " << fd << " com: " << util::VecToStr(com);
-
-        args_ = ::cmn::CmdArgList(com);
-        std::string upper_cmd =
-            util::ToUpperIfNeeded(args_[0]);  // 防止传入小写的set,找不到
-        auto ci = CIs->Find(upper_cmd.empty() ? args_[0] : upper_cmd);
-        if (!ci) {
-          LOG(WARNING) << "Unknown command: " << args_[0] << " from fd: " << fd;
-          rb_.BuildError("unknown command:" + std::string(args_[0]));
-          continue;
+        for (auto& cmd_args : pr.cmds) {
+          ::cmn::CmdArgList args(cmd_args);
+          std::string upper_cmd = util::ToUpperIfNeeded(args[0]);
+          auto ci = CIs->Find(upper_cmd.empty() ? args[0] : upper_cmd);
+          if (!ci) {
+            LOG(WARNING) << "Unknown command: " << args[0]
+                         << " from fd: " << fd;
+            send_cb_("-ERR unknown command:" + std::string(args[0]) + "\r\n");
+            continue;
+          }
+          queue.push_back({ci, std::move(cmd_args)});
         }
 
-        VLOG(3) << " fd: " << fd
-                << " CmdArgListToString: " << CmdArgListToString(args_);
-
-        transaction_.reset();
-        transaction_ = std::make_shared<Transaction>(ci);
-        transaction_->InitByArgs(context_.GetNamespace(), context_.GetDbIndex(),
-                                 args_);
-        cmd_cntx_ = CommandContext(
-            transaction_, ci,
-            &rb_);  // 并不安全，但是目前是安全的，生命周期应该是transaction_保管更好
-        ci->Invoke(&cmd_cntx_, args_);
+        if (pr.partial_offset < total) {  // 可能要优化，
+          size_t partial_len = total - pr.partial_offset;
+          std::memmove(const_cast<char*>(res.data),
+                       res.data + pr.partial_offset, partial_len);
+          recv_offset = partial_len;
+        } else {
+          recv_offset = 0;
+        }
       } else if (res.bytes == 0 || res.bytes == -104) {
         LOG(INFO) << "Connection closed by client, fd: " << fd;
         break;
@@ -109,41 +121,82 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
  private:
   void SendImp(std::string&& s) {
-    auto p = socket_.Proactor();
-    multi_res_ = std::move(s);
-    auto self = shared_from_this();
-    std::weak_ptr<RedisSession> weak_self = self;
-    p->DispatchBrief([weak_self]() mutable {
-      auto self = weak_self.lock();
-      if (!self) return;
-      self->DoWrite();
-    });
+    VLOG(2) << "[SEND] fd:" << fd() << " size:" << s.size()
+            << " head:" << s.substr(0, s.find('\r'));
+    write_queue_.push_back(std::move(s));
+    if (write_in_progress_) {
+      return;
+    }
+    write_in_progress_ = true;
+    DoWrite();
   }
 
   cppcoro::AsyncTask DoWrite() {
     assert(util::Thread::current_tid() == pId_);
-    size_t written = 0;
-    while (written < multi_res_.size()) {
-      auto wr = co_await socket_.AsyncWrite(multi_res_.data() + written,
-                                            multi_res_.size() - written);
-      if (wr <= 0) {
-        LOG(WARNING) << "Write error on fd: " << fd() << ", error: " << wr;
+    // 一次 sendmsg 合并的回复条数上限：≤ UIO_FASTIOV(8)，内核 __import_iovec
+    // 走栈上 iovec[8] 快路径（无 kmalloc、无 iovec 数组全量拷贝），
+    // 同时保留批量合并减少 syscall 次数（比逐条发送少 kMaxWriteBatch 倍）。
+    constexpr size_t kMaxWriteBatch = 8;
+    while (true) {
+      // 批量出队：batch 内的 string 存活于协程帧，iovec 指向其 data() 期间安全
+      std::vector<std::string> batch;
+      if (write_queue_.empty()) {
+        write_in_progress_ = false;
         break;
       }
-      written += static_cast<size_t>(wr);
+      size_t n = std::min(write_queue_.size(), kMaxWriteBatch);
+      batch.reserve(n);
+      for (size_t i = 0; i < n; ++i) {
+        batch.push_back(std::move(write_queue_.front()));
+        write_queue_.pop_front();
+      }
+      size_t total = 0;
+      for (auto& s : batch) {
+        total += s.size();
+      }
+
+      size_t sent = 0;
+      while (sent < total) {
+        std::vector<struct iovec> rem;
+        size_t skip = sent;
+        for (auto& s : batch) {
+          if (skip >= s.size()) {
+            skip -= s.size();
+            continue;
+          }
+          rem.push_back({s.data() + skip, s.size() - skip});
+          skip = 0;
+        }
+        if (rem.empty()) break;
+        struct msghdr msg = {};
+        msg.msg_iov = rem.data();
+        msg.msg_iovlen = rem.size();
+        auto wr = co_await socket_.AsyncWriteV(&msg);
+        if (wr <= 0) {
+          LOG(WARNING) << "Write error on fd: " << fd() << ", error: " << wr;
+          write_queue_.clear();
+          write_in_progress_ = false;
+          co_return;
+        }
+        sent += static_cast<size_t>(wr);
+      }
+      send_count++;
     }
     co_return;
   }
 
   base::UringSocket socket_;
-  ::cmn::CmdArgList args_;
   ConnectionContext context_;
   std::shared_ptr<Transaction> transaction_;
-  ReplyBuilder rb_;
-  CommandContext cmd_cntx_;
+  ReplyBuilder::SendCallback send_cb_;
   ParseRESP parser_;
-  std::string multi_res_;
+  PipelineSquasher squasher_;
+  std::deque<std::string> write_queue_;
+  bool write_in_progress_ = false;
   pthread_t pId_;
+
+  int recv_count = 0;
+  int send_count = 0;
 };
 
 class RedisServer {
@@ -156,7 +209,7 @@ class RedisServer {
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
-    // // RegisterMulti(CIs);
+    // RegisterMulti(CIs);
     RegisterListFamily(CIs);
     RegisterHashFamily(CIs);
     RegisterSetFamily(CIs);
@@ -176,7 +229,7 @@ class RedisServer {
     config.registered_buf_count = 1024;
     config.registered_buf_size = 4096;
     config.cqe_batch_size = 100;
-    config.task_queue_size = 1024;
+    config.task_queue_size = 16384;  // 要求2的幂
     config.sqe_batch_size = 32;
     return config;
   }
@@ -202,7 +255,7 @@ class RedisServer {
       LOG(INFO) << "Starting ListenSocket...";
       listen();
     });
-    main_proactor_->loop();
+    main_proactor_->Run();
   }
 
   void Stop() {

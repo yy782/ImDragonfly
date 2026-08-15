@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "cppcoro/async_task.hpp"
 #include "network/redis_server.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/namespaces.hpp"
@@ -19,6 +20,16 @@
 using namespace dfly;
 using namespace dfly::cmn;
 using namespace ::cmn;
+
+// Invoke 返回惰性 CoroTask，必须 co_await 才会启动命令协程。
+// 用立即启动的 AsyncTask 包裹，让测试丢弃返回值时命令也能真正执行。
+namespace {
+cppcoro::AsyncTask RunCommand(dfly::CommandId* cid, CommandContext* cntx,
+                              CmdArgList args) {
+  co_await cid->Invoke(cntx, args);
+  co_return;
+}
+}  // namespace
 
 const int shardNum = 5;
 
@@ -80,7 +91,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   auto key_sid = Shard(set_key, shard_set->size());
   shard_set->Add(key_sid, [&]() {
     set_tx->InitByArgs(Namespace, db_index, set_args);
-    set_cid->Invoke(&set_cntx, set_args);
+    RunCommand(set_cid, &set_cntx, set_args);
   });
 
   for (int retry = 0; retry < 500 && set_done.load() == 0; ++retry) {
@@ -111,7 +122,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   shard_set->Add(key_sid, [&]() {
     get_tx->InitByArgs(Namespace, db_index, get_args);
-    get_cid->Invoke(&get_cntx, get_args);
+    RunCommand(get_cid, &get_cntx, get_args);
   });
 
   for (int retry = 0; retry < 500 && get_done.load() == 0; ++retry) {
@@ -158,7 +169,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   // MSET with multi-shard dispatch
   shard_set->Add(0, [&]() {
     mset_tx->InitByArgs(Namespace, db_index, mset_args);
-    mset_cid->Invoke(&mset_cntx, mset_args);
+    RunCommand(mset_cid, &mset_cntx, mset_args);
   });
 
   for (int retry = 0; retry < 500 && mset_done.load() == 0; ++retry) {
@@ -191,7 +202,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   shard_set->Add(0, [&]() {
     mget_tx->InitByArgs(Namespace, db_index, mget_args);
-    mget_cid->Invoke(&mget_cntx, mget_args);
+    RunCommand(mget_cid, &mget_cntx, mget_args);
   });
 
   for (int retry = 0; retry < 500 && mget_done.load() == 0; ++retry) {
@@ -259,7 +270,7 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
 
     shard_set->Add(0, [&]() {
       mset_tx->InitByArgs(Namespace, db_index, mset_args);
-      mset_cid->Invoke(&mset_cntx, mset_args);
+      RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
     for (int retry = 0; retry < 500 && mset_done.load() == 0; ++retry) {
@@ -293,7 +304,7 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
 
     shard_set->Add(0, [&]() {
       mget_tx->InitByArgs(Namespace, db_index, mget_args);
-      mget_cid->Invoke(&mget_cntx, mget_args);
+      RunCommand(mget_cid, &mget_cntx, mget_args);
     });
 
     for (int retry = 0; retry < 500 && mget_done.load() == 0; ++retry) {
@@ -401,7 +412,7 @@ TEST_F(TransactionTest, VLLLock) {
 
     shard_set->Add(*involved_shards.begin(), [&]() {
       mset_tx->InitByArgs(Namespace, db_index, mset_args);
-      mset_cid->Invoke(&mset_cntx, mset_args);
+      RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
     // Step 3: 用 atomic_bool 轮询 MSET 是否完成
@@ -475,7 +486,7 @@ TEST_F(TransactionTest, VLLLock) {
 
     shard_set->Add(*involved_shards.begin(), [&]() {
       mset_tx->InitByArgs(Namespace, db_index, mset_args);
-      mset_cid->Invoke(&mset_cntx, mset_args);
+      RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
     // Step 3: 用 atomic_bool 轮询 MSET 是否完成
@@ -567,7 +578,7 @@ TEST_F(TransactionTest, VLLLockRetry) {
 
     shard_set->Add(*involved_shards.begin(), [&]() {
       mset_tx->InitByArgs(Namespace, db_index, mset_args);
-      mset_cid->Invoke(&mset_cntx, mset_args);
+      RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
     for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
@@ -640,7 +651,7 @@ TEST_F(TransactionTest, VLLLockRetry) {
 
     shard_set->Add(*involved_shards.begin(), [&]() {
       mset_tx->InitByArgs(Namespace, db_index, mset_args);
-      mset_cid->Invoke(&mset_cntx, mset_args);
+      RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
     for (int retry = 0; retry < 500 && !mset_done.load(); ++retry) {
@@ -715,7 +726,7 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
       for (int start = s * P; start < (s + 1) * P; ++start) {
         auto& tx = txs[start];
         tx->InitByArgs(Namespace, db_index, args[start]);
-        cid->Invoke(&cmd_cntxs[start], args[start]);
+        RunCommand(cid, &cmd_cntxs[start], args[start]);
       }
     });
   }
@@ -815,7 +826,7 @@ TEST_F(TransactionTest, MultiConcurrent) {
         for (int start = s * P; start < (s + 1) * P; ++start) {
           auto& tx = txs[start];
           tx->InitByArgs(Namespace, db_index, args[start]);
-          cid->Invoke(&cmd_cntxs[start], args[start]);
+          RunCommand(cid, &cmd_cntxs[start], args[start]);
         }
       });
     }
@@ -869,7 +880,7 @@ TEST_F(TransactionTest, MultiConcurrent) {
 
       shard_set->Add(0, [&]() {
         mget_tx->InitByArgs(Namespace, db_index, mget_args);
-        mget_cid->Invoke(&mget_cntx, mget_args);
+        RunCommand(mget_cid, &mget_cntx, mget_args);
       });
 
       for (int retry = 0; retry < 500 && mget_done.load() == 0; ++retry) {
