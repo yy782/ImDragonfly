@@ -13,7 +13,14 @@
 
 #include "redis/redis_aux.hpp"
 
+#include "small_string.hpp"
+
 namespace dfly {
+
+// 每个 shard 线程独立的 mimalloc heap（定义见 sharding/engine_shard.cpp）。
+// 用于 CompactObj 等数据对象的专用分配；非 shard 线程下为 nullptr，
+// mi_heap_malloc 会自动回退到默认 heap，行为等价于 mi_malloc。
+extern thread_local mi_heap_t* data_heap;
 
 using CompactObjType = unsigned;
 constexpr CompactObjType kInvalidCompactObjType =
@@ -35,7 +42,7 @@ struct Robj {
 
 union CompactU {
   int64_t ival_;
-  std::string str_;
+  SmallString str_;  // SBO：短字符串内联，长字符串走 data_heap 专属分配器
   TtlString ttl_;
   Robj robj_;
   CompactU() : ival_{} {}
@@ -110,12 +117,14 @@ class CompactObj {
   }
   void SetString(std::string&& str) {
     Destroy();
-    new (&u_.str_) std::string(std::move(str));
+    // std::string 的缓冲归属全局分配器，不能转移给 data_heap 持有的
+    // SmallString，此处退化为深拷贝（短字符串内联，成本可忽略）。
+    new (&u_.str_) SmallString(std::string_view(str));
     tag_ = STR_TAG;
   }
   void SetString(std::string_view str) {
     Destroy();
-    new (&u_.str_) std::string(str);
+    new (&u_.str_) SmallString(str);
     tag_ = STR_TAG;
   }
   void SetInt(int64_t val) {
@@ -144,9 +153,9 @@ class CompactObj {
     DCHECK(IsInt());
     return u_.ival_;
   }
-  const std::string& AsStr() const {
+  std::string_view AsStr() const {
     DCHECK(IsStr());
-    return u_.str_;
+    return u_.str_.view();
   }
   const TtlString& AsTtl() const {
     DCHECK(IsTtlStr());
@@ -165,7 +174,7 @@ class CompactObj {
       case INT_TAG:
         return std::to_string(u_.ival_);
       case STR_TAG:
-        return u_.str_;
+        return u_.str_.to_string();
       case TTL_STR_TAG:
         return u_.ttl_.val;
       case EMPTY:
@@ -181,7 +190,7 @@ class CompactObj {
         *scratch = std::to_string(u_.ival_);
         return *scratch;
       case STR_TAG:
-        return u_.str_;
+        return u_.str_.view();
       case TTL_STR_TAG:
         return u_.ttl_.val;
       case EMPTY:
@@ -199,7 +208,7 @@ class CompactObj {
       case EMPTY:
         break;
       case STR_TAG:
-        u_.str_.~basic_string();
+        u_.str_.~SmallString();
         break;
       case TTL_STR_TAG:
         u_.ttl_.~TtlString();
@@ -220,8 +229,8 @@ class CompactObj {
         u_.ival_ = o.u_.ival_;
         break;
       case STR_TAG:
-        new (&u_.str_) std::string(std::move(o.u_.str_));
-        o.u_.str_.~basic_string();
+        new (&u_.str_) SmallString(std::move(o.u_.str_));
+        o.u_.str_.~SmallString();
         break;
       case TTL_STR_TAG:
         new (&u_.ttl_) TtlString(std::move(o.u_.ttl_));
@@ -293,7 +302,7 @@ struct CompactKey : public CompactObj {
       u_.ttl_.exp_ms = abs_ms;
       return;
     }
-    std::string cur = std::move(u_.str_);
+    std::string cur = u_.str_.to_string();
     Destroy();
     new (&u_.ttl_) TtlString{std::move(cur), abs_ms};
     tag_ = TTL_STR_TAG;
@@ -303,7 +312,7 @@ struct CompactKey : public CompactObj {
     if (tag_ != TTL_STR_TAG) return false;
     std::string s = std::move(u_.ttl_.val);
     Destroy();
-    new (&u_.str_) std::string(std::move(s));
+    new (&u_.str_) SmallString(std::string_view(s));
     tag_ = STR_TAG;
     return true;
   }
@@ -335,7 +344,7 @@ struct CompactValue : public CompactObj {
   template <typename ObjType, CompactObjType ObjTag>
   static CompactValue Make() {
     CompactValue v;
-    void* p = mi_malloc(sizeof(ObjType));
+    void* p = mi_heap_malloc(data_heap, sizeof(ObjType));
     new (p) ObjType();
     v.SetRobj(ObjTag, p);
     return v;

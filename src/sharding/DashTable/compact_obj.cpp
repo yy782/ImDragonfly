@@ -7,7 +7,7 @@ uint64_t CompactObj::HashCode() const {
     case INT_TAG:
       return std::hash<int64_t>{}(u_.ival_);
     case STR_TAG:
-      return std::hash<std::string>{}(u_.str_);
+      return u_.str_.HashCode();
     case TTL_STR_TAG:
 
       return std::hash<std::string>{}(u_.ttl_.val);

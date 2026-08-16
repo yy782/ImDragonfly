@@ -42,6 +42,7 @@ void EngineShard::DestroyThreadLocal() {
   mi_free(shard_);
   shard_ = nullptr;
   mi_heap_delete(tlh);
+  data_heap = nullptr;
 }
 
 void EngineShard::Shutdown() {}

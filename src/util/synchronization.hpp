@@ -7,7 +7,6 @@
 #include <boost/intrusive_ptr.hpp>
 #include <cassert>
 #include <condition_variable>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -225,6 +224,15 @@ class Done {
 };
 
 class EmbeddedBlockingCounter {
+  const uint64_t kCancelFlag = (1ULL << 63);
+
+  auto WaitCondition(uint64_t* cnt) const {
+    return [this, cnt]() -> bool {
+      *cnt = count_.load(std::memory_order_relaxed);
+      return *cnt == 0 || (*cnt & kCancelFlag);
+    };
+  }
+
  public:
   EmbeddedBlockingCounter(unsigned start_count = 0)
       : ec_{}, count_{start_count} {}
@@ -255,14 +263,6 @@ class EmbeddedBlockingCounter {
   uint64_t GetCount() const { return count_.load(std::memory_order_relaxed); }
 
  private:
-  const uint64_t kCancelFlag = (1ULL << 63);
-  std::function<bool()> WaitCondition(uint64_t* cnt) const {
-    return [this, cnt]() -> bool {
-      *cnt = count_.load(std::memory_order_relaxed);
-      return *cnt == 0 || (*cnt & kCancelFlag);
-    };
-  }
-
   EventCount ec_;
   std::atomic<uint64_t> count_;
 };

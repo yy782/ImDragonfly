@@ -3,14 +3,15 @@
 #include <glog/logging.h>
 
 #include <exception>
-#include <functional>
 #include <string>
 #include <vector>
+
+#include "util/function.hpp"
 namespace dfly {
 
 class ReplyBuilder {
  public:
-  using SendCallback = std::function<void(std::string&&)>;
+  using SendCallback = util::function<void(std::string&&)>;
 
   void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
   ~ReplyBuilder() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
@@ -81,11 +82,7 @@ class ReplyBuilder {
 
   void DoSend() {
     if (send_cb_) {
-      try {
-        send_cb_(std::move(reply_));
-      } catch (std::exception& e) {
-        LOG(WARNING) << "ReplyBuilder::DoSend exception: " << e.what();
-      }
+      send_cb_(std::move(reply_));
     }
   }
 

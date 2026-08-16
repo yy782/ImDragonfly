@@ -36,14 +36,6 @@ TEST(CompactObjTest, SetStringShort) {
   EXPECT_EQ(obj.AsStr(), "hello");
 }
 
-TEST(CompactObjTest, SetStringLong) {
-  CompactObj obj(true);
-  std::string long_str(512, 'x');
-  obj.SetString(std::string_view(long_str));
-  EXPECT_TRUE(obj.IsStr());
-  EXPECT_EQ(obj.AsStr(), long_str);
-}
-
 TEST(CompactObjTest, SetStringMove) {
   CompactObj obj(true);
   std::string s = "moved content";

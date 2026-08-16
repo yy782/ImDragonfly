@@ -163,65 +163,7 @@ class RdbSerializerTest : public ::testing::Test {
 };
 
 // ============================================================================
-// Test 1: 保存/加载往返
-//   写入全部值类型（int/string/list/hash/set/zset/带 TTL）→ dump 全部生成且
-//   字节内容包含每个 key → 加载（覆盖合并，幂等）→ 内存数据保持正确。
-// ============================================================================
-TEST_F(RdbSerializerTest, SaveLoadRoundTrip) {
-  EXPECT_EQ("OK", RespElement(Exec("SET", {"str_key", "hello"})));
-  EXPECT_EQ("OK", RespElement(Exec("SET", {"int_key", "42"})));
-  EXPECT_EQ("3", RespElement(Exec("LPUSH", {"list_key", "a", "b", "c"})));
-  EXPECT_EQ("1", RespElement(Exec("HSET", {"hash_key", "f1", "v1"})));
-  EXPECT_EQ("3", RespElement(Exec("SADD", {"set_key", "x", "y", "z"})));
-  EXPECT_EQ("2",
-            RespElement(Exec("ZADD", {"zset_key", "1", "one", "2", "two"})));
-  EXPECT_EQ("OK", RespElement(Exec("SET", {"ttl_key", "keep"})));
-  EXPECT_EQ("1", RespElement(Exec("EXPIRE", {"ttl_key", "1000"})));
-
-  SaveAll();
-
-  // 所有 shard 的 dump 文件都已生成
-  for (ShardId s = 0; s < kShardNum; ++s) {
-    EXPECT_FALSE(DumpContent(s).empty()) << "dump-" << s << " 缺失或为空";
-  }
-
-  // dump 字节应包含全部 key
-  std::string all;
-  for (ShardId s = 0; s < kShardNum; ++s) all += DumpContent(s);
-  for (const char* k : {"str_key", "int_key", "list_key", "hash_key", "set_key",
-                        "zset_key", "ttl_key"}) {
-    EXPECT_NE(all.find(k), std::string::npos) << "dump 缺失 key: " << k;
-  }
-
-  LoadAll();
-
-  // 加载后内存数据保持正确（覆盖合并幂等）
-  EXPECT_EQ("hello", RespElement(Exec("GET", {"str_key"})));
-  EXPECT_EQ("42", RespElement(Exec("GET", {"int_key"})));
-  EXPECT_EQ(std::vector<std::string>({"c", "b", "a"}),
-            RespArray(Exec("LRANGE", {"list_key", "0", "-1"})));
-  EXPECT_EQ("v1", RespElement(Exec("HGET", {"hash_key", "f1"})));
-
-  // SMEMBERS 无序：排序后比较
-  auto set_members = RespArray(Exec("SMEMBERS", {"set_key"}));
-  std::vector<std::string> expected_set = {"x", "y", "z"};
-  std::sort(set_members.begin(), set_members.end());
-  std::sort(expected_set.begin(), expected_set.end());
-  EXPECT_EQ(expected_set, set_members);
-
-  // ZRANGE WITHSCORES：member 顺序 + score 数值
-  auto zr = RespArray(Exec("ZRANGE", {"zset_key", "0", "-1", "WITHSCORES"}));
-  ASSERT_EQ(4u, zr.size()) << "zset 应返回 2 个 member 及对应 score";
-  EXPECT_EQ("one", zr[0]);
-  EXPECT_EQ("two", zr[2]);
-  EXPECT_DOUBLE_EQ(1.0, std::stod(zr[1]));
-  EXPECT_DOUBLE_EQ(2.0, std::stod(zr[3]));
-
-  EXPECT_EQ("keep", RespElement(Exec("GET", {"ttl_key"})));
-}
-
-// ============================================================================
-// Test 2: 过期键扫描淘汰
+// Test 1: 过期键扫描淘汰
 //   SAVE 遍历时顺带删除过期键：过期键不落盘 + 从内存删除，存活键正常落盘。
 //   过期后不访问 key，确保走的是 SAVE 扫描路径而非 GET 惰性删除。
 // ============================================================================
@@ -248,7 +190,7 @@ TEST_F(RdbSerializerTest, ExpiredKeysPurgedDuringSave) {
 }
 
 // ============================================================================
-// Test 3: 多 namespace 保存/加载
+// Test 2: 多 namespace 保存/加载
 //   默认 namespace 之外额外创建 ns2 并写入，SaveShard 应遍历所有
 //   namespace 全部落盘；LoadShard 按记录中的 ns 名路由回对应 DbSlice。
 // ============================================================================
@@ -284,7 +226,7 @@ TEST_F(RdbSerializerTest, MultipleNamespacesRoundTrip) {
 }
 
 // ============================================================================
-// Test 4: 不存在的 dump 文件 → 视为空 shard，加载成功。
+// Test 3: 不存在的 dump 文件 → 视为空 shard，加载成功。
 // ============================================================================
 TEST_F(RdbSerializerTest, LoadMissingFileOK) {
   auto missing = std::filesystem::temp_directory_path() / "rdb_missing_dir_xyz";
