@@ -166,7 +166,7 @@ redis-cli -p 6379
 ```bash
 # Ubuntu/Debian (推荐 Ubuntu 22.04+)
 sudo apt-get install -y clang cmake make \
-    liburing-dev libmimalloc-dev libboost-dev \
+    liburing-dev libmimalloc-dev \
     libgoogle-glog-dev
 ```
 

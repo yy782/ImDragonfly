@@ -4,7 +4,6 @@
 
 // #pragma once
 // #include <atomic>
-// #include <boost/intrusive_ptr.hpp>
 // #include <cassert>
 // #include <condition_variable>  // for cv_status
 // #include <functional>
@@ -201,7 +200,7 @@
 //     std::atomic<std::uint32_t> use_count_{0};
 //     std::atomic<bool> ready_;
 //   };
-//   using ptr_t = ::boost::intrusive_ptr<Impl>;
+//   using ptr_t = util::intrusive_ptr<Impl>;
 //   ptr_t impl_;
 // };
 

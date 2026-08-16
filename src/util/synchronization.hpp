@@ -4,7 +4,6 @@
 
 #pragma once
 #include <atomic>
-#include <boost/intrusive_ptr.hpp>
 #include <cassert>
 #include <condition_variable>
 #include <mutex>
@@ -13,6 +12,7 @@
 
 #include "cppcoro/async_mutex.hpp"
 #include "cppcoro/task.hpp"
+#include "intrusive_ptr.hpp"
 #include "spinlock.hpp"
 #include "wait_queue.hpp"
 namespace util {
@@ -219,7 +219,7 @@ class Done {
     std::atomic<std::uint32_t> use_count_{0};
     std::atomic<bool> ready_;
   };
-  using ptr_t = ::boost::intrusive_ptr<Impl>;
+  using ptr_t = intrusive_ptr<Impl>;
   ptr_t impl_;
 };
 

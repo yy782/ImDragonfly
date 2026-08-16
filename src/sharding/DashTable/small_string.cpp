@@ -4,9 +4,7 @@
 
 namespace dfly {
 
-char* SmallString::data() {
-  return is_inline() ? u_.inline_ : u_.heap_.ptr_;
-}
+char* SmallString::data() { return is_inline() ? u_.inline_ : u_.heap_.ptr_; }
 
 const char* SmallString::data() const {
   return is_inline() ? u_.inline_ : u_.heap_.ptr_;
@@ -21,8 +19,7 @@ void SmallString::assign(std::string_view sv) {
       mi_free(u_.heap_.ptr_);
     }
     size_ = n;
-    if (n != 0)
-      memcpy(u_.inline_, sv.data(), n);
+    if (n != 0) memcpy(u_.inline_, sv.data(), n);
     u_.inline_[n] = '\0';
     return;
   }
@@ -31,10 +28,11 @@ void SmallString::assign(std::string_view sv) {
   if (is_inline() || u_.heap_.cap_ < n) {
     const size_t new_cap = GrowCapacity(n);
     if (is_inline()) {
-      u_.heap_.ptr_ = static_cast<char*>(mi_heap_malloc(data_heap, new_cap + 1));
-    } else {
       u_.heap_.ptr_ =
-          static_cast<char*>(mi_heap_realloc(data_heap, u_.heap_.ptr_, new_cap + 1));
+          static_cast<char*>(mi_heap_malloc(data_heap, new_cap + 1));
+    } else {
+      u_.heap_.ptr_ = static_cast<char*>(
+          mi_heap_realloc(data_heap, u_.heap_.ptr_, new_cap + 1));
     }
     u_.heap_.cap_ = new_cap;
   }

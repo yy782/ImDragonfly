@@ -12,7 +12,6 @@
 #include <string_view>
 
 #include "redis/redis_aux.hpp"
-
 #include "small_string.hpp"
 
 namespace dfly {

@@ -21,17 +21,18 @@ using function_base =
 
 // 拥有所有权、可拷贝、空调用时 std::abort（不抛异常）的 function。
 template <typename... Signatures>
-using function =
-    function_base<true, true, fu2::capacity_default, false, false, Signatures...>;
+using function = function_base<true, true, fu2::capacity_default, false, false,
+                               Signatures...>;
 
 // 拥有所有权、move-only、空调用时 std::abort（不抛异常）的 function。
 template <typename... Signatures>
-using unique_function =
-    function_base<true, false, fu2::capacity_default, false, false, Signatures...>;
+using unique_function = function_base<true, false, fu2::capacity_default, false,
+                                      false, Signatures...>;
 
-// 非拥有、可拷贝的函数视图（对应 fu2::function_view），空调用时 std::abort（不抛异常）。
+// 非拥有、可拷贝的函数视图（对应 fu2::function_view），空调用时
+// std::abort（不抛异常）。
 template <typename... Signatures>
-using FunctionRef =
-    function_base<false, true, fu2::capacity_default, false, false, Signatures...>;
+using FunctionRef = function_base<false, true, fu2::capacity_default, false,
+                                  false, Signatures...>;
 
 }  // namespace util

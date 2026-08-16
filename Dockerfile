@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     liburing-dev \
     libmimalloc-dev \
-    libboost-dev \
     libgoogle-glog-dev \
     libprotobuf-dev \
     protobuf-compiler \

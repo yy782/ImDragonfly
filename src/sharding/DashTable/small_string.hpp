@@ -40,8 +40,7 @@ class SmallString {
 
   SmallString(const SmallString& o) { assign(o.view()); }
   SmallString& operator=(const SmallString& o) {
-    if (this != &o)
-      assign(o.view());
+    if (this != &o) assign(o.view());
     return *this;
   }
 
@@ -99,12 +98,12 @@ class SmallString {
   // 由当前 size_ 起步，为至少容纳 need 字节计算新的堆容量（2 倍增长）。
   static size_t GrowCapacity(size_t need) {
     size_t cap = kMinHeapCap;
-    while (cap < need)
-      cap *= 2;
+    while (cap < need) cap *= 2;
     return cap;
   }
 
-  size_t size_ = 0;  // 总长度；同时隐含存储模式（<= kInlineCap 内联，否则堆外）。
+  size_t size_ =
+      0;  // 总长度；同时隐含存储模式（<= kInlineCap 内联，否则堆外）。
 
   union U {
     struct {
