@@ -10,7 +10,7 @@
 
 运行（需先启动 ImDragonfly 服务，占用 6379 端口）:
     ./build/imdragonfly 4
-    python3 -m pytest test/redis-py/test_half_packet.py -v \\
+    python3 -m pytest test/redis-py/test_half_packet.py -v 
         --redis-host=127.0.0.1 --redis-port=6379
 """
 

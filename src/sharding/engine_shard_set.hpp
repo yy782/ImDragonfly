@@ -31,6 +31,7 @@ class EngineShardSet {
   template <typename F>
   auto Add(ShardId sid, F&& f) {
     DCHECK_LT(sid, size_);
+    DCHECK_GE(sid, 0);
     bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
     if (!success) {
       // 队列满溢：非阻塞 TryAdd 失败，任务被丢弃会导致等待方永久挂起。
@@ -54,7 +55,7 @@ class EngineShardSet {
     for (uint32_t i = 0; i < size(); ++i) {
       if (!pred(i)) continue;
       auto dest = pp_->at(i);
-      dest->DispatchBrief([&func, &latch, i]() mutable {
+      dest->DispatchBrief([&func, &latch]() mutable {
         func(EngineShard::tlocal());
         latch.count_down();
       });

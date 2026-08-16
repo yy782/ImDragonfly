@@ -57,6 +57,7 @@ benchmark-results/
 
 # Python / pytest 缓存
 test/redis-py/__pycache__/
-
+*.rdb
+.rdb/
 
 

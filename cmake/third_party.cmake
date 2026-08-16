@@ -54,23 +54,6 @@ else()
     target_link_libraries(third_party_deps INTERFACE mimalloc-static)
 endif()
 
-find_package(Boost QUIET)
-if(Boost_FOUND)
-    message(STATUS "[third_party] 使用系统 Boost: ${Boost_INCLUDE_DIRS}")
-    target_include_directories(third_party_deps INTERFACE ${Boost_INCLUDE_DIRS})
-else()
-    message(STATUS "[third_party] 系统未找到 Boost，下载 header-only 到 build/_deps ...")
-    # Boost 太大，只下载需要的 header 文件
-    FetchContent_Declare(
-        boost_headers
-        URL             https://github.com/boostorg/boost/releases/download/boost-1.85.0/boost-1.85.0-b2-nodocs.tar.xz
-        URL_HASH        SHA256=4b29c48eaba6846a0c5bd6894bc3c4ffc881d681d641136e0c5c98cddb2d0f1b
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    FetchContent_Populate(boost_headers)
-    target_include_directories(third_party_deps INTERFACE ${boost_headers_SOURCE_DIR})
-endif()
-
 find_package(glog QUIET)
 if(glog_FOUND)
     message(STATUS "[third_party] 使用系统 glog")

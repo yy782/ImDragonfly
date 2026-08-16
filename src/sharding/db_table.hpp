@@ -3,8 +3,6 @@
 //
 #pragma once
 
-#include <boost/smart_ptr/intrusive_ptr.hpp>
-#include <boost/smart_ptr/intrusive_ref_counter.hpp>
 #include <unordered_map>
 
 #include "DashTable/compact_obj.hpp"
@@ -13,6 +11,7 @@
 #include "detail/common.hpp"
 #include "detail/intent_lock.hpp"
 #include "detail/tx_base.hpp"
+#include "util/intrusive_ptr.hpp"
 namespace dfly {
 using PrimeKey = detail::PrimeKey;
 using PrimeValue = detail::PrimeValue;
@@ -77,7 +76,7 @@ class LockTable {
 };
 
 struct DbTable
-    : boost::intrusive_ref_counter<DbTable, boost::thread_unsafe_counter> {
+    : util::intrusive_ref_counter<DbTable, util::thread_unsafe_counter> {
   explicit DbTable(PMR_NS::memory_resource* mr,
                    DbIndex index);  // explicit多余???
   ~DbTable();
@@ -91,5 +90,5 @@ struct DbTable
   DbIndex index_;
   LockTable trans_locks;
 };
-using DbTableArray = std::vector<boost::intrusive_ptr<DbTable>>;
+using DbTableArray = std::vector<util::intrusive_ptr<DbTable>>;
 }  // namespace dfly

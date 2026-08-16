@@ -5,6 +5,10 @@
 #include "transaction_layer/transaction.hpp"
 namespace dfly {
 
+TxQueue::~TxQueue() = default;
+
+TxQueue::Node::~Node() = default;
+
 void TxQueue::Grow() {
   uint32_t old_size = vec_.size();
   uint32_t new_size = old_size == 0 ? 16 : old_size * 2;
@@ -30,7 +34,7 @@ TxQueue::Iterator TxQueue::AllocateNode() {
   return idx;
 }
 
-TxQueue::Iterator TxQueue::Push(std::shared_ptr<Transaction> t) {
+TxQueue::Iterator TxQueue::Push(util::intrusive_ptr<Transaction> t) {
   // auto* e = EngineShard::tlocal();
   //  auto sid = e->shard_id();
   //  auto& tx_it = t->GetPos(sid);
@@ -114,7 +118,7 @@ void TxQueue::Pop(Iterator& it) {
   it = kEnd;
 }
 
-std::shared_ptr<Transaction> TxQueue::Front() {
+util::intrusive_ptr<Transaction> TxQueue::Front() {
   if (head_ == kEnd) {
     return nullptr;
   }
@@ -123,7 +127,7 @@ std::shared_ptr<Transaction> TxQueue::Front() {
   return t;
 }
 
-std::shared_ptr<Transaction> TxQueue::Back() {
+util::intrusive_ptr<Transaction> TxQueue::Back() {
   if (tail_ == kEnd) {
     return nullptr;
   }

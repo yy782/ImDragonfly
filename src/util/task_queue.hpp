@@ -3,11 +3,10 @@
 #include <glog/logging.h>
 
 #include <atomic>
-#include <functional>
-#include <stdexcept>
 
 #include "cppcoro/async_task.hpp"
 #include "detail/memory_resource.hpp"
+#include "util/function.hpp"
 #include "util/mpmc_queue.hpp"
 #include "util/synchronization.hpp"
 namespace util {
@@ -57,10 +56,7 @@ class TaskQueue {
         continue;
       }
       push_ec_.notify();
-      try {
-        func();
-      } catch (std::exception& e) {
-      }
+      func();
     }
   }
 
@@ -68,11 +64,7 @@ class TaskQueue {
     CbFunc func;
     while (queue_.try_dequeue(func)) {
       push_ec_.notify();
-      try {
-        func();
-      } catch (std::exception& e) {
-        LOG(WARNING) << "TaskQueue::TryDrain exception: " << e.what();
-      }
+      func();
     }
     return true;
   }
@@ -81,7 +73,7 @@ class TaskQueue {
 
   bool Empty() const { return queue_.empty(); }
 
-  using CbFunc = std::function<void()>;
+  using CbFunc = util::unique_function<void()>;
 
  private:
   using FuncQ = util::mpmc_queue<CbFunc>;

@@ -10,6 +10,7 @@
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard_set.hpp"
+#include "util/intrusive_ptr.hpp"
 namespace dfly {
 
 class Connection;
@@ -50,16 +51,12 @@ class CommandId;
 class CommandContext {
  public:
   CommandContext() = default;
+  ~CommandContext();
 
-  CommandContext(std::shared_ptr<Transaction> transaction, const CommandId* cid,
-                 ReplyBuilder* reply_builder)
-      : transaction_(std::move(transaction)),
-        cid_(cid),
-        reply_builder_(reply_builder) {
-    DCHECK(reply_builder_);
-  }
+  CommandContext(util::intrusive_ptr<Transaction> transaction,
+                 const CommandId* cid, ReplyBuilder* reply_builder);
   const CommandId* cid() const { return cid_; }
-  std::shared_ptr<Transaction> tx() const { return transaction_; }
+  util::intrusive_ptr<Transaction> tx() const;
   ReplyBuilder* rb() {
     DCHECK(reply_builder_);
     return reply_builder_;
@@ -74,7 +71,7 @@ class CommandContext {
   }
 
  private:
-  std::shared_ptr<Transaction> transaction_;
+  util::intrusive_ptr<Transaction> transaction_;
   const CommandId* cid_;
   ReplyBuilder* reply_builder_;
   std::coroutine_handle<> continuation_{};

@@ -2,7 +2,7 @@
 #include "network/pipeline_squasher.hpp"
 
 #include "detail/common.hpp"
-#include "util/synchronization.hpp"
+#include "sharding/synchronization.hpp"
 #include "util/thread.hpp"
 
 namespace dfly {
@@ -16,8 +16,6 @@ struct LoopSwitch {
   }
   void await_suspend(std::coroutine_handle<> h) noexcept {
     if (!p->DispatchBrief([h]() { h.resume(); })) {
-      // 任务队列满（极端过载）：原地恢复会在非环线线程发起 io_uring 操作
-      // （数据竞争）。记录 ERROR 后原地恢复，至少保证连接不永久挂死。
       LOG(ERROR) << "LoopSwitch queue full, resume on non-loop thread";
       h.resume();
     }
@@ -49,11 +47,7 @@ bool PipelineSquasher::TrySquash(const QCmd& q) {
   }
   if (sid == kInvalidSid) return false;
 
-  auto tx = std::make_shared<Transaction>(cid);
-  if (tx->InitByArgs(ns_, db_, args) != OpStatus::OK) return false;
-
-  dispatched_[sid].entries.push_back(
-      ShardDispatch::Entry(cid, args, std::move(tx)));
+  dispatched_[sid].entries.push_back(ShardDispatch::Entry(cid, args, *ki));
   order_.push_back(sid);
   return true;
 }
@@ -66,23 +60,30 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
     if (!dispatched_[i].entries.empty()) sids.push_back(i);
   }
 
-  BlockingCounter bc(sids.size());
+  dfly::BlockingCounter bc(sids.size());
   for (ShardId sid : sids) {
     ShardDispatch& sd = dispatched_[sid];
-    shard_set->Add(sid, [&sd, &bc]() mutable {
-      auto t = [](ShardDispatch& sd,
-                  BlockingCounter& bc) -> cppcoro::AsyncTask {
+    shard_set->Add(sid, [this, sid, &sd, &bc]() mutable {
+      auto t = [](ShardDispatch& sd, dfly::BlockingCounter& bc,
+                  const Namespace* ns, DbIndex db,
+                  ShardId sid) -> cppcoro::AsyncTask {
         for (auto& e : sd.entries) {
-          // 每命令重绑回调：本分片共享一个回复构造器，把回复收集到当前 Entry。
-          sd.reply_builder.SetSendCallback(
-              [&e](std::string&& s) { e.replies.push_back(std::move(s)); });
-          CommandContext cmd_cntx(e.tx, e.cid, &sd.reply_builder);
+          if (!sd.local_tx)
+            sd.local_tx.reset(new Transaction(e.cid));
+          else
+            sd.local_tx->PrepareForReuse(e.cid);
+          sd.local_tx->InitByArgs(ns, db, e.args, e.key_index, sid);
+          sd.reply_builder.SetSendCallback([&e](std::vector<std::string>&& v) {
+            for (auto& s : v) e.replies.push_back(std::move(s));
+          });
+          CommandContext cmd_cntx(sd.local_tx, e.cid, &sd.reply_builder);
           co_await e.cid->Invoke(&cmd_cntx, e.args);
+          sd.reply_builder.Flush();
         }
         bc->Dec();
         co_return;
       };
-      t(sd, bc);
+      t(sd, bc, ns_, db_, sid);
     });
   }
   co_await bc->Wait();
@@ -94,6 +95,8 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
     auto& e = sd.entries[sd.reply_id++];
     for (auto& r : e.replies) send_rb_.SendRaw(std::move(r));
   }
+  // 整批回放只 Flush 一次：把一批回复用一次回调、一次任务队列入队发出去。
+  send_rb_.Flush();
 
   for (auto& sd : dispatched_) {
     sd.entries.clear();
@@ -105,14 +108,21 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
 
 cppcoro::task<void> PipelineSquasher::ExecuteStandalone(const QCmd& q) {
   ::cmn::CmdArgList args(q.args);
-  auto tx = std::make_shared<Transaction>(q.cid);
+  util::intrusive_ptr<Transaction> tx{
+      new Transaction(q.cid)};  // new 会抛异常，要注意一下
   tx->InitByArgs(ns_, db_, args);
   CommandContext cmd_cntx(tx, q.cid, &send_rb_);
   co_await q.cid->Invoke(&cmd_cntx, args);
+  send_rb_.Flush();
   co_return;
 }
 
 cppcoro::task<void> PipelineSquasher::Run(std::vector<QCmd>&& cmds) {
+  order_.reserve(cmds.size());
+  const size_t per_shard =
+      dispatched_.empty() ? 0 : cmds.size() / dispatched_.size();
+  for (auto& sd : dispatched_)
+    sd.entries.reserve(sd.entries.size() + per_shard);
   for (const QCmd& q : cmds) {
     if (TrySquash(q)) continue;
 
@@ -121,11 +131,6 @@ cppcoro::task<void> PipelineSquasher::Run(std::vector<QCmd>&& cmds) {
     // co_await SwitchToLoop();
   }
   co_await ExecuteSquashed();
-  co_await SwitchToLoop();
-  co_return;
-}
-
-cppcoro::task<void> PipelineSquasher::SwitchToLoop() {
   co_await LoopSwitch{proactor_};
   co_return;
 }

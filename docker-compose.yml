@@ -7,11 +7,23 @@ services:
       - "6379:6379"
     volumes:
       - ./logs:/app/logs
-    # 可以通过环境变量调整分片数量
-    # command: ["8"]
+    # io_uring 运行必需（否则容器内无法启动）：
+    # 1) 关闭 seccomp —— 默认 seccomp 会拦截 io_uring_setup，导致 EPERM；
+    # 2) 放开 memlock —— registered buffers（1024×16KB=16MB）需 pin 内存页，
+    #    Docker 默认 memlock 仅 64KB，会导致 io_uring_register_buffers 返回 ENOMEM。
+    security_opt:
+      - seccomp:unconfined
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    # 如需自定义分片数量，请修改 imdragonfly.conf 中的 "shards" 字段。
+    # 注意：不要用 command 覆盖默认的 --config 启动方式，否则会退回内置默认参数
+    # 并默认开启 RDB，性能下降。
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6379", "PING"]
+      # 运行镜像未安装 redis-cli，改用 bash 内建的 /dev/tcp 检测端口连通性
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6379 || exit 1'"]
       interval: 10s
       timeout: 3s
       retries: 3

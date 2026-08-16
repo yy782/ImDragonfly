@@ -121,14 +121,7 @@ facade::OpResult<DbSlice::ItAndUpdater> DbSlice::AddOrFindInternal(
     return OpStatus::WRONG_TYPE;
   }
   auto status = res.status();
-  PrimeIterator it;
-  try {
-    it = db.prime_.InsertNew(key, PrimeValue{});
-  } catch (std::bad_alloc& e) {
-    LOG(WARNING) << "AddOrFindInternal OOM for key, db_index:"
-                 << cntx.GetDbIndex() << " shard_id:" << shard_id_;
-    return OpStatus::WRONG_TYPE;
-  }
+  PrimeIterator it = db.prime_.InsertNew(key, PrimeValue{});
 
   (void)status;
 
