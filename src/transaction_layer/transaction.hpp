@@ -85,6 +85,12 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args);
 
+  // 全局事务（如 SAVE）：激活所有分片，配合分片锁使用。InitByArgs 对
+  // CO::GLOBAL_TRANS 命令自动调用；周期快照等场景可直接调用。
+  void InitGlobal();
+  void EnableAllShards();
+  bool IsGlobal() const { return global_; }
+
   cppcoro::AsyncTask SingleHopAsync(RunnableType cb,
                                     std::coroutine_handle<> handle);
 
@@ -195,6 +201,9 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   const Slice& GetSlice(ShardId sid) const { return key_slices_[SidToId(sid)]; }
 
   unsigned GetKeyNum() const { return kv_fp_.size(); }
+
+  // AOF 记录使用：完整命令参数（不含命令名）。
+  CmdArgList full_args() const { return full_args_; }
 
 #if !defined(NDEBUG) || defined(UNIT_TESTS)
   int id;
@@ -312,6 +321,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   uint32_t unique_shard_cnt_{0};
   ShardId unique_shard_id_{kInvalidSid};
+  bool global_ = false;
 
   uint8_t coordinator_state_ = 0;
 

@@ -32,6 +32,12 @@ def pytest_addoption(parser):
         default=False,
         help="运行 benchmark 测试",
     )
+    parser.addoption(
+        "--imdragonfly-bin",
+        action="store",
+        default="../../build/imdragonfly",
+        help="imdragonfly 服务器二进制路径 (默认: ../../build/imdragonfly)",
+    )
 
 
 def pytest_configure(config):

@@ -177,6 +177,7 @@ if "$VENV_DIR/bin/python" -m pytest \
     -v \
     --redis-host=127.0.0.1 \
     --redis-port="$PORT" \
+    --imdragonfly-bin="$IMDRAGONFLY_BIN" \
     --tb=short \
     --timeout=120; then
     TEST_EXIT_CODE=0

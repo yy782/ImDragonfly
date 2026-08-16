@@ -10,12 +10,16 @@
 #include <optional>
 
 #include "cmd_support.hpp"
+#include "detail/common.hpp"
 #include "network/redis_server.hpp"
 #include "sharding/db_slice.hpp"
+#include "sharding/engine_shard_set.hpp"
+#include "sharding/namespaces.hpp"
 #include "sharding/op_status.hpp"
 
 namespace dfly {
 using namespace dfly::cmd;
+
 facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
   uint32_t res = 0;
   auto& slice = tx->GetSlice(db_slice.shard_id());
@@ -218,7 +222,65 @@ CoroTask GenericFamily::Client_Info(CommandContext* cmd_cntx,
 }
 
 CoroTask GenericFamily::ShutDown(CommandContext*, CmdArgList) {
-  ser->Stop();
+  ser->MainProactor()->DispatchBrief([] {
+    LOG(INFO) << "[shutdown] ShutDown invoked";
+    ser->SaveAndStop();
+  });
+  co_return;
+}
+
+CoroTask CmdSave(CommandContext* cmd_cntx) {
+  LOG(INFO) << "[save] CmdSave invoked, dir=" << ser->data_dir();
+  std::atomic_bool all_ok{true};
+  auto cb = [&all_ok](Transaction* /*tx*/, EngineShard* es) {
+    LOG(INFO) << "[save] CmdSave callback on shard " << es->shard_id();
+    if (!RdbSerializer::SaveShard(es->shard_id(), ser->data_dir())) {
+      all_ok.store(false);
+    }
+    return true;
+  };
+  co_await cmd::SingleHopT(cb);
+  LOG(INFO) << "[save] CmdSave SingleHop done, all_ok=" << all_ok.load();
+  cmd_cntx->rb()->BuildSimpleString(all_ok.load() ? "OK"
+                                                  : "ERR RDB save failed");
+  co_return;
+}
+
+CoroTask GenericFamily::Save(CommandContext* cmd_cntx, CmdArgList /*args*/) {
+  return CmdSave(cmd_cntx);
+}
+
+CoroTask GenericFamily::Debug(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view sub = (args.size() > 1) ? std::string_view(args[1]) : "";
+  if (sub == "SHARD" || sub == "shard") {
+    size_t sc = shard_set->size();
+    std::string out;
+    for (size_t i = 2; i < args.size(); ++i) {
+      std::string_view key = args[i];
+      ShardId sid = Shard(key, static_cast<ssize_t>(sc));
+      LOG(INFO) << "[debug-shard] key='" << key << "' routes_to_shard=" << sid
+                << " (shard_count=" << sc << ")";
+      out += std::string(key) + "->shard" + std::to_string(sid) + " ";
+    }
+    cmd_cntx->rb()->BuildSimpleString(out.empty() ? "OK" : out);
+    co_return;
+  }
+  auto cb = [](Transaction* /*tx*/, EngineShard* es) {
+    ShardId sid = es->shard_id();
+    auto& ns = namespaces->GetDefaultNamespace();
+    auto& db_slice = ns.GetDbSlice(sid);
+    for (DbIndex dbid = 0; dbid < db_slice.DbCount(); ++dbid) {
+      db_slice.TraverseTable(
+          dbid, [&](const PrimeKey& key, const PrimeValue& /*val*/) {
+            std::string scratch;
+            LOG(INFO) << "[debug-db] shard=" << sid << " dbid=" << dbid
+                      << " key='" << key.GetSlice(&scratch) << "'";
+          });
+    }
+    return true;
+  };
+  co_await cmd::SingleHopT(cb);
+  cmd_cntx->rb()->BuildSimpleString("OK");
   co_return;
 }
 
@@ -229,21 +291,23 @@ CoroTask GenericFamily::ShutDown(CommandContext*, CmdArgList) {
 using CI = CommandId;
 void GenericFamily::Register(CommandRegistry* registry) {
   registry->StartFamily();
-  *registry << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
-            << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-                   &GenericFamily::Ping)
-            << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(
-                   &GenericFamily::Exists)
-            << CI{"EXPIRE", 0, 1, 1}.SetHandler(&GenericFamily::Expire)
-            << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(
-                   &GenericFamily::ExpireTime)
-            << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
-            << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-                   &GenericFamily::Client_Info)
-            << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-                   &GenericFamily::Client_Info)
-            << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-                   &GenericFamily::ShutDown);
+  *registry
+      << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
+      << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+             &GenericFamily::Ping)
+      << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(&GenericFamily::Exists)
+      << CI{"EXPIRE", CO::JOURNALED, 1, 1}.SetHandler(&GenericFamily::Expire)
+      << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(
+             &GenericFamily::ExpireTime)
+      << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
+      << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+             &GenericFamily::Client_Info)
+      << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+             &GenericFamily::Client_Info)
+      << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
+             &GenericFamily::ShutDown)
+      << CI{"SAVE", CO::GLOBAL_TRANS, 0, 0}.SetHandler(&GenericFamily::Save)
+      << CI{"DEBUG", CO::GLOBAL_TRANS, 0, -1}.SetHandler(&GenericFamily::Debug);
 }
 
 void RegisterGeneric(CommandRegistry* registry) {

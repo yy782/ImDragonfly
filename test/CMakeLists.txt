@@ -11,6 +11,7 @@ add_executable(unit_tests
     compact_obj_test.cpp
     op_status_test.cpp
     parse_resp_test.cpp
+    rdb_serializer_test.cpp
     reply_builder_test.cpp
     skiplist_test.cpp
     string_or_view_test.cpp

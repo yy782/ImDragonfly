@@ -2,14 +2,25 @@
 #include <glog/logging.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
+#include <atomic>
+#include <cerrno>
+#include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "command_layer/command_families.hpp"
 #include "command_layer/command_registry.hpp"
+#include "command_layer/generic_family.hpp"
 #include "command_layer/multi_family.hpp"
 #include "detail/conn_context.hpp"
 #include "net/fd_wrapper.hpp"
@@ -17,12 +28,14 @@
 #include "net/uring_proactor_pool.hpp"
 #include "net/uring_socket.hpp"
 #include "network/pipeline_squasher.hpp"
+#include "persistence/rdb_serializer.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
+#include "util/synchronization.hpp"
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
@@ -51,12 +64,11 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
           [self, s = std::move(s)]() mutable { self->SendImp(std::move(s)); });
     };
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
-    // 一次构造、连接生命周期内复用：避免每批命令都重建
-    // dispatched_ 数组（按 shard 数 resize）与 ReplyBuilder 回调。
+
     squasher_.Init(context_.GetNamespace(), context_.GetDbIndex(), send_cb_,
                    socket_.Proactor().get());
   }
-  // 不打算实现持久化，MUTLI,EXEC等实现以后完成
+  // ，MUTLI,EXEC等实现以后完成
   // 目前DashTable,事务调度，协程，SIMD，以及各种第三方boost,function_base都够吃一壶的了
   // 一个人开发难度大，AI还看不懂代码
   cppcoro::AsyncTask DoRead() {
@@ -201,11 +213,12 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
 class RedisServer {
  public:
-  RedisServer(int listenFd, uint32_t size)
+  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true)
       : main_proactor_(std::make_shared<base::UringProactor>(
             CreateOptimizedRedisConfig())),
         pool_(size, CreateOptimizedRedisConfig()),
-        ListenSocket_(main_proactor_, listenFd) {
+        ListenSocket_(main_proactor_, listenFd),
+        enable_rdb_(enable_rdb) {
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
@@ -251,6 +264,16 @@ class RedisServer {
     sleep(1);
     shard_set = new EngineShardSet(&pool_);
     shard_set->Init(pool_.size());
+
+    if (enable_rdb_) {
+      if (mkdir(data_dir_.c_str(), 0755) != 0 && errno != EEXIST) {
+        LOG(ERROR) << "Failed to create rdb dir " << data_dir_ << ": "
+                   << strerror(errno);
+      }
+      LoadPersistentData();
+      StartPeriodicSnapshot();
+    }
+
     main_proactor_->DispatchBrief([this] {
       LOG(INFO) << "Starting ListenSocket...";
       listen();
@@ -259,12 +282,62 @@ class RedisServer {
   }
 
   void Stop() {
-    pool_.stop();
-    main_proactor_->Shutdown();
-    isRuning = false;
     if (shard_set) {
       shard_set->Shutdown();
     }
+    pool_.stop();
+    main_proactor_->Shutdown();
+    isRuning = false;
+  }
+
+  void SaveAndStop() {
+    if (enable_rdb_ && isRuning && shard_set) {
+      std::string dir = data_dir_;
+      shard_set->RunBlockingInParallel([&dir](EngineShard* es) {
+        RdbSerializer::SaveShard(es->shard_id(), dir);
+      });
+    }
+    Stop();
+  }
+
+  std::string_view data_dir() const { return data_dir_; }
+
+  base::UringProactorPtr MainProactor() { return main_proactor_; }
+
+ private:
+  void LoadPersistentData() {
+    std::atomic_bool rdb_ok{true};
+    std::string dir = data_dir_;
+    shard_set->RunBlockingInParallel([&rdb_ok, &dir](EngineShard* es) {
+      if (!RdbSerializer::LoadShard(es->shard_id(), dir)) {
+        rdb_ok.store(false);
+      }
+    });
+    if (!rdb_ok.load()) {
+      LOG(ERROR)
+          << "RDB load failed: refusing to load, starting with empty data";
+    }
+  }
+
+  void StartPeriodicSnapshot() {
+    main_proactor_->DispatchBrief([this] {
+      auto snapshot_task = [this]() -> cppcoro::AsyncTask {
+        auto* cid = CIs->Find("SAVE");
+        ReplyBuilder rb;
+        rb.SetSendCallback([](std::string&&) {});
+        while (true) {
+          co_await main_proactor_->ArmPeriodicTimer(kSnapshotIntervalMs);
+          auto txn = std::make_shared<Transaction>(cid);
+          std::vector<std::string_view> save_args = {"SAVE"};
+          txn->InitByArgs(&namespaces->GetDefaultNamespace(), 0,
+                          ::cmn::CmdArgList(save_args));
+          CommandContext cmd_cntx(txn, cid, &rb);
+          co_await cid->Invoke(&cmd_cntx, ::cmn::CmdArgList(save_args));
+        }
+        co_return;
+      };
+      snapshot_task();
+    });
   }
 
  private:
@@ -307,6 +380,10 @@ class RedisServer {
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
   bool isRuning = false;
+
+  bool enable_rdb_{true};
+  std::string data_dir_{"./.rdb"};
+  static constexpr uint64_t kSnapshotIntervalMs = 3'000;
 };
 
 }  // namespace dfly

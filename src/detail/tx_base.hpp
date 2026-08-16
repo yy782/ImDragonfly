@@ -81,7 +81,7 @@ struct KeyIndex {
            std::views::transform([s, st](unsigned i) { return s + i * st; });
   }
 
-  auto Range(const cmn::ArgSlice& args) const {
+  auto Range(const ::cmn::ArgSlice& args) const {
     unsigned s = start, st = step;  // 由ASAN报告，2026.7.30 -- 1 修改
     return std::views::iota(0u, NumArgs()) |
            std::views::transform([s, st](unsigned i) { return s + i * st; }) |

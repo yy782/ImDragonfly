@@ -40,6 +40,10 @@ class EngineShard {
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }
 
+  // 分片级锁：全局事务（如 SAVE）在调度入队时获取，保证与其它全局事务
+  // 互斥；concluding hop 结束时释放。
+  IntentLock* shard_lock() { return &shard_lock_; }
+
   size_t committed_txid() const { return committed_txid_; }
 #ifdef UNIT_TESTS
   size_t& committed_txid() { return committed_txid_; }
@@ -52,6 +56,7 @@ class EngineShard {
   MiMemoryResource mi_resource_;
   static thread_local EngineShard* shard_;
   TxQueue txq_;
+  IntentLock shard_lock_;
 
   size_t committed_txid_ = 0;
 };

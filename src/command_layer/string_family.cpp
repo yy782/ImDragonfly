@@ -3,6 +3,8 @@
 //
 
 #include <glog/logging.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -199,6 +201,10 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
                 Transaction* t,
                 EngineShard* shard) -> OpResult<SetCmd::SetResult> {
     DCHECK_EQ(EngineShard::tlocal()->shard_id(), shard->shard_id());
+    auto& db_slice = t->GetDbSlice(shard->shard_id());
+    LOG(INFO) << "[set-write] shard=" << shard->shard_id()
+              << " dbslice=" << (void*)&db_slice << " dbind=" << t->GetDbIndex()
+              << " key='" << key << "' tid=" << syscall(SYS_gettid);
     return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
   };
 
@@ -218,11 +224,17 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [&args](Transaction* tx, EngineShard* es) -> OpResult<void> {
     auto& slice = tx->GetSlice(es->shard_id());
+    auto& db_slice = tx->GetDbSlice(es->shard_id());
+    LOG(INFO) << "[mget-write] shard=" << es->shard_id()
+              << " dbslice=" << (void*)&db_slice
+              << " dbind=" << tx->GetDbIndex()
+              << " tid=" << syscall(SYS_gettid);
     for (const auto& [key, keyId] : slice) {
+      LOG(INFO) << "[mget-write-key] shard=" << es->shard_id() << " key='"
+                << key << "'";
       auto& value = args[keyId + 1];
       auto it_res =
-          tx->GetDbSlice(es->shard_id())
-              .AddOrUpdate(tx->GetDbContext(), key, PrimeValue{value}, 0);
+          db_slice.AddOrUpdate(tx->GetDbContext(), key, PrimeValue{value}, 0);
       if (it_res.status() != facade::OpStatus::OK) {
         // TODO
       }

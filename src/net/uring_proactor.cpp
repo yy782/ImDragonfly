@@ -256,6 +256,23 @@ IoAwaitable UringProactor::AsyncSendV(int fd, const struct msghdr* msg) {
   return IoAwaitable(this, slot_idx);
 }
 
+IoAwaitable UringProactor::ArmPeriodicTimer(uint64_t interval_ms) {
+  uint32_t ud = AllocSlot();
+  uint32_t slot_idx = ud & slot_mask_;
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  __kernel_timespec ts{
+      static_cast<__kernel_time64_t>(interval_ms / 1000),
+      static_cast<__kernel_time64_t>(interval_ms % 1000) * 1000000};
+  io_uring_prep_timeout(sqe, &ts, 0, 0);
+  sqe->user_data = ud;
+  io_uring_submit(&ring_);  // ts 此刻仍在栈上，内核提交时读到有效值
+  pending_sqes_ = 0;
+  LOG(INFO) << "[timer] ArmPeriodicTimer armed slot=" << slot_idx
+            << " interval_ms=" << interval_ms;
+  return IoAwaitable(this, slot_idx);
+}
+
 int UringProactor::AcquireRegBuf() {
   int re = next_buf_;
   if (re < 0 || re >= static_cast<int>(reg_bufs_.size())) {

@@ -9,7 +9,7 @@
 
 namespace dfly {
 
-using cmn::CmdArgList;
+using ::cmn::CmdArgList;
 
 namespace cmd {
 struct CoroTask;
@@ -41,6 +41,13 @@ class GenericFamily {  // 通用命令家族，处理 Redis 通用命令
 
   static cmd::CoroTask Client_Info(CommandContext* cmd_cntx, CmdArgList args);
   static cmd::CoroTask ShutDown(CommandContext* cmd_cntx, CmdArgList args);
+
+  // 处理 SAVE 命令：触发一次全量 RDB 快照。
+  static cmd::CoroTask Save(CommandContext* cmd_cntx, CmdArgList args);
+
+  // 调试命令：DEBUG SHARD <key...> 打印每个 key 的路由分片；
+  // DEBUG DB 遍历全部分片把实际存在的 key 打到日志。
+  static cmd::CoroTask Debug(CommandContext* cmd_cntx, CmdArgList args);
 };
 
 }  // namespace dfly
