@@ -4,6 +4,7 @@
 #include "transaction_layer/transaction.hpp"
 
 #include <bitset>
+#include <latch>
 
 #include "network/redis_server.hpp"
 
@@ -49,8 +50,29 @@ OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
   OpResult<KeyIndex> key_index = DetermineKeys(cid_, args);
   if (!key_index) return key_index.status();
 
+  // 全局事务（如 SAVE）：激活所有分片，无 key、无 key 锁，
+  // 由 ScheduleInShard 在每分片 shard_lock() 上获取分片锁。
+  if (cid_->opt_mask() & CO::GLOBAL_TRANS) {
+    InitGlobal();
+    return OpStatus::OK;
+  }
+
   InitByKeys(*key_index);
   return OpStatus::OK;
+}
+
+void Transaction::InitGlobal() {
+  global_ = true;
+  EnableAllShards();
+}
+
+void Transaction::EnableAllShards() {
+  unique_shard_cnt_ = shard_set->size();
+  unique_shard_id_ = unique_shard_cnt_ == 1 ? 0 : kInvalidSid;
+  shard_data_.resize(unique_shard_cnt_);
+  for (auto& sd : shard_data_) {
+    sd.local_mask |= ACTIVE;
+  }
 }
 
 void Transaction::InitBase(const Namespace* ns, DbIndex dbid, CmdArgList args) {
@@ -362,7 +384,11 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   if (txid_ > 0 && shard->committed_txid() >= txid_) return false;
 
   auto release_fp_locks = [&]() {
-    GetDbSlice(shard->shard_id()).Release(mode, lock_args);
+    if (IsGlobal()) {
+      shard->shard_lock()->Release(mode);
+    } else {
+      GetDbSlice(shard->shard_id()).Release(mode, lock_args);
+    }
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
     VLOG(4) << "LOCK 释放, 在分片:" << shard->shard_id()
             << " 由回调release_fp_locks清理";
@@ -370,7 +396,12 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
   lock_args = GetLockArgs(shard->shard_id());
   const bool keys_unlocked =
       GetDbSlice(shard->shard_id()).Acquire(mode, lock_args);
-  lock_granted = keys_unlocked;
+  // 全局事务无 key，lock_granted 取决于分片锁是否无竞争获取成功。
+  bool shard_unlocked = true;
+  if (IsGlobal()) {
+    shard_unlocked = shard->shard_lock()->Acquire(mode);
+  }
+  lock_granted = keys_unlocked && shard_unlocked;
 
   sd.local_mask |= KEYLOCK_ACQUIRED;
   VLOG(4) << "LOCK 获取, 在分片:" << shard->shard_id();
@@ -464,11 +495,15 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
     sd.pq_pos = TxQueue::kEnd;
   }
   if (is_concluding) {
-    KeyLockArgs largs;
-    largs = GetLockArgs(idx);
     VLOG(4) << "准备清理lock, 分片:" << shard->shard_id();
     DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-    GetDbSlice(shard->shard_id()).Release(mode, largs);
+    if (IsGlobal()) {
+      shard->shard_lock()->Release(mode);
+    } else {
+      KeyLockArgs largs;
+      largs = GetLockArgs(idx);
+      GetDbSlice(shard->shard_id()).Release(mode, largs);
+    }
     sd.local_mask &= ~KEYLOCK_ACQUIRED;
     sd.local_mask &= ~OUT_OF_ORDER;
   }
@@ -509,8 +544,12 @@ bool Transaction::CancelShardCb(EngineShard* shard) {
   txq->Pop(q_pos);
   auto lock_args = GetLockArgs(shard->shard_id());
   DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-  DCHECK(!lock_args.fps.empty());
-  GetDbSlice(shard->shard_id()).Release(LockMode(), lock_args);
+  if (IsGlobal()) {
+    shard->shard_lock()->Release(LockMode());
+  } else {
+    DCHECK(!lock_args.fps.empty());
+    GetDbSlice(shard->shard_id()).Release(LockMode(), lock_args);
+  }
 
   sd.local_mask &= ~KEYLOCK_ACQUIRED;
   return was_head && !txq->Empty();

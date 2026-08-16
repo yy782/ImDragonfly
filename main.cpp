@@ -7,8 +7,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <string>
+#include <thread>
 
 #include "net/fd_wrapper.hpp"
 #include "src/network/redis_server.hpp"
@@ -44,15 +48,30 @@ int main(int argc, char *argv[]) {
     num = std::atoi(argv[1]);
   }
 
-  int listenFd = base::ListenFd();
+  // 端口由命令行指定：./imdragonfly [shards] [port]，默认 6379。
+  uint16_t port = 6379;
+  if (argc > 2) {
+    port = static_cast<uint16_t>(std::atoi(argv[2]));
+  }
+
+  bool enable_rdb = true;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--no-rdb" || arg == "--no-snapshot") {
+      enable_rdb = false;
+    }
+  }
+
+  int listenFd = base::ListenFd(port);
   if (listenFd < 0) {
     LOG(ERROR) << "Failed to create listen socket";
     google::ShutdownGoogleLogging();
     return 1;
   }
 
-  RedisServer server(listenFd, num);
-  LOG(INFO) << "RedisServer initialized with " << num << " shards";
+  RedisServer server(listenFd, num, enable_rdb);
+  LOG(INFO) << "RedisServer initialized with " << num << " shards"
+            << ", rdb=" << (enable_rdb ? "on" : "off");
   server.Start();
 
   LOG(INFO) << "ImDragonfly server shutting down...";

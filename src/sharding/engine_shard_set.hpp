@@ -4,6 +4,8 @@
 
 #pragma once
 #include <glog/logging.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <latch>
 #include <memory>
@@ -52,7 +54,7 @@ class EngineShardSet {
     for (uint32_t i = 0; i < size(); ++i) {
       if (!pred(i)) continue;
       auto dest = pp_->at(i);
-      dest->DispatchBrief([&func, &latch]() mutable {
+      dest->DispatchBrief([&func, &latch, i]() mutable {
         func(EngineShard::tlocal());
         latch.count_down();
       });

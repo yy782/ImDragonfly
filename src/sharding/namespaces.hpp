@@ -41,6 +41,17 @@ class Namespaces {
   Namespace& GetDefaultNamespace() const;  // No locks 专用方法（无锁，高性能）
   Namespace& GetOrInsert(std::string_view ns);  // 方式2：用空字符串获取
 
+  // 持读锁遍历全部 namespace（含默认命名空间，名为空串），回调收到
+  // (ns_name, Namespace&)。调用方不得在回调内再对 namespaces 加写锁
+  // （如 GetOrInsert），否则死锁。
+  template <typename F>
+  void ForEach(F&& f) {
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    for (auto& [name, ns] : namespaces_) {
+      f(name, ns);
+    }
+  }
+
  private:
   std::shared_mutex rw_mutex_;
   std::unordered_map<std::string, Namespace> namespaces_;

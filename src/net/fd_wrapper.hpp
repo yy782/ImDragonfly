@@ -9,7 +9,9 @@
 #include <iostream>
 namespace base {
 
-inline int ListenFd() {
+// port: 监听端口，默认 6379，可由命令行参数覆盖（./imdragonfly <shards>
+// <port>）。
+inline int ListenFd(uint16_t port = 6379) {
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd == -1) {
     perror("socket");
@@ -33,7 +35,7 @@ inline int ListenFd() {
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(6379);
+  addr.sin_port = htons(port);
 
   if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
     perror("bind");

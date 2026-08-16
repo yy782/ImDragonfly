@@ -98,6 +98,12 @@ class UringProactor {
   // 数据），典型场景为调用方协程帧内的局部变量（挂起期间帧保活）。
   IoAwaitable AsyncSendV(int fd, const struct msghdr* msg);
 
+  // 协程式一次性超时：co_await 返回的 IoAwaitable 时注册一次 IORING_TIMEOUT，
+  // CQE 到点走通用 slot 恢复路线（generation 校验 + resume 协程）。每次
+  // co_await 注册一次，周期性由调用方循环实现。必须在本 proactor 的事件
+  // 循环线程上调用（SINGLE_ISSUER 语义），协程被 CQE resume 后自然满足。
+  IoAwaitable ArmPeriodicTimer(uint64_t interval_ms);
+
   int PollOnce(unsigned min_cqe = 1, unsigned timeout_ms = 0);
   void Run();
   void Shutdown() noexcept;
