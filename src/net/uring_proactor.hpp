@@ -20,10 +20,6 @@ struct UringConfig {
   bool use_single_issuer = true;
   bool use_sqpoll = false;
   uint32_t sqpoll_idle_ms = 1000;
-  bool use_registered_bufs = true;
-  // 为减少代码复杂度简化设计了，这里false就UB，目前实现只能使用缓冲区注册，
-  // todo 删了 bool use_registered_bufs 直接走true分支
-  // 这是一个事务调度和存储为核心的作品，网络层要完整实现要写网络库了，目前的代码量已经很大了
   int registered_buf_count = 256;
   // 这里应该要应用层自己感知，一个事件循环只能注册那么多连接，需要多少缓冲区应用层决定
   int registered_buf_size = 65536;
@@ -31,6 +27,7 @@ struct UringConfig {
   int task_queue_size = 1024;
   uint32_t sqe_batch_size = 32;
   int poll_timeout_ms = 1;  // Run() 每轮 PollOnce 的等待超时
+  int poll_min_cqe = 1;  // Run() 每轮 PollOnce 期望至少完成的 CQE 数
 };
 
 class UringProactor;

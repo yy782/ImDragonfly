@@ -59,9 +59,7 @@ UringProactor::UringProactor(UringConfig cfg, int pool_index)
 
   InitRing();
 
-  if (config_.use_registered_bufs) {
-    InitRegisteredBuffers();
-  }
+  InitRegisteredBuffers();
 }
 
 UringProactor::~UringProactor() {
@@ -106,8 +104,7 @@ void UringProactor::InitRing() {
   LOG(INFO) << "Proactor ring: depth=" << config_.queue_depth
             << " defer_tw=" << config_.use_defer_taskrun
             << " single_issuer=" << config_.use_single_issuer
-            << " sqpoll=" << config_.use_sqpoll
-            << " reg_bufs=" << config_.use_registered_bufs;
+            << " sqpoll=" << config_.use_sqpoll;
 }
 
 void UringProactor::InitRegisteredBuffers() {
@@ -129,16 +126,11 @@ void UringProactor::InitRegisteredBuffers() {
   reg_bufs_[reg_buf_count_ - 1].next = -1;
 
   int ret = io_uring_register_buffers(&ring_, iovecs.data(), iovecs.size());
-  if (ret < 0) {
-    LOG(WARNING) << "io_uring_register_buffers failed: " << -ret
-                 << ", falling back to standard recv";
-    config_.use_registered_bufs = false;
-    reg_bufs_.clear();
-    reg_buf_count_ = 0;
-  } else {
-    LOG(INFO) << "Registered " << reg_buf_count_ << " fixed buffers ("
-              << config_.registered_buf_size << "B each)";
-  }
+  // 读路径固定走 AsyncRecvFixed（直接索引 reg_bufs_），没有标准 recv 回退，
+  // 注册失败会让后续读取越界，故直接失败而非回退。
+  CHECK_GE(ret, 0) << "io_uring_register_buffers failed: " << -ret;
+  LOG(INFO) << "Registered " << reg_buf_count_ << " fixed buffers ("
+            << config_.registered_buf_size << "B each)";
 }
 
 uint32_t UringProactor::AllocSlot() {
@@ -375,8 +367,8 @@ void UringProactor::Run() {
   while (!shutdown_) {
     task_queue_.TryDrain();
 
-    int processed = PollOnce(
-        1, config_.poll_timeout_ms);  // todo 这里的 1 应该外面决定，用config_
+    int processed = PollOnce(static_cast<unsigned>(config_.poll_min_cqe),
+                             static_cast<unsigned>(config_.poll_timeout_ms));
 
     if (processed < 0) {
       LOG(ERROR) << "Proactor poll error: " << -processed;

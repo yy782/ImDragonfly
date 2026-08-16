@@ -35,6 +35,7 @@
 #include "sharding/namespaces.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
+#include "util/json_config.hpp"
 #include "util/synchronization.hpp"
 namespace dfly {
 
@@ -213,12 +214,15 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
 class RedisServer {
  public:
-  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true)
+  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true,
+              const util::JsonConfig* config = nullptr)
       : main_proactor_(std::make_shared<base::UringProactor>(
-            CreateOptimizedRedisConfig())),
-        pool_(size, CreateOptimizedRedisConfig()),
+            CreateOptimizedRedisConfig(config))),
+        pool_(size, CreateOptimizedRedisConfig(config)),
         ListenSocket_(main_proactor_, listenFd),
-        enable_rdb_(enable_rdb) {
+        enable_rdb_(config ? config->GetBool("enable_rdb", enable_rdb)
+                           : enable_rdb),
+        data_dir_(config ? config->GetString("data_dir", "./.rdb") : "./.rdb") {
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
@@ -230,20 +234,47 @@ class RedisServer {
     ser = this;
   }
 
-  static base::UringConfig CreateOptimizedRedisConfig() {
-    // TODO 改用文件读取配置更好
-    // 应用层必须保证目前有多少连接在使用，这样可以使用io_uring的注册缓冲区，性能更好,不然连接超过registered_buf_count就UB了
+  // 有配置文件则从文件读取，否则使用内置默认值。
+  // 应用层必须保证连接数不超过 registered_buf_count，
+  // 否则 io_uring 注册缓冲区的读路径会越界（UB）。
+  static base::UringConfig CreateOptimizedRedisConfig(
+      const util::JsonConfig* cfg = nullptr) {
     base::UringConfig config;
     config.queue_depth = 4096;
     config.use_defer_taskrun = true;
     config.use_single_issuer = true;
     config.use_sqpoll = false;
-    config.use_registered_bufs = true;
     config.registered_buf_count = 1024;
     config.registered_buf_size = 4096;
     config.cqe_batch_size = 100;
     config.task_queue_size = 16384;  // 要求2的幂
     config.sqe_batch_size = 32;
+
+    if (!cfg) return config;
+
+    config.queue_depth =
+        static_cast<int>(cfg->GetInt("queue_depth", config.queue_depth));
+    config.use_defer_taskrun =
+        cfg->GetBool("use_defer_taskrun", config.use_defer_taskrun);
+    config.use_single_issuer =
+        cfg->GetBool("use_single_issuer", config.use_single_issuer);
+    config.use_sqpoll = cfg->GetBool("use_sqpoll", config.use_sqpoll);
+    config.sqpoll_idle_ms = static_cast<uint32_t>(
+        cfg->GetInt("sqpoll_idle_ms", config.sqpoll_idle_ms));
+    config.registered_buf_count = static_cast<int>(
+        cfg->GetInt("registered_buf_count", config.registered_buf_count));
+    config.registered_buf_size = static_cast<int>(
+        cfg->GetInt("registered_buf_size", config.registered_buf_size));
+    config.cqe_batch_size =
+        static_cast<int>(cfg->GetInt("cqe_batch_size", config.cqe_batch_size));
+    config.task_queue_size = static_cast<int>(
+        cfg->GetInt("task_queue_size", config.task_queue_size));
+    config.sqe_batch_size = static_cast<uint32_t>(
+        cfg->GetInt("sqe_batch_size", config.sqe_batch_size));
+    config.poll_timeout_ms = static_cast<int>(
+        cfg->GetInt("poll_timeout_ms", config.poll_timeout_ms));
+    config.poll_min_cqe =
+        static_cast<int>(cfg->GetInt("poll_min_cqe", config.poll_min_cqe));
     return config;
   }
 
