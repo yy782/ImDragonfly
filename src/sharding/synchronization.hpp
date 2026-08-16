@@ -1,290 +1,268 @@
-// // Copyright 2023, Roman Gershman.  All rights reserved.
-// // See LICENSE for licensing terms.
-// // synchronization
+// Copyright 2023, Roman Gershman.  All rights reserved.
+// See LICENSE for licensing terms.
+// synchronization
 
-// #pragma once
-// #include <atomic>
-// #include <cassert>
-// #include <condition_variable>  // for cv_status
-// #include <functional>
-// #include <mutex>
-// #include <optional>
+#pragma once
+#include <atomic>
+#include <cassert>
+#include <condition_variable>  // for cv_status
+#include <coroutine>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <vector>
 
-// #include "util/cppcoro/async_mutex.hpp"
-// #include "util/cppcoro/task.hpp"
-// #include "util/spinlock.hpp"
-// #include "wait_queue.hpp"
-// namespace dfly {
+#include "util/cppcoro/async_mutex.hpp"
+#include "util/cppcoro/task.hpp"
+#include "util/intrusive_ptr.hpp"
+#include "util/spinlock.hpp"
+#include "wait_queue.hpp"
+namespace dfly {
 
-// class EventCount {
-//  public:
-//   EventCount() noexcept : val_(0) {}
+class EventCount {
+ public:
+  EventCount() noexcept : val_(0) {}
 
-//   using cv_status = std::cv_status;
+  using cv_status = std::cv_status;
 
-//   class Key {
-//     friend class EventCount;
-//     EventCount* me_;
-//     uint32_t epoch_;
+  class Key {
+    friend class EventCount;
+    EventCount* me_;
+    uint32_t epoch_;
 
-//     explicit Key(EventCount* me, uint32_t e) noexcept : me_(me), epoch_(e) {}
+    explicit Key(EventCount* me, uint32_t e) noexcept : me_(me), epoch_(e) {}
 
-//     Key(const Key&) = delete;
+    Key(const Key&) = delete;
 
-//    public:
-//     Key(Key&& o) noexcept : me_{o.me_}, epoch_{o.epoch_} { o.me_ = nullptr;
-//     };
+   public:
+    Key(Key&& o) noexcept : me_{o.me_}, epoch_{o.epoch_} { o.me_ = nullptr; };
 
-//     ~Key() {
-//       if (me_ != nullptr)
-//         me_->val_.fetch_sub(kAddWaiter, std::memory_order_relaxed);
-//     }
+    ~Key() {
+      if (me_ != nullptr)
+        me_->val_.fetch_sub(kAddWaiter, std::memory_order_relaxed);
+    }
 
-//     uint32_t epoch() const { return epoch_; }
-//   };
+    uint32_t epoch() const { return epoch_; }
+  };
 
-//   bool notify() noexcept {
-//     return NotifyInternal(&detail::WaitQueue::NotifyOne);
-//   }
+  bool notify() noexcept;
+  bool notifyAll() noexcept;
 
-//   bool notifyAll() noexcept {
-//     return NotifyInternal(&detail::WaitQueue::NotifyAll);
-//   }
+  struct WaitAwaitable {
+    EventCount* event_;
+    uint32_t epoch_;
 
-//   struct WaitAwaitable {
-//     EventCount* event_;
-//     uint32_t epoch_;
+    bool SuspendWithResume = true;
+    detail::Waiter waiter{};
 
-//     bool SuspendWithResume = true;
-//     detail::Waiter waiter{};
+    bool await_ready() const noexcept { return false; }
+    bool await_suspend(std::coroutine_handle<> awaitingCoroutine) noexcept;
 
-//     bool await_ready() const noexcept { return false; }
-//     bool await_suspend(std::coroutine_handle<> awaitingCoroutine) noexcept {
-//       std::unique_lock lk(event_->lock_);
-//       if ((event_->val_.load(std::memory_order_relaxed) >>
-//            event_->kEpochShift) == epoch_) {
-//         waiter.handler = awaitingCoroutine;
-//         waiter.shard_id = EngineShard::tlocal()->shard_id();
-//         event_->wait_queue_.Link(&waiter);
-//         lk.unlock();
-//         SuspendWithResume = true;
-//       } else {
-//         SuspendWithResume = false;
-//         lk.unlock();
-//       }
-//       return SuspendWithResume;
-//     }
+    bool await_resume() { return SuspendWithResume; }
+  };
+  WaitAwaitable wait(uint32_t epoch) noexcept {
+    return WaitAwaitable{this, epoch};
+  }
 
-//     bool await_resume() { return SuspendWithResume; }
-//   };
-//   WaitAwaitable wait(uint32_t epoch) noexcept {
-//     return WaitAwaitable{this, epoch};
-//   }
+  template <typename Condition>
+  cppcoro::task<bool> await(Condition condition) {
+    if (condition()) {
+      std::atomic_thread_fence(std::memory_order_acquire);
+      co_return false;
+    }
+    bool preempt = false;
+    while (true) {
+      Key key = prepareWait();
+      if (condition()) {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        break;
+      }
+      preempt |= co_await wait(key.epoch());
+    }
+    co_return preempt;
+  }
 
-//   template <typename Condition>
-//   cppcoro::task<bool> await(Condition condition) {
-//     if (condition()) {
-//       std::atomic_thread_fence(std::memory_order_acquire);
-//       co_return false;
-//     }
-//     bool preempt = false;
-//     while (true) {
-//       Key key = prepareWait();
-//       if (condition()) {
-//         std::atomic_thread_fence(std::memory_order_acquire);
-//         break;
-//       }
-//       preempt |= co_await wait(key.epoch());
-//     }
-//     co_return preempt;
-//   }
+  Key prepareWait() noexcept {
+    uint64_t prev = val_.fetch_add(kAddWaiter, std::memory_order_acq_rel);
+    return Key(this, static_cast<uint32_t>(prev >> kEpochShift));
+  }
 
-//   Key prepareWait() noexcept {
-//     uint64_t prev = val_.fetch_add(kAddWaiter, std::memory_order_acq_rel);
-//     return Key(this, static_cast<uint32_t>(prev >> kEpochShift));
-//   }
+ private:
+  friend class Key;
 
-//  private:
-//   friend class Key;
+  EventCount(const EventCount&) = delete;
+  EventCount(EventCount&&) = delete;
+  EventCount& operator=(const EventCount&) = delete;
+  EventCount& operator=(EventCount&&) = delete;
 
-//   EventCount(const EventCount&) = delete;
-//   EventCount(EventCount&&) = delete;
-//   EventCount& operator=(const EventCount&) = delete;
-//   EventCount& operator=(EventCount&&) = delete;
+  std::atomic_uint64_t val_;
+  util::SpinLock lock_;
+  detail::WaitQueue wait_queue_;
+  static constexpr uint64_t kAddWaiter = 1ULL;
+  static constexpr size_t kEpochShift = 32;
+  static constexpr uint64_t kAddEpoch = 1ULL << kEpochShift;
+  static constexpr uint64_t kWaiterMask = kAddEpoch - 1;
+};
 
-//   bool NotifyInternal(bool (detail::WaitQueue::*f)()) noexcept {
-//     uint64_t prev = val_.fetch_add(kAddEpoch, std::memory_order_release);
-//     if (prev & kWaiterMask) {
-//       std::unique_lock lk(lock_);
-//       return (wait_queue_.*f)();
-//     }
-//     return false;
-//   }
-//   std::atomic_uint64_t val_;
-//   util::SpinLock lock_;
-//   detail::WaitQueue wait_queue_;
-//   static constexpr uint64_t kAddWaiter = 1ULL;
-//   static constexpr size_t kEpochShift = 32;
-//   static constexpr uint64_t kAddEpoch = 1ULL << kEpochShift;
-//   static constexpr uint64_t kWaiterMask = kAddEpoch - 1;
-// };
+template <typename Mutex>
+using LockGuard = std::lock_guard<Mutex>;
 
-// template <typename Mutex>
-// using LockGuard = std::lock_guard<Mutex>;
+class Mutex {
+ private:
+  cppcoro::async_mutex mtx_;
 
-// class Mutex {
-//  private:
-//   cppcoro::async_mutex mtx_;
+ public:
+  Mutex() = default;
+  ~Mutex() = default;
 
-//  public:
-//   Mutex() = default;
-//   ~Mutex() = default;
+  Mutex(Mutex const&) = delete;
+  Mutex& operator=(Mutex const&) = delete;
 
-//   Mutex(Mutex const&) = delete;
-//   Mutex& operator=(Mutex const&) = delete;
+  auto lock() { return mtx_.lock_async(); }
 
-//   auto lock() { return mtx_.lock_async(); }
+  bool try_lock() { return mtx_.try_lock(); }
 
-//   bool try_lock() { return mtx_.try_lock(); }
+  void unlock() { return mtx_.unlock(); }
+};
 
-//   void unlock() { return mtx_.unlock(); }
-// };
+class Done {
+ public:
+  enum DoneWaitDirective { AND_NOTHING = 0, AND_RESET = 1 };
 
-// class Done {
-//  public:
-//   enum DoneWaitDirective { AND_NOTHING = 0, AND_RESET = 1 };
+  Done() : impl_(new Impl) {}
+  ~Done() {}
 
-//   Done() : impl_(new Impl) {}
-//   ~Done() {}
+  void Notify() { impl_->Notify(); }
+  auto Wait(DoneWaitDirective reset = AND_NOTHING) {
+    return impl_->Wait(reset);
+  }
 
-//   void Notify() { impl_->Notify(); }
-//   auto Wait(DoneWaitDirective reset = AND_NOTHING) {
-//     return impl_->Wait(reset);
-//   }
+  void Reset() { impl_->Reset(); }
 
-//   void Reset() { impl_->Reset(); }
+ private:
+  class Impl {
+   public:
+    Impl() : ready_(false) {}
+    Impl(const Impl&) = delete;
+    void operator=(const Impl&) = delete;
 
-//  private:
-//   class Impl {
-//    public:
-//     Impl() : ready_(false) {}
-//     Impl(const Impl&) = delete;
-//     void operator=(const Impl&) = delete;
+    friend void intrusive_ptr_add_ref(Impl* done) noexcept {
+      done->use_count_.fetch_add(1, std::memory_order_relaxed);
+    }
 
-//     friend void intrusive_ptr_add_ref(Impl* done) noexcept {
-//       done->use_count_.fetch_add(1, std::memory_order_relaxed);
-//     }
+    friend void intrusive_ptr_release(Impl* impl) noexcept {
+      if (1 == impl->use_count_.fetch_sub(1, std::memory_order_release)) {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        delete impl;
+      }
+    }
 
-//     friend void intrusive_ptr_release(Impl* impl) noexcept {
-//       if (1 == impl->use_count_.fetch_sub(1, std::memory_order_release)) {
-//         std::atomic_thread_fence(std::memory_order_acquire);
-//         delete impl;
-//       }
-//     }
+    cppcoro::task<bool> Wait(DoneWaitDirective reset) {
+      auto res = co_await ec_.await(
+          [this] { return ready_.load(std::memory_order_acquire); });
+      if (reset == AND_RESET) ready_.store(false, std::memory_order_release);
+      co_return res;
+    }
+    void Notify() {
+      ready_.store(true, std::memory_order_release);
+      ec_.notify();
+    }
 
-//     cppcoro::task<bool> Wait(DoneWaitDirective reset) {
-//       auto res = co_await ec_.await(
-//           [this] { return ready_.load(std::memory_order_acquire); });
-//       if (reset == AND_RESET) ready_.store(false, std::memory_order_release);
-//       co_return res;
-//     }
-//     void Notify() {
-//       ready_.store(true, std::memory_order_release);
-//       ec_.notify();
-//     }
+    void Reset() { ready_ = false; }
 
-//     void Reset() { ready_ = false; }
+    bool IsReady() const { return ready_.load(std::memory_order_acquire); }
+    EventCount ec_;
+    std::atomic<std::uint32_t> use_count_{0};
+    std::atomic<bool> ready_;
+  };
+  using ptr_t = util::intrusive_ptr<Impl>;
+  ptr_t impl_;
+};
 
-//     bool IsReady() const { return ready_.load(std::memory_order_acquire); }
-//     EventCount ec_;
-//     std::atomic<std::uint32_t> use_count_{0};
-//     std::atomic<bool> ready_;
-//   };
-//   using ptr_t = util::intrusive_ptr<Impl>;
-//   ptr_t impl_;
-// };
+class EmbeddedBlockingCounter
+    : public util::intrusive_ref_counter<EmbeddedBlockingCounter,
+                                         util::thread_safe_counter> {
+ public:
+  EmbeddedBlockingCounter(unsigned start_count = 0)
+      : ec_{}, count_{start_count} {}
+  cppcoro::task<bool> Wait() {
+    uint64_t cnt;
+    co_await ec_.await(WaitCondition(&cnt));
+    co_return (cnt & kCancelFlag) == 0;
+  }
+  void Start(unsigned cnt) { count_.store(cnt, std::memory_order_relaxed); }
+  void Add(unsigned cnt = 1) {
+    count_.fetch_add(cnt, std::memory_order_relaxed);
+  }
+  void Dec() {
+    uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
+    if (prev == 1) ec_.notifyAll();
+  }
+  void Cancel() {
+    count_.fetch_or(kCancelFlag, std::memory_order_acq_rel);
+    ec_.notifyAll();
+  }
+  bool IsCompleted() const {
+    uint64_t v = 0;
+    bool result = WaitCondition(&v)();
+    if (result) std::atomic_thread_fence(std::memory_order_acquire);
+    return result;
+  }
 
-// class EmbeddedBlockingCounter {
-//  public:
-//   EmbeddedBlockingCounter(unsigned start_count = 0)
-//       : ec_{}, count_{start_count} {}
-//   cppcoro::task<bool> Wait() {
-//     uint64_t cnt;
-//     co_await ec_.await(WaitCondition(&cnt));
-//     co_return (cnt & kCancelFlag) == 0;
-//   }
-//   void Start(unsigned cnt) { count_.store(cnt, std::memory_order_relaxed); }
-//   void Add(unsigned cnt = 1) {
-//     count_.fetch_add(cnt, std::memory_order_relaxed);
-//   }
-//   void Dec() {
-//     uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
-//     if (prev == 1) ec_.notifyAll();
-//   }
-//   void Cancel() {
-//     count_.fetch_or(kCancelFlag, std::memory_order_acq_rel);
-//     ec_.notifyAll();
-//   }
-//   bool IsCompleted() const {
-//     uint64_t v = 0;
-//     bool result = WaitCondition(&v)();
-//     if (result) std::atomic_thread_fence(std::memory_order_acquire);
-//     return result;
-//   }
+  uint64_t GetCount() const { return count_.load(std::memory_order_relaxed); }
 
-//   uint64_t GetCount() const { return count_.load(std::memory_order_relaxed);
-//   }
+ private:
+  const uint64_t kCancelFlag = (1ULL << 63);
+  std::function<bool()> WaitCondition(uint64_t* cnt) const {
+    return [this, cnt]() -> bool {
+      *cnt = count_.load(std::memory_order_relaxed);
+      return *cnt == 0 || (*cnt & kCancelFlag);
+    };
+  }
 
-//  private:
-//   const uint64_t kCancelFlag = (1ULL << 63);
-//   std::function<bool()> WaitCondition(uint64_t* cnt) const {
-//     return [this, cnt]() -> bool {
-//       *cnt = count_.load(std::memory_order_relaxed);
-//       return *cnt == 0 || (*cnt & kCancelFlag);
-//     };
-//   }
+  EventCount ec_;
+  std::atomic<uint64_t> count_;
+};
 
-//   EventCount ec_;
-//   std::atomic<uint64_t> count_;
-// };
+class BlockingCounter {
+ public:
+  BlockingCounter(unsigned start_count = 0)
+      : counter_{new EmbeddedBlockingCounter(start_count)} {}
 
-// class BlockingCounter {
-//  public:
-//   BlockingCounter(unsigned start_count = 0)
-//       : counter_{std::make_shared<EmbeddedBlockingCounter>(start_count)} {}
+  EmbeddedBlockingCounter* operator->() { return counter_.get(); }
 
-//   EmbeddedBlockingCounter* operator->() { return counter_.get(); }
+ private:
+  util::intrusive_ptr<EmbeddedBlockingCounter> counter_;
+};
 
-//  private:
-//   std::shared_ptr<EmbeddedBlockingCounter> counter_;
-// };
+class ThreadEvent {
+ public:
+  void wait() {
+    std::unique_lock<std::mutex> lock(m_);
+    cv_.wait(lock,
+             [this] { return flag_.load(std::memory_order_acquire) > 0; });
 
-// class ThreadEvent {
-//  public:
-//   void wait() {
-//     std::unique_lock<std::mutex> lock(m_);
-//     cv_.wait(lock,
-//              [this] { return flag_.load(std::memory_order_acquire) > 0; });
+    flag_.fetch_sub(1, std::memory_order_release);
+  }
 
-//     flag_.fetch_sub(1, std::memory_order_release);
-//   }
+  void notify() {
+    flag_.fetch_add(1, std::memory_order_release);
+    cv_.notify_one();
+  }
 
-//   void notify() {
-//     flag_.fetch_add(1, std::memory_order_release);
-//     cv_.notify_one();
-//   }
+  void notifyAll() {
+    flag_.store(INT32_MAX, std::memory_order_release);
+    cv_.notify_all();
+  }
 
-//   void notifyAll() {
-//     flag_.store(INT32_MAX, std::memory_order_release);
-//     cv_.notify_all();
-//   }
+  void reset() { flag_.store(0, std::memory_order_release); }
 
-//   void reset() { flag_.store(0, std::memory_order_release); }
+ private:
+  std::mutex m_;
+  std::condition_variable cv_;
+  std::atomic<int32_t> flag_{0};
+};
 
-//  private:
-//   std::mutex m_;
-//   std::condition_variable cv_;
-//   std::atomic<int32_t> flag_{0};
-// };
-
-// }  // namespace dfly
+}  // namespace dfly

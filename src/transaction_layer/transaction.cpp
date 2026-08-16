@@ -20,12 +20,12 @@ std::atomic_uint64_t op_seq{1};
 constexpr size_t kTransSize [[maybe_unused]] = sizeof(Transaction);
 
 struct ScheduleContext {
-  std::shared_ptr<Transaction> trans;
+  util::intrusive_ptr<Transaction> trans;
   bool optimistic_execution = false;
 
   std::atomic_uint32_t fail_cnt{0};
 
-  ScheduleContext(std::shared_ptr<Transaction> t, bool optimistic)
+  ScheduleContext(util::intrusive_ptr<Transaction> t, bool optimistic)
       : trans(std::move(t)), optimistic_execution(optimistic) {}
 };
 
@@ -59,6 +59,45 @@ OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
 
   InitByKeys(*key_index);
   return OpStatus::OK;
+}
+
+// /*管道优化专用*/ 复用 PipelineSquasher 预计算的 KeyIndex 与分片，
+// 跳过重复的 DetermineKeys()（调用方已保证非全局事务、且 key 有效）。
+OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
+                                 CmdArgList args, const KeyIndex& key_index,
+                                 ShardId sid) {
+  InitBase(ns, index, args);
+
+  DCHECK_EQ(unique_shard_cnt_, 0u);
+  DCHECK(args_slices_.empty());
+  DCHECK(kv_fp_.empty());
+
+  InitByKeys(key_index, sid);
+  return OpStatus::OK;
+}
+
+// /*管道优化专用*/ 压缩器复用同一分片事务顺序执行多条命令。每条命令执行前
+// 调用本方法，重置上一条命令遗留的运行时状态，使 InitByArgs / SingleHopAsync
+// 可被安全重复调用，省去每条命令各分配一个 Transaction 对象的内存开销。
+void Transaction::PrepareForReuse(const CommandId* cid) {
+  DCHECK_EQ(blocking_count_, 0u);  // 上一条命令已执行完毕
+  DCHECK_EQ(run_barrier_->GetCount(), 0u);
+  cid_ = cid;
+  shard_data_.clear();
+  args_slices_.clear();
+  key_slices_.clear();
+  kv_fp_.clear();
+  cb_ptr_.reset();
+  txid_ = 0;
+  unique_shard_cnt_ = 0;
+  unique_shard_id_ = kInvalidSid;
+  global_ = false;
+  coordinator_state_ = 0;
+  owner_shard_id_ = kInvalidSid;
+  handle_ = {};
+  need_resume.store(false, std::memory_order_relaxed);
+  resume_count_.store(false, std::memory_order_relaxed);
+  InitTxTime();
 }
 
 void Transaction::InitGlobal() {
@@ -106,6 +145,12 @@ OpResult<KeyIndex> DetermineKeys(const CommandId* cid, CmdArgList args) {
 }
 
 void Transaction::InitByKeys(const KeyIndex& key_index) {
+  InitByKeys(key_index, kInvalidSid);
+}
+
+// /*管道优化专用*/ 单 key 路径复用外部预计算的分片 sid，跳过 Shard()
+// 哈希/取模。
+void Transaction::InitByKeys(const KeyIndex& key_index, ShardId sid) {
   if ((key_index.end - key_index.start) == 0)  // 不确定
     return;
   DCHECK_LT(key_index.start, full_args_.size());
@@ -113,9 +158,12 @@ void Transaction::InitByKeys(const KeyIndex& key_index) {
   if ((key_index.NumArgs() == 1)) {
     StoreKeysInArgs(key_index);
     unique_shard_cnt_ = 1;
-    string_view akey = full_args_[*key_index];
-
-    unique_shard_id_ = Shard(akey, shard_set->size());
+    if (sid == kInvalidSid) {
+      string_view akey = full_args_[*key_index];
+      unique_shard_id_ = Shard(akey, shard_set->size());
+    } else {
+      unique_shard_id_ = sid;
+    }
     shard_data_.resize(1);
     shard_data_[SidToId(unique_shard_id_)].local_mask |= ACTIVE;
     // 填充 key_slices_ 供回调中 GetSlice() 使用
@@ -256,22 +304,19 @@ cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
     CHECK_EQ(shard_data_.size(), 1u);
     shard_data_.front().is_armed.store(true, memory_order_relaxed);
     run_barrier_->Add(1);
-    auto shard_cb =
-        [self = shared_from_this()](std::string context =
-                                        "SingleHopAsync: not CanRunInlined") {
-          bool success =
-              self->ScheduleInShard(EngineShard::tlocal(), true, context);
-          CHECK(success);
-          if (self->shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
-            VLOG(4) << "SingleHopAsync OPTIMISTIC_EXECUTION";
-            self->run_barrier_->Dec();
-          } else {
-            EngineShard::tlocal()->PollExecution(self);
-          }
-        };
+    auto shard_cb = [self = intrusive_ptr_from_this()]() {
+      bool success = self->ScheduleInShard(EngineShard::tlocal(), true);
+      CHECK(success);
+      if (self->shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
+        VLOG(4) << "SingleHopAsync OPTIMISTIC_EXECUTION";
+        self->run_barrier_->Dec();
+      } else {
+        EngineShard::tlocal()->PollExecution(self);
+      }
+    };
     if (CanRunInlined()) {
       VLOG(4) << "SingleHopAsync CanRunInlined";
-      shard_cb("SingleHopAsync: CanRunInlined");
+      shard_cb();
 
     } else {
       VLOG(4) << "SingleHopAsync not CanRunInlined";
@@ -311,17 +356,15 @@ cppcoro::task<> Transaction::ScheduleInternal() {
       LOG(INFO) << " 事务 " << id << " 可以内联执行";
 #endif
       [[maybe_unused]] bool success =
-          ScheduleInShard(EngineShard::tlocal(), optimistic_exec,
-                          "ScheduleInternal:CanRunInlined");
+          ScheduleInShard(EngineShard::tlocal(), optimistic_exec);
       DCHECK(success);
       run_barrier_->Dec();
       break;
     }
-    ScheduleContext schedule_ctx{shared_from_this(), optimistic_exec};
+    ScheduleContext schedule_ctx{intrusive_ptr_from_this(), optimistic_exec};
     auto cb = [&schedule_ctx] {
       if (!schedule_ctx.trans->ScheduleInShard(
-              EngineShard::tlocal(), schedule_ctx.optimistic_execution,
-              "ScheduleInternal:cb")) {
+              EngineShard::tlocal(), schedule_ctx.optimistic_execution)) {
         schedule_ctx.fail_cnt.fetch_add(1, memory_order_relaxed);
       }
       schedule_ctx.trans->FinishHop();
@@ -345,7 +388,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
     atomic_bool should_poll_execution{false};
     run_barrier_->Start(unique_shard_cnt_);
 
-    auto cancel = [&, self = shared_from_this()](EngineShard* shard) {
+    auto cancel = [&, self = intrusive_ptr_from_this()](EngineShard* shard) {
       bool res = self->CancelShardCb(shard);
       if (res) {
         should_poll_execution.store(true, memory_order_relaxed);
@@ -367,8 +410,7 @@ cppcoro::task<> Transaction::ScheduleInternal() {
   co_return;
 }
 
-bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
-                                  std::string context) {
+bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
   ShardId sid = SidToId(shard->shard_id());
   auto& sd = shard_data_[sid];
 
@@ -393,7 +435,9 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
     VLOG(4) << "LOCK 释放, 在分片:" << shard->shard_id()
             << " 由回调release_fp_locks清理";
   };
-  lock_args = GetLockArgs(shard->shard_id());
+  lock_args = GetLockArgs(
+      shard
+          ->shard_id());  // 当分片的锁过多时可以选择直接加锁失败，入队，减少加锁循环开销
   const bool keys_unlocked =
       GetDbSlice(shard->shard_id()).Acquire(mode, lock_args);
   // 全局事务无 key，lock_granted 取决于分片锁是否无竞争获取成功。
@@ -414,7 +458,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
 #ifdef UNIT_TESTS
     LOG(INFO) << " 事务 " << id << " ScheduleInShard execute_optimistic ";
 #endif
-    RunCallback(shard, context);
+    RunCallback(shard);
     if (coordinator_state_ & COORD_CONCLUDING) {
       release_fp_locks();
       return true;
@@ -436,7 +480,7 @@ bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic,
 #ifdef UNIT_TESTS
   LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id() << " 入队";
 #endif
-  TxQueue::Iterator it = txq->Push(shared_from_this());
+  TxQueue::Iterator it = txq->Push(intrusive_ptr_from_this());
   DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
   sd.pq_pos = it;
   return true;
@@ -461,11 +505,11 @@ void Transaction::DispatchHop() {
   });
 
   if (CanRunInlined()) {
-    EngineShard::tlocal()->PollExecution(shared_from_this());
+    EngineShard::tlocal()->PollExecution(intrusive_ptr_from_this());
     return;
   }
 
-  auto poll_cb = [self = shared_from_this()] {
+  auto poll_cb = [self = intrusive_ptr_from_this()] {
     CHECK(self->namespace_ != nullptr);
     EngineShard::tlocal()->PollExecution(self);
   };
@@ -482,13 +526,13 @@ bool Transaction::CanRunInlined() const {
   return false;
 }
 
-bool Transaction::RunInShard(EngineShard* shard, std::string context) {
+bool Transaction::RunInShard(EngineShard* shard) {
   DCHECK_GT(txid_, 0u);
   unsigned idx = SidToId(shard->shard_id());
   auto& sd = shard_data_[idx];
 
   IntentLock::Mode mode = LockMode();
-  RunCallback(shard, context);
+  RunCallback(shard);
   bool is_concluding = coordinator_state_ & COORD_CONCLUDING;
   if (sd.pq_pos != TxQueue::kEnd) {
     shard->txq()->Pop(sd.pq_pos);
@@ -516,14 +560,11 @@ bool Transaction::RunInShard(EngineShard* shard, std::string context) {
   return is_concluding;
 }
 
-void Transaction::RunCallback(EngineShard* shard, std::string /*context*/) {
-  try {
-    (*cb_ptr_)(this, shard);
-    if (unique_shard_cnt_ == 1) {
-      cb_ptr_.reset();
-    }
-  } catch (std::exception& e) {
-    LOG(FATAL) << "Unexpected exception " << e.what();
+/*需要上下文调试时可以加context字段*/
+void Transaction::RunCallback(EngineShard* shard) {
+  (*cb_ptr_)(this, shard);
+  if (unique_shard_cnt_ == 1) {
+    cb_ptr_.reset();
   }
   VLOG(4) << "RunCallback!";
   if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {

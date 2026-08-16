@@ -3,14 +3,14 @@
 //
 #include "mi_memory_resource.hpp"
 
+#include <glog/logging.h>
 #include <sys/mman.h>
 namespace dfly {
-// #include "base/logging.h"
 
 void* MiMemoryResource::do_allocate(size_t size, size_t align) {
   void* res = mi_heap_malloc_aligned(heap_, size, align);
 
-  if (!res) throw std::bad_alloc{};
+  if (!res) LOG(FATAL) << "Out of memory";
 
   size_t delta = mi_usable_size(res);
 

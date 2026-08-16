@@ -32,19 +32,14 @@ class PipelineSquasher {
 
   PipelineSquasher() : ns_(nullptr), db_(0), proactor_(nullptr) {}
 
-  // 连接建立后一次性初始化（避免每批命令重建 dispatched_/ReplyBuilder）。
-  // 注意必须用 Init 而非"默认构造+移动赋值"：构造函数中 send_rb_ 的 lambda
-  // 捕获 this，移动赋值后 this 会指向已销毁的临时对象。
   void Init(const Namespace* ns, DbIndex db, SendCallback send_cb,
             base::UringProactor* proactor) {
     ns_ = ns;
     db_ = db;
-    send_cb_ = std::move(send_cb);
     proactor_ = proactor;
     DCHECK(shard_set);
     dispatched_.resize(shard_set->size());
-    send_rb_.SetSendCallback(
-        [this](std::string&& s) { send_cb_(std::move(s)); });
+    send_rb_.SetSendCallback(std::move(send_cb));
   }
 
   cppcoro::task<void> Run(std::vector<QCmd>&& cmds);
@@ -54,15 +49,26 @@ class PipelineSquasher {
     struct Entry {
       const CommandId* cid;
       ::cmn::CmdArgList args;  // 指向接收缓冲区
-      std::shared_ptr<Transaction> tx;
+      KeyIndex key_index;  // TrySquash 预计算，复用给 local_tx->InitByArgs
       std::vector<std::string> replies;
-      Entry(const CommandId* c, ::cmn::CmdArgList a,
-            std::shared_ptr<Transaction> t)
-          : cid(c), args(a), tx(std::move(t)) {}
+      Entry(const CommandId* c, ::cmn::CmdArgList a, KeyIndex ki)
+          : cid(c), args(a), key_index(ki) {}
+      Entry(const Entry&) = default;
+      Entry& operator=(const Entry&) = default;
+      Entry(Entry&&) = default;
+      Entry& operator=(Entry&&) = default;
     };
     std::vector<Entry> entries;
     size_t reply_id = 0;
     ReplyBuilder reply_builder;
+    // 复用同一 Transaction，省去每条命令各 new 一个事务对象的内存开销。
+    util::intrusive_ptr<Transaction> local_tx;
+
+    ShardDispatch() = default;
+    ShardDispatch(const ShardDispatch&) = default;
+    ShardDispatch& operator=(const ShardDispatch&) = default;
+    ShardDispatch(ShardDispatch&&) = default;
+    ShardDispatch& operator=(ShardDispatch&&) = default;
   };
 
   bool TrySquash(const QCmd& q);
@@ -72,7 +78,6 @@ class PipelineSquasher {
 
   const Namespace* ns_;
   DbIndex db_;
-  SendCallback send_cb_;
   ReplyBuilder send_rb_;
   base::UringProactor* proactor_;
 

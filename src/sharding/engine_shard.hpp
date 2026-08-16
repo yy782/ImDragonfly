@@ -12,6 +12,7 @@
 #include "detail/mi_memory_resource.hpp"
 #include "detail/tx_queue.hpp"
 #include "net/uring_proactor.hpp"
+#include "util/intrusive_ptr.hpp"
 #include "util/task_queue.hpp"
 
 namespace dfly {
@@ -35,7 +36,7 @@ class EngineShard {
   PMR_NS::memory_resource* memory_resource() { return &mi_resource_; }
   util::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }
 
-  void PollExecution(std::shared_ptr<Transaction> trans);
+  void PollExecution(util::intrusive_ptr<Transaction> trans);
 
   TxQueue* txq() { return &txq_; }
   const TxQueue* txq() const { return &txq_; }

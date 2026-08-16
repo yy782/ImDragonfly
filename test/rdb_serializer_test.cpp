@@ -35,6 +35,7 @@ namespace {
 cppcoro::AsyncTask RunCommand(dfly::CommandId* cid, CommandContext* cntx,
                               CmdArgList args) {
   co_await cid->Invoke(cntx, args);
+  cntx->rb()->Flush();
   co_return;
 }
 }  // namespace
@@ -88,12 +89,12 @@ class RdbSerializerTest : public ::testing::Test {
     std::string reply;
     std::atomic_bool done{false};
     ReplyBuilder rb;
-    rb.SetSendCallback([&](std::string&& s) {
-      reply = std::move(s);
+    rb.SetSendCallback([&](std::vector<std::string>&& v) {
+      if (!v.empty()) reply = std::move(v.back());
       done.store(true);
     });
 
-    auto tx = std::make_shared<Transaction>(cid);
+    auto tx = util::intrusive_ptr<Transaction>{new Transaction(cid)};
     tx->id = next_tx_id_.fetch_add(1);
     CommandContext cntx(tx, cid, &rb);
 

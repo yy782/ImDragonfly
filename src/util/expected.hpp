@@ -1,6 +1,7 @@
 #pragma once
+#include <glog/logging.h>
+
 #include <iostream>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 namespace util {
@@ -70,8 +71,8 @@ class expected {
   }
 
   expected(expected&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value&&
-          std::is_nothrow_move_constructible<E>::value)
+      std::is_nothrow_move_constructible<T>::value &&
+      std::is_nothrow_move_constructible<E>::value)
       : has_value_(other.has_value_) {
     if (has_value_) {
       new (&storage_.value) T(std::move(other.storage_.value));
@@ -96,8 +97,8 @@ class expected {
   }
 
   expected& operator=(expected&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value&&
-          std::is_nothrow_move_constructible<E>::value) {
+      std::is_nothrow_move_constructible<T>::value &&
+      std::is_nothrow_move_constructible<E>::value) {
     if (this != &other) {
       destroy();
       has_value_ = other.has_value_;
@@ -115,28 +116,28 @@ class expected {
 
   const T& value() const {
     if (!has_value_) {
-      throw std::runtime_error("expected has error_, not value");
+      LOG(FATAL) << "expected has error_, not value";
     }
     return storage_.value;
   }
 
   T& value() {  // 移动会更好吗
     if (!has_value_) {
-      throw std::runtime_error("expected has error_, not value");
+      LOG(FATAL) << "expected has error_, not value";
     }
     return storage_.value;
   }
 
   const E& error_() const {
     if (has_value_) {
-      throw std::runtime_error("expected has value, not error_");
+      LOG(FATAL) << "expected has value, not error_";
     }
     return storage_.error;
   }
 
   E& error() {
     if (has_value_) {
-      throw std::runtime_error("expected has value, not error_");
+      LOG(FATAL) << "expected has value, not error_";
     }
     return storage_.error;
   }
@@ -215,14 +216,14 @@ class expected<void, E> {
 
   const E& error() const {
     if (has_value_) {
-      throw std::runtime_error("expected has value, not error");
+      LOG(FATAL) << "expected has value, not error";
     }
     return storage_.error;
   }
 
   E& error() {
     if (has_value_) {
-      throw std::runtime_error("expected has value, not error");
+      LOG(FATAL) << "expected has value, not error";
     }
     return storage_.error;
   }

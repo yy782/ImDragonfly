@@ -36,10 +36,6 @@ struct IoCompletionSlot {
   std::coroutine_handle<> coro;
   int32_t result = 0;
   uint32_t flags = 0;
-  // 代际号：每次 AllocSlot 复用时递增。user_data 编码 (gen << slot_idx_bits_) |
-  // idx，ProcessCqe 据此丢弃"slot 已复用后迟到的旧 CQE"（幽灵 CQE），避免误
-  // resume 新操作协程或访问已清空 coro 的 slot。
-  uint32_t generation = 0;
 };
 
 class IoAwaitable {
@@ -146,9 +142,6 @@ class UringProactor {
   // 绝不循环覆盖在途操作，因此同一 slot 上不可能有多个未完成操作，
   // 幽灵 CQE（slot 复用后迟到的旧 CQE）在结构上不可能出现。
   std::vector<uint32_t> free_slots_;
-  uint32_t slot_mask_;
-  uint32_t slot_idx_bits_ =
-      0;  // slot 索引占用的位数，user_data 高位移 generation
   struct RegBufSlot {
     char* memory;
     int next = -1;

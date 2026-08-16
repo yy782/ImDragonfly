@@ -484,9 +484,9 @@ def test_concurrent_mset_mget(clean_redis, pytestconfig):
     # 测试服务端还是会崩溃，等完善调试工具再修(已解决，事务的生命周期问题)
     """多线程并发 MSET/MGET 测试.
 
-    3 个线程, 各用独立连接, 各执行 100 轮:
+    10 个线程, 各用独立连接, 各执行 100 轮:
       MSET 写入 10 个键 → MGET 读出 → 断言一致
-    共 3×100=300 轮, 每轮 10 个键, 合计 3000 次读写.
+    共 10×100=3000 轮, 每轮 10 个键, 合计 20000 次读写.
     """
     _, track = clean_redis
     host = pytestconfig.getoption("--redis-host")
@@ -510,7 +510,7 @@ def test_concurrent_mset_mget(clean_redis, pytestconfig):
             c.close()
         except Exception as e:
             errors.append(e)
-    ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
     for t in ts: t.start()
     deadline = time.time() + 60
     for t in ts:

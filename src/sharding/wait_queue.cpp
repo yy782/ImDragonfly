@@ -4,7 +4,6 @@
 
 #include "src/sharding/wait_queue.hpp"
 
-#include "src/sharding/engine_shard_set.hpp"
 namespace dfly {
 namespace detail {
 
@@ -15,28 +14,24 @@ void WaitQueue::Unlink(Waiter* waiter) {
   wait_list_.erase(it);
 }
 
-bool WaitQueue::NotifyOne() {
+bool WaitQueue::NotifyOne(Waiter*& out) {
   if (wait_list_.empty()) return false;
 
-  Waiter* waiter = &wait_list_.front();
-
+  out = &wait_list_.front();
   wait_list_.pop_front();
-
-  shard_set->Add(waiter->shard_id, [waiter]() { waiter->handler.resume(); });
   return true;
 }
 
-bool WaitQueue::NotifyAll() {
-  bool notified = false;
-  auto it = wait_list_.begin();
+bool WaitQueue::NotifyAll(std::vector<Waiter*>& out) {
+  if (wait_list_.empty()) return false;
 
+  auto it = wait_list_.begin();
   while (it != wait_list_.end()) {
     Waiter& waiter = *it;
     it = wait_list_.erase(it);
-    shard_set->Add(waiter.shard_id, [waiter]() { waiter.handler.resume(); });
-    notified = true;
+    out.push_back(&waiter);
   }
-  return notified;
+  return true;
 }
 
 }  // namespace detail

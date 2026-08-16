@@ -261,9 +261,10 @@ class intrusive_list {
   }
 
   static constexpr std::ptrdiff_t member_offset() noexcept {
-    return static_cast<std::ptrdiff_t>(
-        reinterpret_cast<const char*>(&(static_cast<T*>(nullptr)->*MemberPtr)) -
-        static_cast<const char*>(nullptr));
+    // 直接取成员相对空基址的偏移并转整数，避免与空指针做减法触发
+    // -Wnull-pointer-subtraction 警告（成员指针偏移计算等价于 offsetof）。
+    return reinterpret_cast<std::ptrdiff_t>(
+        &(static_cast<T*>(nullptr)->*MemberPtr));
   }
   static T* to_value(node_type* node) noexcept {
     return reinterpret_cast<T*>(reinterpret_cast<char*>(node) -

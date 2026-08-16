@@ -9,6 +9,9 @@
 
 namespace util {
 
+template <class T>
+class intrusive_ptr;
+
 struct thread_unsafe_counter {
   using type = unsigned int;
 };
@@ -58,6 +61,9 @@ class intrusive_ref_counter {
     return detail::counter_load(ref_count_);
   }
 
+  intrusive_ptr<T> intrusive_ptr_from_this() noexcept;
+  intrusive_ptr<const T> intrusive_ptr_from_this() const noexcept;
+
  protected:
   intrusive_ref_counter() noexcept = default;
   intrusive_ref_counter(const intrusive_ref_counter&) noexcept = default;
@@ -65,6 +71,9 @@ class intrusive_ref_counter {
       default;
   ~intrusive_ref_counter() = default;
 
+ private:
+  // 非模板 hidden friend：形参为基类指针，允许派生类指针（T*）通过 ADL +
+  // 隐式转换找到；同时函数体在类内定义，避免函数模板无法推导派生类的困境。
   friend void intrusive_ptr_add_ref(const intrusive_ref_counter* p) noexcept {
     detail::counter_add(p->ref_count_, 1);
   }
@@ -74,7 +83,6 @@ class intrusive_ref_counter {
     }
   }
 
- private:
   mutable counter_type ref_count_{0};
 };
 
@@ -189,6 +197,18 @@ class intrusive_ptr {
  private:
   T* ptr_ = nullptr;
 };
+
+template <class T, class Counter>
+intrusive_ptr<T>
+intrusive_ref_counter<T, Counter>::intrusive_ptr_from_this() noexcept {
+  return intrusive_ptr<T>(static_cast<T*>(this));
+}
+
+template <class T, class Counter>
+intrusive_ptr<const T>
+intrusive_ref_counter<T, Counter>::intrusive_ptr_from_this() const noexcept {
+  return intrusive_ptr<const T>(static_cast<const T*>(this));
+}
 
 template <class T, class U>
 bool operator<(const intrusive_ptr<T>& a, const intrusive_ptr<U>& b) noexcept {

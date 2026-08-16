@@ -33,10 +33,10 @@
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
+#include "sharding/synchronization.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
 #include "util/json_config.hpp"
-#include "util/synchronization.hpp"
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
@@ -51,18 +51,19 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
   base::UringProactorPtr GetProactor() { return socket_.Proactor(); }
-  std::shared_ptr<Transaction> GetTransaction() { return transaction_; }
+  util::intrusive_ptr<Transaction> GetTransaction() { return transaction_; }
 
   void init() {
     auto self = shared_from_this();
     std::weak_ptr<RedisSession> weak_self = self;
-    send_cb_ = [weak_self](std::string&& s) {
+    send_cb_ = [weak_self](std::vector<std::string>&& batch) {
+      if (batch.empty()) return;
       auto self = weak_self.lock();
       if (!self) return;
-      VLOG(3) << "fd:" << self->fd() << " send:" << s;
       auto p = self->GetProactor();
-      p->DispatchBrief(
-          [self, s = std::move(s)]() mutable { self->SendImp(std::move(s)); });
+      p->DispatchBrief([self, batch = std::move(batch)]() mutable {
+        self->SendBatchImp(std::move(batch));
+      });
     };
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
 
@@ -97,11 +98,12 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         for (auto& cmd_args : pr.cmds) {
           ::cmn::CmdArgList args(cmd_args);
           std::string upper_cmd = util::ToUpperIfNeeded(args[0]);
-          auto ci = CIs->Find(upper_cmd.empty() ? args[0] : upper_cmd);
+          std::string_view cmd = upper_cmd.empty() ? args[0] : upper_cmd;
+          const CommandId* ci = CIs->Find(cmd);
           if (!ci) {
             LOG(WARNING) << "Unknown command: " << args[0]
                          << " from fd: " << fd;
-            send_cb_("-ERR unknown command:" + std::string(args[0]) + "\r\n");
+            SendImp("-ERR unknown command:" + std::string(args[0]) + "\r\n");
             continue;
           }
           queue.push_back({ci, std::move(cmd_args)});
@@ -133,6 +135,17 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
   friend class ConnectionContext;
 
  private:
+  // 批量投递：整批回复一次性 push 进 write_queue_，只触发一次 DoWrite，
+  // 避免每条回复都走一次 DispatchBrief 入队与 write_in_progress_ 判断。
+  void SendBatchImp(std::vector<std::string>&& batch) {
+    for (auto& s : batch) write_queue_.push_back(std::move(s));
+    if (write_in_progress_) {
+      return;
+    }
+    write_in_progress_ = true;
+    DoWrite();
+  }
+
   void SendImp(std::string&& s) {
     VLOG(2) << "[SEND] fd:" << fd() << " size:" << s.size()
             << " head:" << s.substr(0, s.find('\r'));
@@ -146,19 +159,23 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
   cppcoro::AsyncTask DoWrite() {
     assert(util::Thread::current_tid() == pId_);
-    // 一次 sendmsg 合并的回复条数上限：≤ UIO_FASTIOV(8)，内核 __import_iovec
-    // 走栈上 iovec[8] 快路径（无 kmalloc、无 iovec 数组全量拷贝），
-    // 同时保留批量合并减少 syscall 次数（比逐条发送少 kMaxWriteBatch 倍）。
-    constexpr size_t kMaxWriteBatch = 8;
+    // 一次 sendmsg 合并的回复条数上限：调大以减少 sendmsg/syscall 次数。
+    // 超过 UIO_FASTIOV(8) 时内核会 kmalloc iovec 数组，但减少 syscall 的
+    // 收益通常远大于 iovec 分配代价（loopback 下 syscall 更贵）。
+    constexpr size_t kMaxWriteBatch = 64;
+    // batch/rem 提到循环外复用：clear() 保留 capacity，避免每批反复
+    // malloc/free。
+    std::vector<std::string> batch;
+    std::vector<struct iovec> rem;
+    batch.reserve(kMaxWriteBatch);
+    rem.reserve(kMaxWriteBatch);
     while (true) {
-      // 批量出队：batch 内的 string 存活于协程帧，iovec 指向其 data() 期间安全
-      std::vector<std::string> batch;
       if (write_queue_.empty()) {
         write_in_progress_ = false;
         break;
       }
       size_t n = std::min(write_queue_.size(), kMaxWriteBatch);
-      batch.reserve(n);
+      batch.clear();
       for (size_t i = 0; i < n; ++i) {
         batch.push_back(std::move(write_queue_.front()));
         write_queue_.pop_front();
@@ -170,7 +187,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
       size_t sent = 0;
       while (sent < total) {
-        std::vector<struct iovec> rem;
+        rem.clear();
         size_t skip = sent;
         for (auto& s : batch) {
           if (skip >= s.size()) {
@@ -200,7 +217,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
   base::UringSocket socket_;
   ConnectionContext context_;
-  std::shared_ptr<Transaction> transaction_;
+  util::intrusive_ptr<Transaction> transaction_;
   ReplyBuilder::SendCallback send_cb_;
   ParseRESP parser_;
   PipelineSquasher squasher_;
@@ -351,19 +368,23 @@ class RedisServer {
   }
 
   void StartPeriodicSnapshot() {
-    main_proactor_->DispatchBrief([this] {
-      auto snapshot_task = [this]() -> cppcoro::AsyncTask {
+    // 在 shard 0 线程上运行定时快照，保证 Transaction 的 BlockingCounter 协程
+    // 控制器在创建协程的分片线程上挂起/恢复，避免跨线程恢复。
+    shard_set->Add(0, [] {
+      auto snapshot_task = []() -> cppcoro::AsyncTask {
         auto* cid = CIs->Find("SAVE");
         ReplyBuilder rb;
-        rb.SetSendCallback([](std::string&&) {});
+        rb.SetSendCallback([](std::vector<std::string>&&) {});
+        auto proactor = shard_set->pool()->at(0);
         while (true) {
-          co_await main_proactor_->ArmPeriodicTimer(kSnapshotIntervalMs);
-          auto txn = std::make_shared<Transaction>(cid);
+          co_await proactor->ArmPeriodicTimer(kSnapshotIntervalMs);
+          util::intrusive_ptr<Transaction> txn{new Transaction(cid)};
           std::vector<std::string_view> save_args = {"SAVE"};
           txn->InitByArgs(&namespaces->GetDefaultNamespace(), 0,
                           ::cmn::CmdArgList(save_args));
           CommandContext cmd_cntx(txn, cid, &rb);
           co_await cid->Invoke(&cmd_cntx, ::cmn::CmdArgList(save_args));
+          rb.Flush();
         }
         co_return;
       };

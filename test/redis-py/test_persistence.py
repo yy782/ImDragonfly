@@ -64,6 +64,7 @@ class Server:
         self.start()
 
     def start(self):
+        # RDB 持久化测试依赖快照的保存与加载，故不传 --no-rdb（与一般集成测试相反）。
         with open(self.log_path, "ab") as logf:
             self.proc = subprocess.Popen(
                 [self.bin_path, str(SHARDS), str(self.port)],

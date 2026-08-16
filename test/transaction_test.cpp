@@ -27,6 +27,7 @@ namespace {
 cppcoro::AsyncTask RunCommand(dfly::CommandId* cid, CommandContext* cntx,
                               CmdArgList args) {
   co_await cid->Invoke(cntx, args);
+  cntx->rb()->Flush();
   co_return;
 }
 }  // namespace
@@ -82,9 +83,10 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   std::atomic<int> set_done{0};
   ReplyBuilder set_rb;
-  set_rb.SetSendCallback([&set_done](std::string&&) { set_done.store(1); });
+  set_rb.SetSendCallback(
+      [&set_done](std::vector<std::string>&&) { set_done.store(1); });
 
-  auto set_tx = std::make_shared<Transaction>(set_cid);
+  auto set_tx = util::intrusive_ptr<Transaction>{new Transaction(set_cid)};
   set_tx->id = 1;
   CommandContext set_cntx(set_tx, set_cid, &set_rb);
 
@@ -111,12 +113,13 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   std::string get_result;
   std::atomic<int> get_done{0};
   ReplyBuilder get_rb;
-  get_rb.SetSendCallback([&get_result, &get_done](std::string&& reply) {
-    get_result = std::move(reply);
-    get_done.store(1);
-  });
+  get_rb.SetSendCallback(
+      [&get_result, &get_done](std::vector<std::string>&& v) {
+        if (!v.empty()) get_result = std::move(v.back());
+        get_done.store(1);
+      });
 
-  auto get_tx = std::make_shared<Transaction>(get_cid);
+  auto get_tx = util::intrusive_ptr<Transaction>{new Transaction(get_cid)};
   get_tx->id = 2;
   CommandContext get_cntx(get_tx, get_cid, &get_rb);
 
@@ -160,9 +163,10 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   std::atomic<int> mset_done{0};
   ReplyBuilder mset_rb;
-  mset_rb.SetSendCallback([&mset_done](std::string&&) { mset_done.store(1); });
+  mset_rb.SetSendCallback(
+      [&mset_done](std::vector<std::string>&&) { mset_done.store(1); });
 
-  auto mset_tx = std::make_shared<Transaction>(mset_cid);
+  auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
   mset_tx->id = 3;
   CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -191,12 +195,13 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   std::string mget_result;
   std::atomic<int> mget_done{0};
   ReplyBuilder mget_rb;
-  mget_rb.SetSendCallback([&mget_result, &mget_done](std::string&& reply) {
-    mget_result = std::move(reply);
-    mget_done.store(1);
-  });
+  mget_rb.SetSendCallback(
+      [&mget_result, &mget_done](std::vector<std::string>&& v) {
+        if (!v.empty()) mget_result = std::move(v.back());
+        mget_done.store(1);
+      });
 
-  auto mget_tx = std::make_shared<Transaction>(mget_cid);
+  auto mget_tx = util::intrusive_ptr<Transaction>{new Transaction(mget_cid)};
   mget_tx->id = 4;
   CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
@@ -262,9 +267,9 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     std::atomic<int> mset_done{0};
     ReplyBuilder mset_rb;
     mset_rb.SetSendCallback(
-        [&mset_done](std::string&&) { mset_done.store(1); });
+        [&mset_done](std::vector<std::string>&&) { mset_done.store(1); });
 
-    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
     mset_tx->id = 100 + round;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -293,12 +298,13 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     std::string mget_result;
     std::atomic<int> mget_done{0};
     ReplyBuilder mget_rb;
-    mget_rb.SetSendCallback([&mget_result, &mget_done](std::string&& reply) {
-      mget_result = std::move(reply);
-      mget_done.store(1);
-    });
+    mget_rb.SetSendCallback(
+        [&mget_result, &mget_done](std::vector<std::string>&& v) {
+          if (!v.empty()) mget_result = std::move(v.back());
+          mget_done.store(1);
+        });
 
-    auto mget_tx = std::make_shared<Transaction>(mget_cid);
+    auto mget_tx = util::intrusive_ptr<Transaction>{new Transaction(mget_cid)};
     mget_tx->id = 200 + round;
     CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
@@ -402,11 +408,11 @@ TEST_F(TransactionTest, VLLLock) {
     // Step 2: 创建 MSET 事务，投放到分片 0
     std::atomic<bool> mset_done{false};
     ReplyBuilder mset_rb;
-    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+    mset_rb.SetSendCallback([&mset_done](std::vector<std::string>&&) {
       mset_done.store(true, std::memory_order_release);
     });
 
-    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
     mset_tx->id = 2001;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -476,11 +482,11 @@ TEST_F(TransactionTest, VLLLock) {
     // Step 2: 创建 MSET 事务，投放到分片 0
     std::atomic<bool> mset_done{false};
     ReplyBuilder mset_rb;
-    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+    mset_rb.SetSendCallback([&mset_done](std::vector<std::string>&&) {
       mset_done.store(true, std::memory_order_release);
     });
 
-    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
     mset_tx->id = 2002;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -568,11 +574,11 @@ TEST_F(TransactionTest, VLLLockRetry) {
 
     std::atomic<bool> mset_done{false};
     ReplyBuilder mset_rb;
-    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+    mset_rb.SetSendCallback([&mset_done](std::vector<std::string>&&) {
       mset_done.store(true, std::memory_order_release);
     });
 
-    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
     mset_tx->id = 3001;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -641,11 +647,11 @@ TEST_F(TransactionTest, VLLLockRetry) {
 
     std::atomic<bool> mset_done{false};
     ReplyBuilder mset_rb;
-    mset_rb.SetSendCallback([&mset_done](std::string&&) {
+    mset_rb.SetSendCallback([&mset_done](std::vector<std::string>&&) {
       mset_done.store(true, std::memory_order_release);
     });
 
-    auto mset_tx = std::make_shared<Transaction>(mset_cid);
+    auto mset_tx = util::intrusive_ptr<Transaction>{new Transaction(mset_cid)};
     mset_tx->id = 3002;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
@@ -707,14 +713,14 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
   std::atomic<int> finish_count{0};
   std::vector<ReplyBuilder> rbs(Count);
   std::vector<CommandContext> cmd_cntxs;
-  std::vector<std::shared_ptr<Transaction>> txs;
+  std::vector<util::intrusive_ptr<Transaction>> txs;
   cmd_cntxs.reserve(Count);
 
   for (int j = 0; j < Count; ++j) {
-    rbs[j].SetSendCallback([&finish_count](std::string&&) {
+    rbs[j].SetSendCallback([&finish_count](std::vector<std::string>&&) {
       finish_count.fetch_add(1, std::memory_order_release);
     });
-    auto tx = std::make_shared<Transaction>(cid);
+    auto tx = util::intrusive_ptr<Transaction>{new Transaction(cid)};
     tx->id = j;
     txs.push_back(tx);
     cmd_cntxs.emplace_back(tx, cid, &rbs[j]);
@@ -798,7 +804,7 @@ TEST_F(TransactionTest, MultiConcurrent) {
       args.push_back(CmdArgList{all_views[j]});
     }
 
-    std::vector<std::shared_ptr<Transaction>> txs;
+    std::vector<util::intrusive_ptr<Transaction>> txs;
 
     auto* cid = CIs->Find("MSET");
     ASSERT_NE(cid, nullptr);
@@ -809,10 +815,10 @@ TEST_F(TransactionTest, MultiConcurrent) {
     cmd_cntxs.reserve(Count);
 
     for (int j = 0; j < Count; ++j) {
-      rbs[j].SetSendCallback([&finish_count](std::string&&) {
+      rbs[j].SetSendCallback([&finish_count](std::vector<std::string>&&) {
         finish_count.fetch_add(1, std::memory_order_release);
       });
-      auto tx = std::make_shared<Transaction>(cid);
+      auto tx = util::intrusive_ptr<Transaction>{new Transaction(cid)};
       tx->id = j;
       txs.push_back(tx);
       cmd_cntxs.emplace_back(tx, cid, &rbs[j]);
@@ -857,12 +863,14 @@ TEST_F(TransactionTest, MultiConcurrent) {
       std::string mget_result;
       ReplyBuilder mget_rb;
       std::atomic<int> mget_done{0};
-      mget_rb.SetSendCallback([&mget_result, &mget_done](std::string&& reply) {
-        mget_result = std::move(reply);
-        mget_done.store(1);
-      });
+      mget_rb.SetSendCallback(
+          [&mget_result, &mget_done](std::vector<std::string>&& v) {
+            if (!v.empty()) mget_result = std::move(v.back());
+            mget_done.store(1);
+          });
 
-      auto mget_tx = std::make_shared<Transaction>(mget_cid);
+      auto mget_tx =
+          util::intrusive_ptr<Transaction>{new Transaction(mget_cid)};
       mget_tx->id = -1;
 
       std::vector<std::string> mget_strings;

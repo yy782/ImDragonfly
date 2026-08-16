@@ -1,9 +1,9 @@
 #pragma once
+#include <glog/logging.h>
 #include <pthread.h>
 
 #include <functional>
 #include <iostream>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -18,8 +18,13 @@ class Thread {
   template <typename Func, typename... Args>
   explicit Thread(const char* name, Func&& func, Args&&... args)
       : Thread(name) {
+    // 用 lambda 代替 std::bind：std::bind 内部依赖已废弃的 std::result_of，
+    // 会触发 -Wdeprecated-declarations 警告。lambda 按值捕获转发语义一致。
     auto* wrapper = new std::function<void()>(
-        std::bind(std::forward<Func>(func), std::forward<Args>(args)...));
+        [func = std::forward<Func>(func),
+         ... args = std::forward<Args>(args)]() mutable {
+          func(std::forward<Args>(args)...);
+        });
 
     if (pthread_create(&tid_, nullptr, thread_func, wrapper) != 0) {
       delete wrapper;
@@ -70,7 +75,7 @@ class Thread {
   }
   void join() {
     if (!joinable()) {
-      throw std::runtime_error("Thread not joinable");
+      LOG(FATAL) << "Thread not joinable";
     }
     pthread_join(tid_, nullptr);
     joined_ = true;
@@ -78,7 +83,7 @@ class Thread {
 
   void detach() {
     if (!joinable()) {
-      throw std::runtime_error("Thread not joinable");
+      LOG(FATAL) << "Thread not joinable";
     }
     pthread_detach(tid_);
     joined_ = true;

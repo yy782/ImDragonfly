@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "stateless_alloceator.hpp"
+#include "util/intrusive_ptr.hpp"
 namespace dfly {
 
 class Transaction;
@@ -17,15 +18,16 @@ class TxQueue {
 
   explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
       : vec_(mr) {}
+  ~TxQueue();
 
-  Iterator Push(std::shared_ptr<Transaction> t);
+  Iterator Push(util::intrusive_ptr<Transaction> t);
   void Pop(Iterator& it);
   void Pop() {
     Iterator it = head_;
     Pop(it);
   }
-  std::shared_ptr<Transaction> Front();
-  std::shared_ptr<Transaction> Back();
+  util::intrusive_ptr<Transaction> Front();
+  util::intrusive_ptr<Transaction> Back();
   size_t Size() const;
   bool Empty() const { return head_ == kEnd; }
   bool IsInFreeList(Iterator it) const;
@@ -40,9 +42,10 @@ class TxQueue {
   Iterator AllocateNode();
   void FreeNode(Iterator it);
   struct Node {
-    std::shared_ptr<Transaction> trans;
+    util::intrusive_ptr<Transaction> trans;
     Iterator next = kEnd;
     Iterator prev = kEnd;
+    ~Node();
   };
 
   std::vector<Node, PMR_NS::polymorphic_allocator<Node>> vec_;

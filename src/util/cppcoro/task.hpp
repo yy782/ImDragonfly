@@ -316,8 +316,9 @@ cppcoro::task<T&> task_promise<T&>::get_return_object() noexcept {
 }
 
 template <typename AWAITABLE>
-auto make_task(AWAITABLE awaitable) -> task<remove_rvalue_reference_t<
-    typename awaitable_traits<AWAITABLE>::await_result_t>> {
+auto make_task(AWAITABLE awaitable)
+    -> task<remove_rvalue_reference_t<
+        typename awaitable_traits<AWAITABLE>::await_result_t>> {
   co_return co_await static_cast<AWAITABLE&&>(awaitable);
 }
 }  // namespace detail

@@ -107,31 +107,74 @@ struct IntentLock {
 
 ## 📊 性能对比
 
-### DashTable 存储引擎基准
+### 测试环境
 
-| 操作类型 | DashTable | std::unordered_map | 胜出 |
-|---------|-----------|-------------------|------|
-| **Insert** (插入) | 274.67 ms | 427.24 ms | DashTable |
-| **Find** (查找) | 179.14 ms | 237.37 ms | DashTable |
-| **Erase** (删除) | 307.60 ms | 357.29 ms | DashTable |
-| **Memory Usage** (内存占用) | 22.8 MB | 41.6 MB | DashTable |
-
-> - Insert 比 unordered_map 快 **36%**
-> - 内存占用比 unordered_map 降低 **47%**
+| 项目 | 配置 |
+|------|------|
+| CPU | AMD Ryzen 9 7940HX（VMware 虚拟机，20 vCPU） |
+| 内存 | 7.7 GiB |
+| 操作系统 | Ubuntu 24.04.4 LTS |
+| 内核 | Linux 7.0.0-28-generic |
+| Redis 版本 | 8.10.0 (jemalloc-5.3.0) |
+| memtier_benchmark | 2.5.1 |
 
 ### 端到端吞吐基准 (io_uring, 4 分片)
 
+50% SET + 50% GET、4 线程 × 100 连接、100B payload、30 秒、key 范围 1~1000 万。
+
+```bash
+memtier_benchmark -s 127.0.0.1 -p 6379 \
+  --command="SET __key__ __data__" --command-key-pattern=R --command-ratio=1 \
+  --command="GET __key__" --command-key-pattern=R --command-ratio=1 \
+  -t 4 -c 100 -d 100 --test-time=30 \
+  --key-minimum=1 --key-maximum=10000000 --hide-histogram
+```
+
+- ImDragonfly：`./build/imdragonfly --config ./imdragonfly.conf`（4 分片、`use_defer_taskrun` / `use_single_issuer` / 注册缓冲、`cqe_batch_size=500`）
+
 | 指标 | 数值 |
 |------|------|
-| 总 Ops/sec | **392,043** |
-| SET 吞吐 | 196,024 ops/s |
-| GET 吞吐 | 196,018 ops/s |
-| 平均延迟 | 1.02 ms |
-| p50 延迟 | 0.90 ms |
-| p99 延迟 | 1.79 ms |
-| p99.9 延迟 | 5.73 ms |
+| 总 Ops/sec | **476,259** |
+| SET 吞吐 | 238,133 ops/s |
+| GET 吞吐 | 238,126 ops/s |
+| 平均延迟 | 0.84 ms |
+| p50 延迟 | 0.74 ms |
+| p99 延迟 | 1.42 ms |
+| p99.9 延迟 | 5.54 ms |
 | 峰值 CPU 利用率 | 400.0% (4 线程) |
 | 测试配置 | 4 线程 × 100 连接, 30 秒 |
+
+### 管道测试基准 (pipeline=50)
+
+50% SET + 50% GET、pipeline=50、4 线程 × 100 连接、100B payload、30 秒、key 范围 1~1000 万。
+
+```bash
+memtier_benchmark -s 127.0.0.1 -p 6379 \
+  --command="SET __key__ __data__" --command-key-pattern=R --command-ratio=1 \
+  --command="GET __key__" --command-key-pattern=R --command-ratio=1 \
+  --pipeline=50 \
+  -t 4 -c 100 -d 100 --test-time=30 \
+  --key-minimum=1 --key-maximum=10000000 --hide-histogram
+```
+
+- Redis：`redis-server --io-threads 4 --io-threads-do-reads yes --save "" --appendonly no --stop-writes-on-bgsave-error no`
+- ImDragonfly：`./build/imdragonfly --config ./imdragonfly.conf`（4 分片、`use_defer_taskrun` / `use_single_issuer` / 注册缓冲、`cqe_batch_size=500`）
+
+| 指标 | Redis 8.10.0 | ImDragonfly | 对比 |
+|------|-------------|-------------|------|
+| 总吞吐 | 3,087,801 ops/s | 5,833,661 ops/s | **+88.9%** |
+| SET 吞吐 | 1,543,901 ops/s | 2,916,830 ops/s | +88.9% |
+| GET 吞吐 | 1,543,901 ops/s | 2,916,830 ops/s | +88.9% |
+| 平均延迟 | 6.47 ms | 3.42 ms | **-47.1%** |
+| p50 延迟 | 6.40 ms | 3.12 ms | **-51.3%** |
+| p99 延迟 | 8.90 ms | 9.22 ms | +3.6% |
+| p99.9 延迟 | 13.57 ms | 14.14 ms | +4.2% |
+| CPU 使用核数 | 2.27 核 | 3.84 核 | +1.57 核 |
+| 峰值 CPU 利用率 | 238.9% | 390.4% | - |
+
+> - 吞吐：ImDragonfly 达 **583 万 ops/s**，约为 Redis 的 **1.89 倍**（+88.9%）。
+> - 平均 / p50 延迟分别降低约 **47%** / **51%**；尾部延迟（p99 / p99.9）略高（+3.6% / +4.2%）。
+> - CPU：ImDragonfly 的 4 个 worker 线程平均利用率 **95.9%**（3.84 核），Redis 的 `--io-threads 4` 仅 **56.7%**（2.27 核），ImDragonfly 把 CPU 更充分地转化成了吞吐。
 ***
 
 ## 🚀 快速开始
@@ -146,11 +189,39 @@ cd ImDragonfly
 # 构建并启动
 docker compose up -d
 
+# 查看运行状态（已内置健康检查，等待状态变为 healthy）
+docker compose ps
+
 # 使用 redis-cli 连接
 redis-cli -p 6379
 ```
 
-> **提示**：Docker 构建采用多阶段优化，最终镜像仅包含运行时依赖，体积精简。如需自定义分片数量，修改 `docker-compose.yml` 中的 `command` 参数。
+> **提示**：Docker 构建采用多阶段优化，最终镜像仅包含运行时依赖，体积精简。运行镜像未安装 `redis-cli`，健康检查改用 bash 内建的 `/dev/tcp` 检测端口连通性。
+
+#### 自定义分片数量
+
+分片数量由 `imdragonfly.conf` 中的 `"shards"` 字段配置（默认 4），修改后重新构建镜像即可：
+
+```bash
+# 编辑 imdragonfly.conf，例如把 "shards" 改为 8
+docker compose up -d --build
+```
+
+
+#### Docker 中运行 io_uring 的注意事项
+
+ImDragonfly 依赖 io_uring（`io_uring_setup` + 注册缓冲区），而 Docker 默认安全策略会拦截这两项能力。`docker-compose.yml` 已内置必要配置：
+
+- `security_opt: seccomp:unconfined` —— 关闭 seccomp，否则 `io_uring_setup` 被拦截，启动报 `EPERM`（错误码 1）；
+- `ulimits.memlock: -1` —— 放开内存锁定上限，否则 registered buffers（1024×16KB=16MB）无法 pin 内存页，`io_uring_register_buffers` 返回 `ENOMEM`（错误码 12）。
+
+若需用 `docker run` 手动启动，务必带上这两项：
+
+```bash
+docker run --security-opt seccomp=unconfined \
+  --ulimit memlock=-1:-1 -p 6379:6379 \
+  imdragonfly:latest
+```
 
 ### 方式二：源码编译
 
@@ -170,7 +241,6 @@ sudo apt-get install -y clang cmake make \
     libgoogle-glog-dev
 ```
 
-> **注意**：项目默认启用 `IORING_SETUP_SINGLE_ISSUER`（需 Linux 5.18+）。如果内核版本较低，需在 `UringConfig` 中设置 `use_single_issuer = false` 和 `use_defer_taskrun = false`。
 
 #### 构建安装
 
@@ -184,9 +254,33 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 
-# 运行（参数为分片数量，默认 4）
-./imdragonfly 4
+# 运行（推荐：通过配置文件启动，详见下方「启动方式与命令行参数」）
+./imdragonfly --config ../imdragonfly.conf
 ```
+
+### 启动方式与命令行参数
+
+```bash
+./imdragonfly [shards] [port] [--no-rdb] [--config <path>]
+```
+
+| 参数 | 说明 |
+|------|------|
+| `shards` | 分片数量（位置参数，默认 4） |
+| `port` | 监听端口（位置参数，默认 6379） |
+| `--no-rdb` / `--no-snapshot` | 关闭 RDB 快照 |
+| `--config <path>` | 加载 JSON 配置文件，配置值会覆盖命令行参数 |
+
+**推荐通过 `--config` 启动**，加载仓库自带的 `imdragonfly.conf`（4 分片 + io_uring 优化参数 + 关闭 RDB）：
+
+```bash
+# 在 build 目录内运行
+./imdragonfly --config ../imdragonfly.conf
+
+# 或在项目根目录运行
+./build/imdragonfly --config ./imdragonfly.conf
+```
+
 
 ### 测试连接
 

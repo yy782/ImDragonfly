@@ -47,18 +47,18 @@ void EngineShard::DestroyThreadLocal() {
 
 void EngineShard::Shutdown() {}
 
-void EngineShard::PollExecution(std::shared_ptr<Transaction> trans) {
+void EngineShard::PollExecution(util::intrusive_ptr<Transaction> trans) {
   ShardId sid = shard_id();
   uint16_t flags = Transaction::OUT_OF_ORDER;
   auto [trans_mask, disarmed] = trans ? trans->DisarmInShardWhen(sid, flags)
                                       : std::make_pair(uint16_t(0), false);
   if (trans && trans_mask == 0) return;
 
-  auto run = [this](std::shared_ptr<Transaction> tx) -> bool {
-    return tx->RunInShard(this, "PollExecution");
+  auto run = [this](util::intrusive_ptr<Transaction> tx) -> bool {
+    return tx->RunInShard(this);
   };
 
-  std::shared_ptr<Transaction> head = nullptr;
+  util::intrusive_ptr<Transaction> head = nullptr;
 
   VLOG(3) << "PollExecution in shard:" << shard_id()
           << " txq_.Size(): " << txq_.Size();

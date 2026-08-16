@@ -1,6 +1,7 @@
 // Copyright 2022, DragonflyDB authors.  All rights reserved.
 // See LICENSE for licensing terms.
 //
+// export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 #include <glog/logging.h>
 #include <sys/syscall.h>
@@ -33,6 +34,22 @@ constexpr uint32_t kMaxStrLen [[maybe_unused]] = 1 << 28;
 using ::cmd::CmdArgParser;
 using cmd::CoroTask;
 using Slice = Transaction::Slice;
+
+// 用零拷贝 view 就地编码成完整 RESP bulk string 帧 "$<len>\r\n<value>\r\n"。
+// 值内容只拷贝这一次（直接进最终回复 buffer），避免 ToString() 临时 string
+// 再经 BuildBulkString 二次拷贝。
+std::string EncodeBulkString(std::string_view v) {
+  std::string out;
+  out.reserve(v.size() + 32);
+  out.push_back('$');
+  char buf[24];
+  auto res = std::to_chars(buf, buf + sizeof(buf), v.size());
+  out.append(buf, res.ptr - buf);
+  out.append("\r\n");
+  out.append(v);
+  out.append("\r\n");
+  return out;
+}
 
 class SetCmd {  // SET 命令处理器
  public:
@@ -201,10 +218,6 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
                 Transaction* t,
                 EngineShard* shard) -> OpResult<SetCmd::SetResult> {
     DCHECK_EQ(EngineShard::tlocal()->shard_id(), shard->shard_id());
-    auto& db_slice = t->GetDbSlice(shard->shard_id());
-    LOG(INFO) << "[set-write] shard=" << shard->shard_id()
-              << " dbslice=" << (void*)&db_slice << " dbind=" << t->GetDbIndex()
-              << " key='" << key << "' tid=" << syscall(SYS_gettid);
     return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
   };
 
@@ -213,7 +226,7 @@ CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (result.status() == OpStatus::OK &&
       result.value() == SetCmd::SetResult::OK) {
-    rb->BuildSimpleString("OK");
+    rb->BuildOk();
   } else {
     rb->BuildNullBulkString();  // NX/XX 条件未命中，回复 null
   }
@@ -225,13 +238,7 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [&args](Transaction* tx, EngineShard* es) -> OpResult<void> {
     auto& slice = tx->GetSlice(es->shard_id());
     auto& db_slice = tx->GetDbSlice(es->shard_id());
-    LOG(INFO) << "[mget-write] shard=" << es->shard_id()
-              << " dbslice=" << (void*)&db_slice
-              << " dbind=" << tx->GetDbIndex()
-              << " tid=" << syscall(SYS_gettid);
     for (const auto& [key, keyId] : slice) {
-      LOG(INFO) << "[mget-write-key] shard=" << es->shard_id() << " key='"
-                << key << "'";
       auto& value = args[keyId + 1];
       auto it_res =
           db_slice.AddOrUpdate(tx->GetDbContext(), key, PrimeValue{value}, 0);
@@ -281,12 +288,16 @@ CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
       return OpStatus::KEY_NOTFOUND;
     }
 
-    return {it_res.GetInnerIt()->second.ToString()};
+    // 这里在 shard 线程内，值在 dict 中稳定，用 GetSlice 拿零拷贝 view 就地
+    // 编码成 RESP 帧；co_await 后协程在同一 shard 线程恢复，直接 SendRaw 发送。
+    std::string scratch;
+    std::string_view v = it_res.GetInnerIt()->second.GetSlice(&scratch);
+    return {EncodeBulkString(v)};
   };
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
   if (result.status() == OpStatus::OK) {
-    rb->BuildBulkString(result.value());
+    rb->SendRaw(*std::move(result));  // rb 不再加工，直接发送
   } else {
     rb->BuildNullBulkString();
   }
@@ -300,7 +311,8 @@ bool TryGetInt64(const PrimeValue& pv, int64_t* out) {
     *out = pv.AsInt();
     return true;
   }
-  std::string s = pv.ToString();
+  std::string scratch;
+  std::string_view s = pv.GetSlice(&scratch);
   auto res = std::from_chars(s.data(), s.data() + s.size(), *out);
   return res.ec == std::errc() && res.ptr == s.data() + s.size();
 }

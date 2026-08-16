@@ -38,18 +38,7 @@ UringProactor::UringProactor(UringConfig cfg, int pool_index)
       task_queue_(config_.task_queue_size) {
   MaxPendingSlots_ = cfg.queue_depth;
   SqeBatchSize_ = cfg.sqe_batch_size;
-  size_t slots = 1;
-  while (slots < MaxPendingSlots_) slots <<= 1;
-  if (slots > MaxPendingSlots_) slots = MaxPendingSlots_;
-  slot_mask_ = static_cast<uint32_t>(slots - 1);
-
-  // 计算 slot 索引占用位数（如 4096 -> 12），user_data 高位移 generation
-  uint32_t m = slot_mask_;
-  slot_idx_bits_ = 0;
-  while (m) {
-    ++slot_idx_bits_;
-    m >>= 1;
-  }
+  size_t slots = MaxPendingSlots_;
 
   pending_slots_.resize(slots);
   free_slots_.reserve(slots);
@@ -145,10 +134,7 @@ uint32_t UringProactor::AllocSlot() {
   slot.coro = nullptr;
   slot.result = -ECANCELED;
   slot.flags = -1;
-  ++slot.generation;
-  // user_data 编码：(generation << slot_idx_bits_) | idx，
-  // ProcessCqe 用 generation 识别"slot 复用后迟到的旧 CQE"并丢弃（防御性）
-  return (slot.generation << slot_idx_bits_) | idx;
+  return idx;
 }
 
 void UringProactor::FreeSlot(uint32_t slot_idx) {
@@ -160,23 +146,10 @@ void UringProactor::ResumeSlot(uint32_t slot_idx, int32_t result,
   auto& slot = pending_slots_[slot_idx];
   slot.result = result;
   slot.flags = extra;
-  assert(slot.coro);
   if (slot.coro) {
-    try {
-      slot.coro.resume();  // 同步执行到协程下次挂起/结束
-    } catch (const std::exception& e) {
-      // 协程体内异常（如命令回调）不能让 slot 泄漏：否则空闲池被破坏，
-      // 后续 AllocSlot 可能重复分配/耗尽。
-      LOG(ERROR) << "coroutine threw: slot=" << slot_idx
-                 << " what=" << e.what();
-    } catch (...) {
-      LOG(ERROR) << "coroutine threw (non-std): slot=" << slot_idx;
-    }
+    slot.coro.resume();  // 同步执行到协程下次挂起/结束
   }
   slot.coro = nullptr;
-  // CQE 已处理、协程已恢复后才归还 slot，之后才能被复用。
-  // resume() 内部若立即发起新操作，本 slot 尚未入池，不会被同一协程复用，
-  // 因此不存在重复分配或覆盖未读 result 的竞态（单线程同步 resume）。
   FreeSlot(slot_idx);
 }
 
@@ -200,64 +173,59 @@ void UringProactor::SubmitIfNeeded() {
 }
 
 AcceptAwaitable UringProactor::AsyncAccept(int listen_fd) {
-  uint32_t ud = AllocSlot();
-  uint32_t slot_idx = ud & slot_mask_;
+  uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   io_uring_prep_accept(sqe, listen_fd, nullptr, nullptr,
                        SOCK_NONBLOCK | SOCK_CLOEXEC);
-  sqe->user_data = ud;
+  sqe->user_data = slot_idx;
 
   return AcceptAwaitable(this, slot_idx);
 }
 
 RecvAwaitable UringProactor::AsyncRecvFixed(int fd, int buf_idx,
                                             size_t offset) {
-  uint32_t ud = AllocSlot();
-  uint32_t slot_idx = ud & slot_mask_;
+  uint32_t slot_idx = AllocSlot();
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   io_uring_prep_read_fixed(
       sqe, fd, reg_bufs_[buf_idx].memory + offset,
       static_cast<unsigned>(config_.registered_buf_size - offset), 0, buf_idx);
-  sqe->user_data = ud;
+  sqe->user_data = slot_idx;
   GetSlot(slot_idx).flags = buf_idx;
   return RecvAwaitable(this, slot_idx);
 }
 
 IoAwaitable UringProactor::AsyncSend(int fd, const void* buf, size_t len) {
-  uint32_t ud = AllocSlot();
-  uint32_t slot_idx = ud & slot_mask_;
+  uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   io_uring_prep_send(sqe, fd, buf, len, MSG_NOSIGNAL);
-  sqe->user_data = ud;
+  sqe->user_data = slot_idx;
   return IoAwaitable(this, slot_idx);
 }
 
 IoAwaitable UringProactor::AsyncSendV(int fd, const struct msghdr* msg) {
   CHECK(msg != nullptr && msg->msg_iovlen > 0);
-  uint32_t ud = AllocSlot();
-  uint32_t slot_idx = ud & slot_mask_;
+  uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   // MSG_NOSIGNAL：对端关闭时返回 EPIPE 而非发 SIGPIPE 杀进程。
   // prep_sendmsg 仅把 msg 指针存入 SQE，内核在提交后异步读取，因此
   // msg 及其 iovec/数据必须由调用方保活到 CQE 完成。
   io_uring_prep_sendmsg(sqe, fd, msg, MSG_NOSIGNAL);
-  sqe->user_data = ud;
+  sqe->user_data = slot_idx;
   return IoAwaitable(this, slot_idx);
 }
 
 IoAwaitable UringProactor::ArmPeriodicTimer(uint64_t interval_ms) {
-  uint32_t ud = AllocSlot();
-  uint32_t slot_idx = ud & slot_mask_;
+  uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   __kernel_timespec ts{
       static_cast<__kernel_time64_t>(interval_ms / 1000),
       static_cast<__kernel_time64_t>(interval_ms % 1000) * 1000000};
   io_uring_prep_timeout(sqe, &ts, 0, 0);
-  sqe->user_data = ud;
+  sqe->user_data = slot_idx;
   io_uring_submit(&ring_);  // ts 此刻仍在栈上，内核提交时读到有效值
   pending_sqes_ = 0;
   LOG(INFO) << "[timer] ArmPeriodicTimer armed slot=" << slot_idx
@@ -290,16 +258,8 @@ void UringProactor::ProcessCqe(struct io_uring_cqe* cqe) {
   if (cqe->user_data == LIBURING_UDATA_TIMEOUT) {
     return;
   }
-  uint32_t ud = static_cast<uint32_t>(cqe->user_data);
-  uint32_t slot_idx = ud & slot_mask_;
-  uint32_t gen = ud >> slot_idx_bits_;
+  uint32_t slot_idx = static_cast<uint32_t>(cqe->user_data);
   auto& slot = GetSlot(slot_idx);
-
-  // 防御层：代际不匹配的迟到 CQE（幽灵 CQE）直接丢弃。
-  // 空闲 slot 池下同一 slot 同一时刻只属于一个在途操作，正常不会触发。
-  if (slot.generation != gen) {
-    return;
-  }
   if (!slot.coro) {
     return;
   }
@@ -349,7 +309,7 @@ int UringProactor::PollOnce(unsigned min_cqe, unsigned timeout_ms) {
     ++processed;
     ++batch_count;
 
-    if (batch_count >= config_.cqe_batch_size) {
+    if (batch_count >= static_cast<unsigned>(config_.cqe_batch_size)) {
       io_uring_cq_advance(&ring_, batch_count);
       batch_count = 0;
     }

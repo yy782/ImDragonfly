@@ -49,6 +49,9 @@ struct ParseRESP {
       return false;  // 负数长度/元素数是格式错误。
     }
 
+    // 参数个数已知，一次性预留容量，避免 emplace_back 多次扩容。
+    out->reserve(static_cast<size_t>(num_elements));
+
     for (int64_t i = 0; i < num_elements; i++) {
       if (*pos >= bytes) {
         *need_more = true;

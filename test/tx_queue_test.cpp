@@ -33,9 +33,9 @@ TEST_F(TxQueueTest, BasicFIFO) {
   EXPECT_EQ(q_->Back(), nullptr);
 
   // 2. Push 后 FIFO 出队
-  auto tx1 = std::make_shared<Transaction>();
-  auto tx2 = std::make_shared<Transaction>();
-  auto tx3 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx2 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx3 = util::intrusive_ptr<Transaction>{new Transaction()};
   tx1->set_txid(1);
   tx2->set_txid(2);
   tx3->set_txid(3);
@@ -74,7 +74,7 @@ TEST_F(TxQueueTest, BasicFIFO) {
 }
 
 TEST_F(TxQueueTest, SingleElement) {
-  auto tx1 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
   tx1->set_txid(1);
   q_->Push(tx1);
 
@@ -88,10 +88,10 @@ TEST_F(TxQueueTest, SingleElement) {
 
 TEST_F(TxQueueTest, PopSpecificIterator) {
   // 测试带参数 Pop(Iterator) 从中间移除
-  auto tx1 = std::make_shared<Transaction>();
-  auto tx2 = std::make_shared<Transaction>();
-  auto tx3 = std::make_shared<Transaction>();
-  auto tx4 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx2 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx3 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx4 = util::intrusive_ptr<Transaction>{new Transaction()};
   tx1->set_txid(1);
   tx2->set_txid(2);
   tx3->set_txid(3);
@@ -122,8 +122,8 @@ TEST_F(TxQueueTest, PopSpecificIterator) {
 }
 
 TEST_F(TxQueueTest, PopFromHead) {
-  auto tx1 = std::make_shared<Transaction>();
-  auto tx2 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx2 = util::intrusive_ptr<Transaction>{new Transaction()};
   tx1->set_txid(1);
   tx2->set_txid(2);
   auto it1 = q_->Push(tx1);
@@ -135,8 +135,8 @@ TEST_F(TxQueueTest, PopFromHead) {
 }
 
 TEST_F(TxQueueTest, PopFromTail) {
-  auto tx1 = std::make_shared<Transaction>();
-  auto tx2 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx2 = util::intrusive_ptr<Transaction>{new Transaction()};
   tx1->set_txid(1);
   tx2->set_txid(2);
   q_->Push(tx1);
@@ -149,9 +149,9 @@ TEST_F(TxQueueTest, PopFromTail) {
 }
 
 TEST_F(TxQueueTest, PushPopAlternating) {
-  auto tx1 = std::make_shared<Transaction>();
-  auto tx2 = std::make_shared<Transaction>();
-  auto tx3 = std::make_shared<Transaction>();
+  auto tx1 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx2 = util::intrusive_ptr<Transaction>{new Transaction()};
+  auto tx3 = util::intrusive_ptr<Transaction>{new Transaction()};
 
   tx1->set_txid(1);
   tx2->set_txid(2);

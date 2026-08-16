@@ -7,6 +7,7 @@
 #include <glog/logging.h>
 
 #include <coroutine>
+#include <vector>
 
 #include "detail/common_types.hpp"
 #include "util/intrusive_list.hpp"
@@ -31,9 +32,9 @@ class WaitQueue {
 
   void Unlink(Waiter* waiter);
 
-  bool NotifyOne();
+  bool NotifyOne(Waiter*& out);
 
-  bool NotifyAll();
+  bool NotifyAll(std::vector<Waiter*>& out);
 
  private:
   using WaitList = util::intrusive_list<Waiter, Waiter::ListHookType,

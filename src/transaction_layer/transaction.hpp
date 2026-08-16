@@ -18,6 +18,7 @@
 #include "sharding/op_status.hpp"
 #include "sharding/synchronization.hpp"
 #include "util/function.hpp"
+#include "util/intrusive_ptr.hpp"
 using namespace util;
 namespace dfly {
 
@@ -29,7 +30,11 @@ using namespace ::cmn;
 using facade::OpResult;
 using facade::OpStatus;
 
-class Transaction : public std::enable_shared_from_this<Transaction> {
+inline std::string CmdArgListToString(CmdArgList full_args);
+
+class Transaction
+    : public util::intrusive_ref_counter<Transaction,
+                                         util::thread_safe_counter> {
   Transaction(const Transaction&) = delete;
   void operator=(const Transaction&) = delete;
 
@@ -85,6 +90,16 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args);
 
+  // /*管道优化专用*/ 由 PipelineSquasher 预计算 KeyIndex 与目标分片后调用，
+  // 复用外部计算结果，跳过重复的 DetermineKeys() 与单 key 路径的 Shard()。
+  OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args,
+                      const KeyIndex& key_index, ShardId sid);
+
+  // /*管道优化专用*/ 压缩器复用同一分片事务顺序执行多条命令。每条命令执行前
+  // 调用本方法，重置上一条命令遗留的运行时状态，使 InitByArgs / SingleHopAsync
+  // 可被安全重复调用，省去每条命令各分配一个 Transaction 对象的内存开销。
+  void PrepareForReuse(const CommandId* cid);
+
   // 全局事务（如 SAVE）：激活所有分片，配合分片锁使用。InitByArgs 对
   // CO::GLOBAL_TRANS 命令自动调用；周期快照等场景可直接调用。
   void InitGlobal();
@@ -94,7 +109,7 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
   cppcoro::AsyncTask SingleHopAsync(RunnableType cb,
                                     std::coroutine_handle<> handle);
 
-  bool RunInShard(EngineShard* shard, std::string context);
+  bool RunInShard(EngineShard* shard);
 
   KeyLockArgs GetLockArgs(ShardId sid) const;
 
@@ -250,6 +265,9 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   void InitByKeys(const KeyIndex& keys);
 
+  // /*管道优化专用*/ 复用外部预计算的分片 sid，单 key 路径跳过 Shard()。
+  void InitByKeys(const KeyIndex& keys, ShardId sid);
+
   void BuildShardIndex(const KeyIndex& keys, std::vector<PerShardCache>* out);
 
   void InitShardData(std::span<const PerShardCache> shard_index,
@@ -259,15 +277,15 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   cppcoro::task<> ScheduleInternal();
 
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic,
-                       std::string context);
+  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
 
   void DispatchHop();
 
   void FinishHop();
 
-  void RunCallback(EngineShard* shard, std::string context);
+  void RunCallback(EngineShard* shard);
 
+  /*需要上下文调试时要context字段*/
   bool CancelShardCb(EngineShard* shard);
 
   void InitTxTime();
@@ -296,8 +314,8 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
     });
   }
 
-  //::dfly::BlockingCounter run_barrier_{0}; // 会导致极高的P99.9 延迟
-  BlockingCounter run_barrier_{0};
+  ::dfly::BlockingCounter run_barrier_{0};
+  // BlockingCounter run_barrier_{0};
 
   std::vector<PerShardData> shard_data_;
 
@@ -325,6 +343,8 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
 
   uint8_t coordinator_state_ = 0;
 
+  ShardId owner_shard_id_{
+      kInvalidSid};  // 事务所属分片：命令协程启动/挂起时所在的分片线程
   std::coroutine_handle<> handle_;
   std::atomic<uint16_t> blocking_count_ = 0;
   std::atomic<bool> need_resume = false;
@@ -335,6 +355,11 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
     handle_ = handle;
     DCHECK_EQ(blocking_count_, 0u);
     blocking_count_ = blocking_count;
+    // 记录事务所属分片：命令协程在哪个分片线程上启动，恢复时就回到该线程，
+    // 避免协程跨线程恢复带来的 cache 局部性损失与 TLS 切换。
+    EngineShard* es = EngineShard::tlocal();
+    DCHECK(es != nullptr) << "args=[" << CmdArgListToString(full_args_) << "]";
+    owner_shard_id_ = es->shard_id();
   }
   void ResumeIfNeed() {
     if (!need_resume.load(
@@ -344,7 +369,13 @@ class Transaction : public std::enable_shared_from_this<Transaction> {
     bool expected = false;
     if (resume_count_.compare_exchange_strong(expected, true,
                                               std::memory_order_acq_rel)) {
-      handle_.resume();
+      EngineShard* es = EngineShard::tlocal();
+      DCHECK(es != nullptr);
+      if (es->shard_id() == owner_shard_id_) {
+        handle_.resume();
+      } else {
+        shard_set->Add(owner_shard_id_, [h = handle_]() { h.resume(); });
+      }
     }
   }
 

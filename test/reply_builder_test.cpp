@@ -18,7 +18,9 @@ struct Capture {
   std::string last;
   void reset() { last.clear(); }
   ReplyBuilder::SendCallback cb() {
-    return [this](std::string&& s) { last = std::move(s); };
+    return [this](std::vector<std::string>&& v) {
+      last = v.empty() ? std::string() : std::move(v.back());
+    };
   }
 };
 
@@ -29,6 +31,7 @@ TEST(ReplyBuilderTest, BuildSimpleString) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildSimpleString("OK");
+  r.Flush();
   EXPECT_EQ(cap.last, "+OK\r\n");
 }
 
@@ -37,6 +40,7 @@ TEST(ReplyBuilderTest, BuildSimpleStringEmpty) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildSimpleString("");
+  r.Flush();
   EXPECT_EQ(cap.last, "+\r\n");
 }
 
@@ -45,6 +49,7 @@ TEST(ReplyBuilderTest, BuildError) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildError("something went wrong");
+  r.Flush();
   EXPECT_EQ(cap.last, "-ERR something went wrong\r\n");
 }
 
@@ -53,6 +58,7 @@ TEST(ReplyBuilderTest, BuildErrorEmpty) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildError("");
+  r.Flush();
   EXPECT_EQ(cap.last, "-ERR \r\n");
 }
 
@@ -61,6 +67,7 @@ TEST(ReplyBuilderTest, BuildInteger) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildInteger(42);
+  r.Flush();
   EXPECT_EQ(cap.last, ":42\r\n");
 }
 
@@ -69,6 +76,7 @@ TEST(ReplyBuilderTest, BuildIntegerNegative) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildInteger(-7);
+  r.Flush();
   EXPECT_EQ(cap.last, ":-7\r\n");
 }
 
@@ -77,6 +85,7 @@ TEST(ReplyBuilderTest, BuildIntegerZero) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildInteger(0);
+  r.Flush();
   EXPECT_EQ(cap.last, ":0\r\n");
 }
 
@@ -85,6 +94,7 @@ TEST(ReplyBuilderTest, BuildBulkString) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildBulkString("hello");
+  r.Flush();
   EXPECT_EQ(cap.last, "$5\r\nhello\r\n");
 }
 
@@ -93,6 +103,7 @@ TEST(ReplyBuilderTest, BuildBulkStringEmpty) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildBulkString("");
+  r.Flush();
   EXPECT_EQ(cap.last, "$0\r\n\r\n");
 }
 
@@ -103,6 +114,7 @@ TEST(ReplyBuilderTest, BuildNullBulkString) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildNullBulkString();
+  r.Flush();
   EXPECT_EQ(cap.last, "$-1\r\n");
 }
 
@@ -113,6 +125,7 @@ TEST(ReplyBuilderTest, BuildArray) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildArray({"a", "bb", "ccc"});
+  r.Flush();
   EXPECT_EQ(cap.last, "*3\r\n$1\r\na\r\n$2\r\nbb\r\n$3\r\nccc\r\n");
 }
 
@@ -121,6 +134,7 @@ TEST(ReplyBuilderTest, BuildArraySingle) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildArray({"only"});
+  r.Flush();
   EXPECT_EQ(cap.last, "*1\r\n$4\r\nonly\r\n");
 }
 
@@ -129,6 +143,7 @@ TEST(ReplyBuilderTest, BuildArrayEmpty) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.BuildArray({});
+  r.Flush();
   EXPECT_EQ(cap.last, "*0\r\n");
 }
 
@@ -139,6 +154,7 @@ TEST(ReplyBuilderTest, SendRaw) {
   ReplyBuilder r;
   r.SetSendCallback(cap.cb());
   r.SendRaw("*3\r\n:1\r\n:2\r\n:3\r\n");
+  r.Flush();
   EXPECT_EQ(cap.last, "*3\r\n:1\r\n:2\r\n:3\r\n");
 }
 
@@ -147,11 +163,14 @@ TEST(ReplyBuilderTest, SendRaw) {
 TEST(ReplyBuilderTest, CallbackCaptureCollectsMultipleReplies) {
   std::vector<std::string> out;
   ReplyBuilder r;
-  r.SetSendCallback([&out](std::string&& s) { out.push_back(std::move(s)); });
+  r.SetSendCallback([&out](std::vector<std::string>&& v) {
+    for (auto& s : v) out.push_back(std::move(s));
+  });
 
   r.BuildSimpleString("OK");
   r.BuildInteger(42);
   r.BuildArray({"a", "b"});
+  r.Flush();
   ASSERT_EQ(out.size(), 3u);
   EXPECT_EQ(out[0], "+OK\r\n");
   EXPECT_EQ(out[1], ":42\r\n");
