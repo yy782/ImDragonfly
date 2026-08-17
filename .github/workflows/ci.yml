@@ -119,7 +119,9 @@ jobs:
         run: chmod +x build/test/unit_tests
 
       - name: Run unit tests
-        run: build/test/unit_tests
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          build/test/unit_tests
 
   # ═══════════════════════════════════════════════════════════
   # 集成测试 (Redis 协议验证)
@@ -155,7 +157,9 @@ jobs:
         run: chmod +x build/imdragonfly
 
       - name: Run integration tests
-        run: bash scripts/run_integration_tests.sh
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          bash scripts/run_integration_tests.sh
 
   # ═══════════════════════════════════════════════════════════
   # memtier_benchmark 压力测试
@@ -199,7 +203,9 @@ jobs:
         run: chmod +x build/imdragonfly
 
       - name: Run benchmark
-        run: bash scripts/run_benchmark.sh
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited
+          bash scripts/run_benchmark.sh
 
       - name: Upload benchmark results
         if: always()
