@@ -20,12 +20,9 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main" | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-format-16
-          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-16 100
-          sudo update-alternatives --set clang-format /usr/bin/clang-format-16
+          sudo apt-get install -y --no-install-recommends clang-format-18
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
+          sudo update-alternatives --set clang-format /usr/bin/clang-format-18
           clang-format --version
 
       - name: Check code formatting

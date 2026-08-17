@@ -144,7 +144,7 @@ memtier_benchmark -s 127.0.0.1 -p 6379 \
 | 峰值 CPU 利用率 | 400.0% (4 线程) |
 | 测试配置 | 4 线程 × 100 连接, 30 秒 |
 
-### 管道测试基准 (pipeline=50)
+nini### 管道测试基准 (pipeline=50)
 
 50% SET + 50% GET、pipeline=50、4 线程 × 100 连接、100B payload、30 秒、key 范围 1~1000 万。
 

@@ -34,9 +34,9 @@ fi
 
 echo "Checking ${#SOURCE_FILES[@]} file(s)..."
 
-# 优先使用 clang-format-16 (与本地开发环境一致)
-if command -v clang-format-16 &>/dev/null; then
-    CLANG_FORMAT="clang-format-16"
+# 优先使用 clang-format-18 (与本地开发环境一致)
+if command -v clang-format-18 &>/dev/null; then
+    CLANG_FORMAT="clang-format-18"
 else
     CLANG_FORMAT="clang-format"
 fi
