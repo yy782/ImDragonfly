@@ -178,7 +178,7 @@ if [ "$TEST_EXIT_CODE" -eq 0 ]; then
 else
     echo ""
     echo "=== Integration tests exited unexpectedly (exit code: $TEST_EXIT_CODE), treating as success ==="
-    TEST_EXIT_CODE=0
+    TEST_EXIT_CODE=1
 fi
 
 exit $TEST_EXIT_CODE
