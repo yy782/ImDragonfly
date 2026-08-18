@@ -233,32 +233,6 @@ memtier_benchmark -s 127.0.0.1 -p 6379 \
 > - 平均延迟降低约 **62%**，p50 延迟降低约 **65%**。
 > - CPU 利用率：ImDragonfly 6 个 worker 线程平均利用率 **91.5%**（5.49 核），Redis 仅 **29.8%**（1.79 核），说明 Redis 的 6 线程 I/O 配置在本测试中未能充分利用多核资源。
 
-#### Mixed SET+GET (pipeline=500)
-
-```bash
-memtier_benchmark -s 127.0.0.1 -p 6379 \
-  --command="SET __key__ __data__" --command-key-pattern=R --command-ratio=1 \
-  --command="GET __key__" --command-key-pattern=R --command-ratio=1 \
-  --pipeline=500 \
-  -t 6 -c 100 -d 10 --test-time=30 \
-  --key-minimum=1 --key-maximum=50000 --hide-histogram
-```
-
-| 指标 | Redis 8.10.0 | ImDragonfly | 对比 |
-|------|-------------|-------------|------|
-| 总吞吐 | 2,415,230 ops/s | 5,627,688 ops/s | **+133.0%** |
-| SET 吞吐 | 1,207,621 ops/s | 2,813,845 ops/s | +133.0% |
-| GET 吞吐 | 1,207,608 ops/s | 2,813,843 ops/s | +133.0% |
-| 平均延迟 | 123.95 ms | 53.23 ms | **-57.1%** |
-| p50 延迟 | 125.95 ms | 48.64 ms | **-61.4%** |
-| p99 延迟 | 142.34 ms | 177.15 ms | +24.5% |
-| p99.9 延迟 | 151.55 ms | 503.81 ms | +232.4% |
-| CPU 使用核数 | 1.66 核 (27.6%) | 5.05 核 (84.1%) | +3.39 核 |
-| 峰值 CPU 利用率 | 171.6% | 524.8% | — |
-
-> - Mixed 场景下，ImDragonfly 吞吐达 **563 万 ops/s**，约为 Redis 的 **2.33 倍**（+133%）。
-> - 平均 / p50 延迟分别降低约 **57%** / **61%**。
-
 
 ## 🚀 快速开始
 
