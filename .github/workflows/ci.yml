@@ -19,6 +19,13 @@ jobs:
 
       - name: Install clang-format
         run: |
+          # Fix apt mirror: azure.archive.ubuntu.com is unreachable in CI,
+          # fall back to https://archive.ubuntu.com so Packages index loads.
+          # Handles both legacy sources.list and DEB822 (.sources) on noble.
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-format-18
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-18 100
@@ -45,6 +52,13 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # Fix apt mirror: azure.archive.ubuntu.com is unreachable in CI,
+          # fall back to https://archive.ubuntu.com so Packages index loads.
+          # Handles both legacy sources.list and DEB822 (.sources) on noble.
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang-16 \
@@ -91,6 +105,13 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
+          # Fix apt mirror: azure.archive.ubuntu.com is unreachable in CI,
+          # fall back to https://archive.ubuntu.com so Packages index loads.
+          # Handles both legacy sources.list and DEB822 (.sources) on noble.
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             liburing-dev \
@@ -136,6 +157,13 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
+          # Fix apt mirror: azure.archive.ubuntu.com is unreachable in CI,
+          # fall back to https://archive.ubuntu.com so Packages index loads.
+          # Handles both legacy sources.list and DEB822 (.sources) on noble.
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             liburing-dev \
@@ -174,6 +202,13 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
+          # Fix apt mirror: azure.archive.ubuntu.com is unreachable in CI,
+          # fall back to https://archive.ubuntu.com so Packages index loads.
+          # Handles both legacy sources.list and DEB822 (.sources) on noble.
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list 2>/dev/null || true
+          sudo sed -i 's|http://azure.archive.ubuntu.com|https://archive.ubuntu.com|g' \
+            /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             liburing-dev \
