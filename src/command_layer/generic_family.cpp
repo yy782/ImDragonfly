@@ -11,7 +11,7 @@
 
 #include "cmd_support.hpp"
 #include "detail/common.hpp"
-#include "network/redis_server.hpp"
+#include "server/redis_server.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
@@ -222,25 +222,23 @@ CoroTask GenericFamily::Client_Info(CommandContext* cmd_cntx,
 }
 
 CoroTask GenericFamily::ShutDown(CommandContext*, CmdArgList) {
-  ser->MainProactor()->DispatchBrief([] {
+  RedisServer::Instance().MainProactor()->DispatchBrief([] {
     LOG(INFO) << "[shutdown] ShutDown invoked";
-    ser->SaveAndStop();
+    RedisServer::Instance().SaveAndStop();
   });
   co_return;
 }
 
 CoroTask CmdSave(CommandContext* cmd_cntx) {
-  LOG(INFO) << "[save] CmdSave invoked, dir=" << ser->data_dir();
   std::atomic_bool all_ok{true};
   auto cb = [&all_ok](Transaction* /*tx*/, EngineShard* es) {
-    LOG(INFO) << "[save] CmdSave callback on shard " << es->shard_id();
-    if (!RdbSerializer::SaveShard(es->shard_id(), ser->data_dir())) {
+    if (!RdbSerializer::SaveShard(es->shard_id(),
+                                  RedisServer::Instance().data_dir())) {
       all_ok.store(false);
     }
     return true;
   };
   co_await cmd::SingleHopT(cb);
-  LOG(INFO) << "[save] CmdSave SingleHop done, all_ok=" << all_ok.load();
   cmd_cntx->rb()->BuildSimpleString(all_ok.load() ? "OK"
                                                   : "ERR RDB save failed");
   co_return;

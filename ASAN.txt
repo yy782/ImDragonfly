@@ -696,3 +696,138 @@ Shadow byte legend (one shadow byte represents 8 application bytes):
   Left alloca redzone:     ca
   Right alloca redzone:    cb
 ==9912==ABORTING
+
+
+
+
+
+fixed(lambda引用捕捉导致命令分片的对象意外析构) 见sharding/synchronization/ 209-212
+==457169==ERROR: AddressSanitizer: heap-use-after-free on address 0x506000253238 at pc 0x5fbcea0d8a64 bp 0x70b8227d6f90 sp 0x70b8227d6f88
+READ of size 4 at 0x506000253238 thread T13
+/usr/bin/llvm-symbolizer-17: /usr/local/lib/libcurl.so.4: no version information available (required by /usr/bin/llvm-symbolizer-17)
+    #0 0x5fbcea0d8a63 in std::__atomic_base<unsigned int>::load(std::memory_order) const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/atomic_base.h:505:9
+    #1 0x5fbcea0d8a63 in util::SpinLock::slowLock() /home/yy/programs/ImDragonfly/src/util/spinlock.hpp:103:37
+    #2 0x5fbcea0d6fb2 in util::SpinLock::lock() /home/yy/programs/ImDragonfly/src/util/spinlock.hpp:65:5
+    #3 0x5fbcea0d59ed in std::unique_lock<util::SpinLock>::lock() /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_lock.h:141:17
+    #4 0x5fbcea0d4f2d in std::unique_lock<util::SpinLock>::unique_lock(util::SpinLock&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_lock.h:71:2
+    #5 0x5fbcea0cb3e2 in dfly::EventCount::notifyAll() /home/yy/programs/ImDragonfly/src/sharding/synchronization.cpp:37:22
+    #6 0x5fbcea07c41b in dfly::EmbeddedBlockingCounter::Dec() /home/yy/programs/ImDragonfly/src/sharding/synchronization.hpp:211:24
+    #7 0x5fbcea05f0ad in dfly::PipelineSquasher::ExecuteSquashed()::$_0::operator()()::'lambda'(dfly::PipelineSquasher::ShardDispatch&, dfly::BlockingCounter&, dfly::Namespace const*, unsigned short, unsigned short)::operator()(dfly::PipelineSquasher::ShardDispatch&, dfly::BlockingCounter&, dfly::Namespace const*, unsigned short, unsigned short) const (.resume) /home/yy/programs/ImDragonfly/src/server/pipeline_squasher.cpp:64:13
+    #8 0x5fbcea03f62b in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #9 0x5fbcea117b14 in dfly::Transaction::ResumeIfNeed() /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.hpp:375:17
+    #10 0x5fbcea10ebd2 in dfly::Transaction::SingleHopAsync(fu2::abi_400::detail::function<fu2::abi_400::detail::config<false, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::Transaction*, dfly::EngineShard*)>>, std::__n4861::coroutine_handle<void>) (.resume) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:331:3
+    #11 0x5fbcea0e67c3 in dfly::Transaction::SingleHopAsync(fu2::abi_400::detail::function<fu2::abi_400::detail::config<false, true, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void (dfly::Transaction*, dfly::EngineShard*)>>, std::__n4861::coroutine_handle<void>) /home/yy/programs/ImDragonfly/src/transaction_layer/transaction.cpp:325:5
+    #12 0x5fbce9f74409 in dfly::cmd::Coro::SingleHopWaiterT<facade::OpResult<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char>>>>::await_suspend(std::__n4861::coroutine_handle<dfly::cmd::Coro>) /home/yy/programs/ImDragonfly/src/command_layer/cmd_support.hpp:109:24
+    #13 0x5fbce9ff53cf in dfly::(anonymous namespace)::CmdGet(dfly::CommandContext*, std::span<std::basic_string_view<char, std::char_traits<char>> const, 18446744073709551615ul>) (.resume) /home/yy/programs/ImDragonfly/src/command_layer/string_family.cpp:297:17
+    #14 0x5fbce9ee86eb in std::__n4861::coroutine_handle<dfly::cmd::Coro>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:240:29
+    #15 0x5fbce9ee2c05 in dfly::cmd::CoroTask::await_suspend(std::__n4861::coroutine_handle<void>) /home/yy/programs/ImDragonfly/src/command_layer/cmd_support.hpp:130:9
+    #16 0x5fbcea05c06a in dfly::PipelineSquasher::ExecuteSquashed()::$_0::operator()()::'lambda'(dfly::PipelineSquasher::ShardDispatch&, dfly::BlockingCounter&, dfly::Namespace const*, unsigned short, unsigned short)::operator()(dfly::PipelineSquasher::ShardDispatch&, dfly::BlockingCounter&, dfly::Namespace const*, unsigned short, unsigned short) const /home/yy/programs/ImDragonfly/src/server/pipeline_squasher.cpp:61:20
+    #17 0x5fbcea05afe8 in dfly::PipelineSquasher::ExecuteSquashed()::$_0::operator()() /home/yy/programs/ImDragonfly/src/server/pipeline_squasher.cpp:67:7
+    #18 0x5fbcea05ad44 in decltype(std::forward<dfly::PipelineSquasher::ExecuteSquashed()::$_0&>(fp)()) fu2::abi_400::detail::invocation::invoke<dfly::PipelineSquasher::ExecuteSquashed()::$_0&>(dfly::PipelineSquasher::ExecuteSquashed()::$_0&) /home/yy/programs/ImDragonfly/src/util/function2.hpp:221:10
+    #19 0x5fbcea05df91 in fu2::abi_400::detail::type_erasure::invocation_table::function_trait<void ()>::internal_invoker<fu2::abi_400::detail::type_erasure::box<false, dfly::PipelineSquasher::ExecuteSquashed()::$_0, std::allocator<dfly::PipelineSquasher::ExecuteSquashed()::$_0>>, false>::invoke(fu2::abi_400::detail::type_erasure::data_accessor*, unsigned long) /home/yy/programs/ImDragonfly/src/util/function2.hpp:620:1
+    #20 0x5fbcea047211 in decltype(auto) fu2::abi_400::detail::type_erasure::tables::vtable<fu2::abi_400::detail::property<false, false, void ()>>::invoke<0ul, fu2::abi_400::detail::type_erasure::data_accessor*, unsigned long const&>(fu2::abi_400::detail::type_erasure::data_accessor*&&, unsigned long const&) const /home/yy/programs/ImDragonfly/src/util/function2.hpp:1017:12
+    #21 0x5fbcea0470ed in decltype(auto) fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, false, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void ()>>::invoke<0ul, fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, false, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void ()>>&>(fu2::abi_400::detail::type_erasure::erasure<true, fu2::abi_400::detail::config<true, false, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void ()>>&) /home/yy/programs/ImDragonfly/src/util/function2.hpp:1231:37
+    #22 0x5fbcea046dfc in fu2::abi_400::detail::type_erasure::invocation_table::operator_impl<0ul, fu2::abi_400::detail::function<fu2::abi_400::detail::config<true, false, fu2::capacity_default>, fu2::abi_400::detail::property<false, false, void ()>>, void ()>::operator()() /home/yy/programs/ImDragonfly/src/util/function2.hpp:803:1
+    #23 0x5fbcea04030d in util::TaskQueue::TryDrain() /home/yy/programs/ImDragonfly/src/util/task_queue.hpp:35:7
+    #24 0x5fbcea03b44a in base::UringProactor::Run() /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:316:17
+    #25 0x5fbce9ed591a in base::UringProactorPool::AsyncLoop()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/src/io/uring_proactor_pool.hpp:35:28
+    #26 0x5fbce9ed55c4 in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()::operator()() /home/yy/programs/ImDragonfly/src/util/thread.hpp:26:11
+    #27 0x5fbce9ed55a4 in base::UringProactorPool::AsyncLoop()::'lambda'() std::__invoke_impl<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(std::__invoke_other, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #28 0x5fbce9ed5554 in std::enable_if<is_invocable_r_v<base::UringProactorPool::AsyncLoop()::'lambda'(), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>, base::UringProactorPool::AsyncLoop()::'lambda'()>::type std::__invoke_r<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #29 0x5fbce9ed540c in std::_Function_handler<void (), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #30 0x5fbce9ed5db2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #31 0x5fbce9ed529e in util::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/src/util/thread.hpp:115:5
+    #32 0x5fbce9e7ea3a in asan_thread_start(void*) asan_interceptors.cpp.o
+    #33 0x70b82ca94a82 in start_thread nptl/pthread_create.c:442:8
+    #34 0x70b82cb2688f  misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S:81
+
+0x506000253238 is located 24 bytes inside of 64-byte region [0x506000253220,0x506000253260)
+freed by thread T16 here:
+    #0 0x5fbce9ebdfed in operator delete(void*) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x119fed) (BuildId: 77f16af662a7f714b9bb126109f110345506c06b)
+    #1 0x5fbcea07f4d5 in util::intrusive_ptr_release(util::intrusive_ref_counter<dfly::EmbeddedBlockingCounter, util::thread_safe_counter> const*) /home/yy/programs/ImDragonfly/src/util/intrusive_ptr.hpp:90:7
+    #2 0x5fbcea07f485 in util::intrusive_ptr<dfly::EmbeddedBlockingCounter>::~intrusive_ptr() /home/yy/programs/ImDragonfly/src/util/intrusive_ptr.hpp:130:15
+    #3 0x5fbcea073ec4 in dfly::BlockingCounter::~BlockingCounter() /home/yy/programs/ImDragonfly/src/sharding/synchronization.hpp:234:7
+    #4 0x5fbcea06695c in dfly::PipelineSquasher::ExecuteSquashed() (.resume) /home/yy/programs/ImDragonfly/src/server/pipeline_squasher.cpp:86:1
+    #5 0x5fbcea03f62b in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #6 0x5fbcea03938a in base::UringProactor::ResumeSlot(unsigned int, int, int) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:151:13
+    #7 0x5fbcea03ab99 in base::UringProactor::ProcessCqe(io_uring_cqe*) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:255:3
+    #8 0x5fbcea03b119 in base::UringProactor::PollOnce(unsigned int, unsigned int) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:296:5
+    #9 0x5fbcea03b4f3 in base::UringProactor::Run() /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:318:21
+    #10 0x5fbce9ed591a in base::UringProactorPool::AsyncLoop()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/src/io/uring_proactor_pool.hpp:35:28
+    #11 0x5fbce9ed55c4 in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()::operator()() /home/yy/programs/ImDragonfly/src/util/thread.hpp:26:11
+    #12 0x5fbce9ed55a4 in base::UringProactorPool::AsyncLoop()::'lambda'() std::__invoke_impl<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(std::__invoke_other, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #13 0x5fbce9ed5554 in std::enable_if<is_invocable_r_v<base::UringProactorPool::AsyncLoop()::'lambda'(), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>, base::UringProactorPool::AsyncLoop()::'lambda'()>::type std::__invoke_r<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #14 0x5fbce9ed540c in std::_Function_handler<void (), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #15 0x5fbce9ed5db2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #16 0x5fbce9ed529e in util::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/src/util/thread.hpp:115:5
+    #17 0x5fbce9e7ea3a in asan_thread_start(void*) asan_interceptors.cpp.o
+
+previously allocated by thread T16 here:
+    #0 0x5fbce9ebd78d in operator new(unsigned long) (/home/yy/programs/ImDragonfly/build/imdragonfly+0x11978d) (BuildId: 77f16af662a7f714b9bb126109f110345506c06b)
+    #1 0x5fbcea072380 in dfly::BlockingCounter::BlockingCounter(unsigned int) /home/yy/programs/ImDragonfly/src/sharding/synchronization.hpp:237:18
+    #2 0x5fbcea065c81 in dfly::PipelineSquasher::ExecuteSquashed() (.resume) /home/yy/programs/ImDragonfly/src/server/pipeline_squasher.cpp:46:25
+    #3 0x5fbcea03f62b in std::__n4861::coroutine_handle<void>::resume() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/coroutine:135:29
+    #4 0x5fbcea03938a in base::UringProactor::ResumeSlot(unsigned int, int, int) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:151:13
+    #5 0x5fbcea03ab99 in base::UringProactor::ProcessCqe(io_uring_cqe*) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:255:3
+    #6 0x5fbcea03b119 in base::UringProactor::PollOnce(unsigned int, unsigned int) /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:296:5
+    #7 0x5fbcea03b4f3 in base::UringProactor::Run() /home/yy/programs/ImDragonfly/src/io/uring_proactor.cpp:318:21
+    #8 0x5fbce9ed591a in base::UringProactorPool::AsyncLoop()::'lambda'()::operator()() const /home/yy/programs/ImDragonfly/src/io/uring_proactor_pool.hpp:35:28
+    #9 0x5fbce9ed55c4 in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()::operator()() /home/yy/programs/ImDragonfly/src/util/thread.hpp:26:11
+    #10 0x5fbce9ed55a4 in base::UringProactorPool::AsyncLoop()::'lambda'() std::__invoke_impl<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(std::__invoke_other, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:61:14
+    #11 0x5fbce9ed5554 in std::enable_if<is_invocable_r_v<base::UringProactorPool::AsyncLoop()::'lambda'(), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>, base::UringProactorPool::AsyncLoop()::'lambda'()>::type std::__invoke_r<void, util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&>(util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/invoke.h:111:2
+    #12 0x5fbce9ed540c in std::_Function_handler<void (), util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&)::'lambda'()>::_M_invoke(std::_Any_data const&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:290:9
+    #13 0x5fbce9ed5db2 in std::function<void ()>::operator()() const /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/std_function.h:591:9
+    #14 0x5fbce9ed529e in util::Thread::thread_func(void*) /home/yy/programs/ImDragonfly/src/util/thread.hpp:115:5
+    #15 0x5fbce9e7ea3a in asan_thread_start(void*) asan_interceptors.cpp.o
+
+Thread T13 created by T0 here:
+    #0 0x5fbce9e667cd in pthread_create (/home/yy/programs/ImDragonfly/build/imdragonfly+0xc27cd) (BuildId: 77f16af662a7f714b9bb126109f110345506c06b)
+    #1 0x5fbce9ed4f2a in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&) /home/yy/programs/ImDragonfly/src/util/thread.hpp:29:9
+    #2 0x5fbce9ed4b22 in std::__detail::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*&&, base::UringProactorPool::AsyncLoop()::'lambda'()&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_ptr.h:1070:34
+    #3 0x5fbce9ed4437 in base::UringProactorPool::AsyncLoop() /home/yy/programs/ImDragonfly/src/io/uring_proactor_pool.hpp:32:21
+    #4 0x5fbce9eccd76 in dfly::RedisServer::Start() /home/yy/programs/ImDragonfly/src/server/redis_server.hpp:241:11
+    #5 0x5fbce9ec0ac2 in main /home/yy/programs/ImDragonfly/main.cpp:106:27
+    #6 0x70b82ca29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+Thread T16 created by T0 here:
+    #0 0x5fbce9e667cd in pthread_create (/home/yy/programs/ImDragonfly/build/imdragonfly+0xc27cd) (BuildId: 77f16af662a7f714b9bb126109f110345506c06b)
+    #1 0x5fbce9ed4f2a in util::Thread::Thread<base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*, base::UringProactorPool::AsyncLoop()::'lambda'()&&) /home/yy/programs/ImDragonfly/src/util/thread.hpp:29:9
+    #2 0x5fbce9ed4b22 in std::__detail::_MakeUniq<util::Thread>::__single_object std::make_unique<util::Thread, char const*, base::UringProactorPool::AsyncLoop()::'lambda'()>(char const*&&, base::UringProactorPool::AsyncLoop()::'lambda'()&&) /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/unique_ptr.h:1070:34
+    #3 0x5fbce9ed4437 in base::UringProactorPool::AsyncLoop() /home/yy/programs/ImDragonfly/src/io/uring_proactor_pool.hpp:32:21
+    #4 0x5fbce9eccd76 in dfly::RedisServer::Start() /home/yy/programs/ImDragonfly/src/server/redis_server.hpp:241:11
+    #5 0x5fbce9ec0ac2 in main /home/yy/programs/ImDragonfly/main.cpp:106:27
+    #6 0x70b82ca29d8f in __libc_start_call_main csu/../sysdeps/nptl/libc_start_call_main.h:58:16
+
+SUMMARY: AddressSanitizer: heap-use-after-free /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/bits/atomic_base.h:505:9 in std::__atomic_base<unsigned int>::load(std::memory_order) const
+Shadow bytes around the buggy address:
+  0x506000252f80: fd fd fd fd fd fd fd fd fa fa fa fa fd fd fd fd
+  0x506000253000: fd fd fd fa fa fa fa fa fd fd fd fd fd fd fd fd
+  0x506000253080: fa fa fa fa fd fd fd fd fd fd fd fd fa fa fa fa
+  0x506000253100: fd fd fd fd fd fd fd fa fa fa fa fa fd fd fd fd
+  0x506000253180: fd fd fd fd fa fa fa fa fd fd fd fd fd fd fd fa
+=>0x506000253200: fa fa fa fa fd fd fd[fd]fd fd fd fd fa fa fa fa
+  0x506000253280: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x506000253300: fa fa fa fa fa fa fa fa fd fd fd fd fd fd fd fa
+  0x506000253380: fa fa fa fa fd fd fd fd fd fd fd fd fa fa fa fa
+  0x506000253400: fd fd fd fd fd fd fd fd fa fa fa fa fd fd fd fd
+  0x506000253480: fd fd fd fd fa fa fa fa fd fd fd fd fd fd fd fd
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==457169==ABORTING

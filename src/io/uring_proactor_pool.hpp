@@ -17,23 +17,37 @@ class UringProactorPool {
       threads_.emplace_back();
     }
   }
+  ~UringProactorPool() {
+    for (UringProactor* p : proactors_) {
+      delete p;
+    }
+  }
+
+  UringProactorPool(const UringProactorPool&) = delete;
+  UringProactorPool& operator=(const UringProactorPool&) = delete;
+
   void AsyncLoop() {
     std::string base_name = "proactor_thread_";
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i] = std::make_unique<util::Thread>(
           (base_name + std::to_string(i)).c_str(), [this, i] {
-            proactors_[i] = std::make_shared<UringProactor>(cfg_, i);
+            proactors_[i] = new UringProactor(cfg_, i);
             proactors_[i]->Run();
+            // Run 返回后 delete 自家 proactor，避免 ~UringProactorPool 跨线程
+            // delete
+            delete proactors_[i];
+            proactors_[i] = nullptr;
           });
     }
   }
 
   void stop() {
-    DispatchBrief([](std::shared_ptr<UringProactor> p) { p->Shutdown(); });
+    DispatchBrief([](UringProactor* p) { p->Shutdown(); });
 
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i]->join();
     }
+    // threads_ join 后 proactors_ 已被各 worker 线程清空
   }
 
   size_t size() const { return proactors_.size(); }
@@ -41,7 +55,7 @@ class UringProactorPool {
   template <typename Func>
   void DispatchBrief(Func&& f) {
     for (std::size_t i = 0; i < size(); ++i) {
-      auto& p = proactors_[i];
+      auto p = proactors_[i];
 
       p->DispatchBrief([p, f]() mutable { f(p); });
     }
@@ -50,7 +64,7 @@ class UringProactorPool {
   void AwaitOnAll(Func&& func) {
     std::latch latch(size());
     auto cb = [func = std::forward<Func>(func),
-               &latch](std::shared_ptr<UringProactor> p) mutable {
+               &latch](UringProactor* p) mutable {
       func(p);
       latch.count_down();
     };
@@ -64,7 +78,7 @@ class UringProactorPool {
 
  private:
   UringConfig cfg_;
-  std::vector<std::shared_ptr<UringProactor>> proactors_;
+  std::vector<UringProactor*> proactors_;
   std::vector<std::unique_ptr<util::Thread>> threads_;
 };
 

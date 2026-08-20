@@ -18,7 +18,7 @@ target_compile_options(imdragonfly_lib PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly_lib PUBLIC
     ${CMAKE_THREAD_LIBS_INIT}
-    net
+    io
     third_party_deps
 )
 
@@ -35,7 +35,7 @@ if(BUILD_TESTS)
     target_compile_options(imdragonfly_lib_test PRIVATE ${CXX_WARNING_OPTIONS})
     target_link_libraries(imdragonfly_lib_test PUBLIC
         ${CMAKE_THREAD_LIBS_INIT}
-        net
+        io
         third_party_deps
     )
 endif()

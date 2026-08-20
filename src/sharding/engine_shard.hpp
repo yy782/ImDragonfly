@@ -11,7 +11,7 @@
 #include "detail/intent_lock.hpp"
 #include "detail/mi_memory_resource.hpp"
 #include "detail/tx_queue.hpp"
-#include "net/uring_proactor.hpp"
+#include "io/uring_proactor.hpp"
 #include "util/intrusive_ptr.hpp"
 #include "util/task_queue.hpp"
 

@@ -9,8 +9,8 @@
 #include <thread>
 #include <vector>
 
-#include "network/redis_server.hpp"
 #include "redis/facade/reply_builder.hpp"
+#include "server/redis_server.hpp"
 #include "test_util/RESP2Parser.hpp"
 #include "transaction_layer/transaction.hpp"
 using namespace dfly;

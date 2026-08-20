@@ -21,9 +21,7 @@ void EngineShardSet::Init(uint32_t sz) {
   shards_.reset(new EngineShard*[sz]);
   size_ = sz;
 
-  pp_->AwaitOnAll([this](std::shared_ptr<base::UringProactor> pb) {
-    InitThreadLocal(pb.get());
-  });
+  pp_->AwaitOnAll([this](base::UringProactor* pb) { InitThreadLocal(pb); });
 
   namespaces = new Namespaces();
   namespaces->init();

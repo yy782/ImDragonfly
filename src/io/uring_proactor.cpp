@@ -23,11 +23,6 @@ RecvResult RecvAwaitable::await_resume() noexcept {
   RecvResult r;
   r.bytes = slot.result;
   r.buf_index = static_cast<int32_t>(slot.flags);
-  if (r.buf_index < 0 ||
-      r.buf_index >= static_cast<int>(proactor()->reg_bufs_.size())) {
-    r.data = "";
-    return r;
-  }
   r.data = proactor()->reg_bufs_[r.buf_index].memory;
   return r;
 }
@@ -36,15 +31,16 @@ UringProactor::UringProactor(UringConfig cfg, int pool_index)
     : config_(cfg),
       pool_index_(pool_index),
       task_queue_(config_.task_queue_size) {
-  MaxPendingSlots_ = cfg.queue_depth;
-  SqeBatchSize_ = cfg.sqe_batch_size;
-  size_t slots = MaxPendingSlots_;
+  size_t slots = static_cast<size_t>(config_.queue_depth);
 
   pending_slots_.resize(slots);
-  free_slots_.reserve(slots);
+  // 使用侵入式链表组织空闲槽：pending_slots_[i].next 串起空闲表，
+  // next_free_IoCompletionNode_ 为链表头（空表时为 -1）。
   for (uint32_t i = 0; i < slots; ++i) {
-    free_slots_.push_back(i);
+    pending_slots_[i].next = i + 1;
   }
+  pending_slots_[slots - 1].next = static_cast<uint32_t>(-1);
+  next_free_IoCompletionNode_ = 0;
 
   InitRing();
 
@@ -97,13 +93,13 @@ void UringProactor::InitRing() {
 }
 
 void UringProactor::InitRegisteredBuffers() {
-  reg_buf_count_ = static_cast<uint32_t>(config_.registered_buf_count);
-  reg_bufs_.resize(reg_buf_count_);
+  const uint32_t count = static_cast<uint32_t>(config_.registered_buf_count);
+  reg_bufs_.resize(count);
 
   std::vector<struct iovec> iovecs;
-  iovecs.reserve(reg_buf_count_);
+  iovecs.reserve(count);
 
-  for (uint32_t i = 0; i < reg_buf_count_; ++i) {
+  for (uint32_t i = 0; i < count; ++i) {
     auto& slot = reg_bufs_[i];
     slot.memory = new char[config_.registered_buf_size];
     slot.next = i + 1;
@@ -112,44 +108,50 @@ void UringProactor::InitRegisteredBuffers() {
     iov.iov_len = static_cast<size_t>(config_.registered_buf_size);
     iovecs.push_back(iov);
   }
-  reg_bufs_[reg_buf_count_ - 1].next = -1;
+  reg_bufs_[count - 1].next = -1;
 
   int ret = io_uring_register_buffers(&ring_, iovecs.data(), iovecs.size());
   // 读路径固定走 AsyncRecvFixed（直接索引 reg_bufs_），没有标准 recv 回退，
   // 注册失败会让后续读取越界，故直接失败而非回退。
   CHECK_GE(ret, 0) << "io_uring_register_buffers failed: " << -ret;
-  LOG(INFO) << "Registered " << reg_buf_count_ << " fixed buffers ("
-            << config_.registered_buf_size << "B each)";
+  LOG(INFO) << "Registered " << config_.registered_buf_count
+            << " fixed buffers (" << config_.registered_buf_size << "B each)";
 }
 
 uint32_t UringProactor::AllocSlot() {
-  // slot 只来自"已完成 CQE"归还的空闲池，绝不循环覆盖在途操作。
-  // 池空 = 在途操作数已达上限（正常压测不可能，256 连接 × 2 在途 << 4096），
-  // 视为编程错误立即暴露。
-  CHECK(!free_slots_.empty())
-      << "io_uring slot pool exhausted: in-flight ops = " << MaxPendingSlots_;
-  uint32_t idx = free_slots_.back();
-  free_slots_.pop_back();
-  auto& slot = pending_slots_[idx];
-  slot.coro = nullptr;
-  slot.result = -ECANCELED;
-  slot.flags = -1;
+  DCHECK(next_free_IoCompletionNode_ >= 0);
+  uint32_t idx = static_cast<uint32_t>(next_free_IoCompletionNode_);
+  DCHECK(idx != static_cast<uint32_t>(-1))
+      << "io_uring slot pool exhausted: in-flight ops = "
+      << config_.queue_depth;
+  auto& node = pending_slots_[idx];
+  // 摘下链表头：头指针前进到 node.next
+  next_free_IoCompletionNode_ = static_cast<int32_t>(node.next);
+  node.next = static_cast<uint32_t>(
+      -1);  // 已分配节点的 next 置为哨兵，便于调试检测重复归还。
   return idx;
 }
 
 void UringProactor::FreeSlot(uint32_t slot_idx) {
-  free_slots_.push_back(slot_idx);
+  DCHECK(slot_idx < pending_slots_.size());
+  auto& node = pending_slots_[slot_idx];
+  DCHECK(node.next == static_cast<uint32_t>(-1))
+      << "Double FreeSlot detected: slot_idx=" << slot_idx;
+  // 头插法归还到空闲链表
+  node.next = static_cast<uint32_t>(next_free_IoCompletionNode_);
+  next_free_IoCompletionNode_ = static_cast<int32_t>(slot_idx);
 }
 
 void UringProactor::ResumeSlot(uint32_t slot_idx, int32_t result,
                                int32_t extra) {
-  auto& slot = pending_slots_[slot_idx];
+  auto& slot = GetSlot(slot_idx);
   slot.result = result;
   slot.flags = extra;
-  if (slot.coro) {
-    slot.coro.resume();  // 同步执行到协程下次挂起/结束
-  }
+  DCHECK(slot.coro);
+  slot.coro.resume();
   slot.coro = nullptr;
+  slot.result = 0;
+  slot.flags = 0;
   FreeSlot(slot_idx);
 }
 
@@ -166,7 +168,7 @@ struct io_uring_sqe* UringProactor::GetSqeOrFlush() {
 
 void UringProactor::SubmitIfNeeded() {
   uint32_t prev = pending_sqes_++;
-  if (prev + 1 >= SqeBatchSize_) {
+  if (prev + 1 >= config_.sqe_batch_size) {
     io_uring_submit(&ring_);
     pending_sqes_ = 0;
   }
@@ -205,7 +207,7 @@ IoAwaitable UringProactor::AsyncSend(int fd, const void* buf, size_t len) {
 }
 
 IoAwaitable UringProactor::AsyncSendV(int fd, const struct msghdr* msg) {
-  CHECK(msg != nullptr && msg->msg_iovlen > 0);
+  DCHECK(msg != nullptr && msg->msg_iovlen > 0);
   uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
@@ -226,44 +228,30 @@ IoAwaitable UringProactor::ArmPeriodicTimer(uint64_t interval_ms) {
       static_cast<__kernel_time64_t>(interval_ms % 1000) * 1000000};
   io_uring_prep_timeout(sqe, &ts, 0, 0);
   sqe->user_data = slot_idx;
-  io_uring_submit(&ring_);  // ts 此刻仍在栈上，内核提交时读到有效值
+  io_uring_submit(&ring_);
   pending_sqes_ = 0;
-  LOG(INFO) << "[timer] ArmPeriodicTimer armed slot=" << slot_idx
-            << " interval_ms=" << interval_ms;
+  VLOG(3) << "[timer] ArmPeriodicTimer armed slot=" << slot_idx
+          << " interval_ms=" << interval_ms;
   return IoAwaitable(this, slot_idx);
 }
 
 int UringProactor::AcquireRegBuf() {
   int re = next_buf_;
-  if (re < 0 || re >= static_cast<int>(reg_bufs_.size())) {
-    return re;
-  }
   auto& slot = reg_bufs_[re];
   next_buf_ = slot.next;
   return re;
 }
 
 void UringProactor::ReleaseRegBuf(int index) {
-  if (index < 0 || index >= static_cast<int>(reg_bufs_.size())) {
-    return;
-  }
+  DCHECK(index >= 0 && index < static_cast<int>(reg_bufs_.size()));
   auto& slot = reg_bufs_[index];
   slot.next = next_buf_;
   next_buf_ = index;
 }
 
 void UringProactor::ProcessCqe(struct io_uring_cqe* cqe) {
-  // liburing 内部超时事件（user_data = LIBURING_UDATA_TIMEOUT）没有对应
-  // slot，直接丢弃，避免被当成 slot 索引导致越界访问/崩溃。
-  if (cqe->user_data == LIBURING_UDATA_TIMEOUT) {
-    return;
-  }
   uint32_t slot_idx = static_cast<uint32_t>(cqe->user_data);
   auto& slot = GetSlot(slot_idx);
-  if (!slot.coro) {
-    return;
-  }
-
   ResumeSlot(slot_idx, cqe->res, slot.flags);
 }
 

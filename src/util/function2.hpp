@@ -238,9 +238,10 @@ constexpr auto invoke(Type T::*member, Self&& self, Args&&... args) noexcept(
 }
 /// Invokes the given pointer to a scalar member by reference
 template <typename T, typename Type, typename Self>
-constexpr auto invoke(Type T::*member, Self&& self) noexcept(noexcept(
-    std::forward<Self>(self).*member)) -> decltype(std::forward<Self>(self).*
-                                                   member) {
+constexpr auto invoke(Type T::*member,
+                      Self&& self) noexcept(noexcept(std::forward<Self>(self).*
+                                                     member))
+    -> decltype(std::forward<Self>(self).*member) {
   return (std::forward<Self>(self).*member);
 }
 /// Invokes the given pointer to a scalar member by pointer

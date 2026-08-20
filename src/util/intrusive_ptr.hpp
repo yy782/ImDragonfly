@@ -24,6 +24,14 @@ namespace detail {
 template <class C>
 void counter_add(C& c, unsigned int n) noexcept {
   if constexpr (std::is_same_v<C, std::atomic<unsigned int>>) {
+    // 调用 add_ref 的线程必然已经持有至少 1 个引用（通过拷贝构造、
+    // reset(p) 或从已有 ptr 复制而来）。这意味着对象数据早已通过"上一次
+    // 建立引用"时的同步（release/acquire 配对，或构造时单线程的 program
+    // order）抵达本核的 cache，本核看到对象内存是完整的。
+    //
+    // 增加 ref_count 只是把计数从 N 变成 N+1，不读取对象数据、不建立
+    // 新的 happens-before 关系。因此这里只需要"原子的算术增量"，
+    // 不需要任何内存屏障。
     c.fetch_add(n, std::memory_order_relaxed);
   } else {
     c += n;

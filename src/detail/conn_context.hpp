@@ -6,7 +6,7 @@
 
 #include "cppcoro/task.hpp"
 #include "detail/common.hpp"
-#include "net/uring_proactor.hpp"
+#include "io/uring_proactor.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/db_slice.hpp"
 #include "sharding/engine_shard_set.hpp"
@@ -36,6 +36,8 @@ class ConnectionContext {
 
   const Namespace* GetNamespace() const { return ns_; }
   DbIndex GetDbIndex() const { return index_; }
+
+  void NotifyClose() { owner_.reset(); }
 
  private:
   friend class RedisSession;

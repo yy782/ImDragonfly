@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "cppcoro/async_task.hpp"
-#include "network/redis_server.hpp"
 #include "redis/facade/reply_builder.hpp"
+#include "server/redis_server.hpp"
 #include "sharding/namespaces.hpp"
 #include "test_util/RESP2Parser.hpp"
 

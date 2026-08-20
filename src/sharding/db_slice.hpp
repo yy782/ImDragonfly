@@ -136,6 +136,17 @@ class DbSlice {
     } while (cursor);
   }
 
+  template <typename Cb>
+  void TraverseTableMutable(DbIndex dbid, Cb&& cb) {
+    if (!IsDbValid(dbid)) return;
+    auto& db = *db_arr_[dbid];
+    PrimeTable::Cursor cursor;
+    do {
+      cursor = db.prime_.Traverse(cursor,
+                                  [&cb](PrimeTable::iterator it) { cb(it); });
+    } while (cursor);
+  }
+
   facade::OpResult<void> UpdateExpire(const Context& cntx, Iterator main_it,
                                       int64_t sec);
   void AddExpire(DbIndex db_ind, const Iterator& main_it, uint64_t at);

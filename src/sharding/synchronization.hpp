@@ -187,6 +187,16 @@ class EmbeddedBlockingCounter
  public:
   EmbeddedBlockingCounter(unsigned start_count = 0)
       : ec_{}, count_{start_count} {}
+
+  // WaitCondition 必须在 Wait / IsCompleted 之前定义：deduced return type
+  // 的方法不能在定义之前被调用。
+  auto WaitCondition(uint64_t* cnt) const {
+    return [this, cnt]() -> bool {
+      *cnt = count_.load(std::memory_order_relaxed);
+      return *cnt == 0 || (*cnt & kCancelFlag);
+    };
+  }
+
   cppcoro::task<bool> Wait() {
     uint64_t cnt;
     co_await ec_.await(WaitCondition(&cnt));
@@ -196,6 +206,23 @@ class EmbeddedBlockingCounter
   void Add(unsigned cnt = 1) {
     count_.fetch_add(cnt, std::memory_order_relaxed);
   }
+  // ── 生命周期约定 ──────────────────────────────────────────────────
+  // Dec()/Cancel() 不自持引用，调用方必须保证 *this 存活到方法返回。
+  //
+  // 这里存在 check-then-notify 竞态窗口，需要外部协同规避：
+  //   1. fetch_sub 把 count 从 1 减到 0（结果立即可见，acq_rel 保证）
+  //   2. 本线程被抢占，尚未执行 ec_.notifyAll()
+  //   3. Wait() 端在 ec_.await(cond) 的 fast path（见 L71-74）检查
+  //      cond() 看到 count==0，直接 co_return，不进 prepareWait/wait
+  //   4. Wait() 端继续往下执行，若此时释放对 *this 的最后一个引用
+  //      （如 ExecuteSquashed 协程帧析构、BlockingCounter 析构），
+  //      *this 被 delete，ec_/SpinLock 内存被释放
+  //   5. 本线程恢复，执行 ec_.notifyAll() → 访问已释放的 SpinLock → UAF
+  //
+  //
+  // 典型违反：pipeline_squasher.cpp 原 lambda 按引用捕获 BlockingCounter，
+  // ExecuteSquashed 协程 co_await Wait() 返回后立即析构 bc，触发上述竞态。
+  // ─────────────────────────────────────────────────────────────────
   void Dec() {
     uint64_t prev = count_.fetch_sub(1, std::memory_order_acq_rel);
     if (prev == 1) ec_.notifyAll();
@@ -204,6 +231,7 @@ class EmbeddedBlockingCounter
     count_.fetch_or(kCancelFlag, std::memory_order_acq_rel);
     ec_.notifyAll();
   }
+
   bool IsCompleted() const {
     uint64_t v = 0;
     bool result = WaitCondition(&v)();
@@ -215,12 +243,6 @@ class EmbeddedBlockingCounter
 
  private:
   const uint64_t kCancelFlag = (1ULL << 63);
-  std::function<bool()> WaitCondition(uint64_t* cnt) const {
-    return [this, cnt]() -> bool {
-      *cnt = count_.load(std::memory_order_relaxed);
-      return *cnt == 0 || (*cnt & kCancelFlag);
-    };
-  }
 
   EventCount ec_;
   std::atomic<uint64_t> count_;

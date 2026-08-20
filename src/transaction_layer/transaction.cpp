@@ -6,7 +6,7 @@
 #include <bitset>
 #include <latch>
 
-#include "network/redis_server.hpp"
+#include "server/redis_server.hpp"
 
 namespace dfly {
 using namespace std;

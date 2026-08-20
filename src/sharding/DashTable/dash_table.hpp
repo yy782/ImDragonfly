@@ -485,9 +485,10 @@ void DashTable<_Key, _Value, Policy>::Clear() {
 
 template <typename _Key, typename _Value, typename Policy>
 template <typename U, typename V, typename EvictionPolicy>
-auto DashTable<_Key, _Value, Policy>::InsertInternal(
-    U&& key, V&& value, EvictionPolicy& ev,
-    InsertMode mode) -> std::pair<iterator, bool> {
+auto DashTable<_Key, _Value, Policy>::InsertInternal(U&& key, V&& value,
+                                                     EvictionPolicy& ev,
+                                                     InsertMode mode)
+    -> std::pair<iterator, bool> {
   uint64_t key_hash = DoHash(key);
   uint32_t target_seg_id = SegmentId(key_hash);
   // 使用哈希值的高 global_depth_ 位确定目标段, hash >> (64 - global_depth_);

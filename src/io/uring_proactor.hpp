@@ -122,7 +122,7 @@ class UringProactor {
 
   uint32_t AllocSlot();
   void FreeSlot(uint32_t slot_idx);
-  IoCompletionSlot& GetSlot(uint32_t idx) { return pending_slots_[idx]; }
+  IoCompletionSlot& GetSlot(uint32_t idx) { return pending_slots_[idx].slot; }
   void ResumeSlot(uint32_t slot_idx, int32_t result, int32_t extra = 0);
 
   struct io_uring_sqe* GetSqeOrFlush();
@@ -136,12 +136,12 @@ class UringProactor {
   struct io_uring ring_;
   UringConfig config_;
   int pool_index_ = -1;
-  size_t MaxPendingSlots_;
-  std::vector<IoCompletionSlot> pending_slots_;
-  // 空闲 slot 池：slot 只通过"CQE 完成 → ResumeSlot → FreeSlot"归还，
-  // 绝不循环覆盖在途操作，因此同一 slot 上不可能有多个未完成操作，
-  // 幽灵 CQE（slot 复用后迟到的旧 CQE）在结构上不可能出现。
-  std::vector<uint32_t> free_slots_;
+  struct IoCompletionNode {
+    IoCompletionSlot slot;
+    uint32_t next = -1;
+  };
+  std::vector<IoCompletionNode> pending_slots_;
+  int32_t next_free_IoCompletionNode_ = 0;
   struct RegBufSlot {
     char* memory;
     int next = -1;
@@ -149,13 +149,15 @@ class UringProactor {
   std::vector<RegBufSlot> reg_bufs_;
   int next_buf_ = 0;
   util::TaskQueue task_queue_;
-  pthread_t loop_thread_id_;
+  pthread_t
+      loop_thread_id_;  // TODO 多余，应该用分片ID检查检查状态而不是线程ID检查
   bool shutdown_{false};
   uint32_t pending_sqes_{0};
-  uint32_t SqeBatchSize_;
-  uint32_t reg_buf_count_;
 };
 
-using UringProactorPtr = std::shared_ptr<UringProactor>;
+// UringProactor 生命周期覆盖整个程序期间（由 UringProactorPool 持有到 stop），
+// 全局使用裸指针避免 shared_ptr 的原子引用计数开销。
+// 使用约束：proactor 必须存活到所有引用它的 UringSocket / RedisSession
+// 释放之后。
 
 }  // namespace base

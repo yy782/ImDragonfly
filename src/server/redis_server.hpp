@@ -10,7 +10,6 @@
 #include <cerrno>
 #include <condition_variable>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -23,14 +22,15 @@
 #include "command_layer/generic_family.hpp"
 #include "command_layer/multi_family.hpp"
 #include "detail/conn_context.hpp"
-#include "net/fd_wrapper.hpp"
-#include "net/uring_proactor.hpp"
-#include "net/uring_proactor_pool.hpp"
-#include "net/uring_socket.hpp"
-#include "network/pipeline_squasher.hpp"
+#include "io/fd_wrapper.hpp"
+#include "io/uring_proactor.hpp"
+#include "io/uring_proactor_pool.hpp"
+#include "io/uring_socket.hpp"
 #include "persistence/rdb_serializer.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "redis/facade/reply_builder.hpp"
+#include "server/pipeline_squasher.hpp"
+#include "server/write_batcher.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "sharding/namespaces.hpp"
 #include "sharding/synchronization.hpp"
@@ -41,17 +41,17 @@ namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
 
-class RedisServer;
-inline RedisServer* ser = nullptr;
-
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
  public:
-  RedisSession(int fd, base::UringProactorPtr p) : socket_(p, fd) {}
+  // proactor 由 UringProactorPool 管理生命周期，传裸指针即可。
+  RedisSession(int fd, base::UringProactor* p)
+      : socket_(p, fd),
+        write_batcher_(&socket_, p->GetLoopThreadId()),
+        pId_(p->GetLoopThreadId()) {}
 
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
-  base::UringProactorPtr GetProactor() { return socket_.Proactor(); }
-  util::intrusive_ptr<Transaction> GetTransaction() { return transaction_; }
+  base::UringProactor* GetProactor() { return socket_.Proactor(); }
 
   void init() {
     auto self = shared_from_this();
@@ -66,16 +66,21 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
       });
     };
     context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
+    // context_ 是 RedisSession 的成员，这里又把 self（指向自己）塞进
+    // context_.owner_， 形成 RedisSession → context_ → owner_ → RedisSession
+    // 的循环引用。
+    // 为什么不用哈希表管理所有连接？我又不需要"当前有多少连接"这种信息，
+    // 上个哈希表还要配 erase 路径，erase 漏了一样泄漏——和循环引用 reset
+    // 漏了等价。 循环引用的代价是 DoRead 退出时必须手动调 NotifyClose
+    // 断环，否则 RedisSession 不析构。 项目已禁用异常，DoRead 的 break
+    // 路径都在函数末尾统一走 NotifyClose，没有跳过风险。
 
     squasher_.Init(context_.GetNamespace(), context_.GetDbIndex(), send_cb_,
-                   socket_.Proactor().get());
+                   socket_.Proactor());
   }
-  // ，MUTLI,EXEC等实现以后完成
-  // 目前DashTable,事务调度，协程，SIMD，以及各种第三方boost,function_base都够吃一壶的了
-  // 一个人开发难度大，AI还看不懂代码
+
   cppcoro::AsyncTask DoRead() {
     socket_.RegisterRecvBuf();
-    pId_ = socket_.Proactor()->GetLoopThreadId();
     int fd = socket_.fd();
     size_t recv_offset = 0;
     std::vector<QCmd> queue;
@@ -91,7 +96,6 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
       auto res = co_await socket_.AsyncRead(recv_offset);
       assert(util::Thread::current_tid() == pId_);
       if (res.bytes > 0) {
-        recv_count++;
         size_t total = recv_offset + res.bytes;
         auto pr = parser_.ParseAll(res.data, total);
 
@@ -125,8 +129,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         break;
       }
     }
-    socket_.Close();
-    context_.owner().reset();
+    context_.NotifyClose();
     co_return;
   }
 
@@ -134,121 +137,45 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
   friend class ConnectionContext;
 
- private:
-  // 批量投递：整批回复一次性 push 进 write_queue_，只触发一次 DoWrite，
-  // 避免每条回复都走一次 DispatchBrief 入队与 write_in_progress_ 判断。
   void SendBatchImp(std::vector<std::string>&& batch) {
-    for (auto& s : batch) write_queue_.push_back(std::move(s));
-    if (write_in_progress_) {
-      return;
-    }
-    write_in_progress_ = true;
-    DoWrite();
+    write_batcher_.EnqueueBatch(std::move(batch));
   }
 
-  void SendImp(std::string&& s) {
-    VLOG(2) << "[SEND] fd:" << fd() << " size:" << s.size()
-            << " head:" << s.substr(0, s.find('\r'));
-    write_queue_.push_back(std::move(s));
-    if (write_in_progress_) {
-      return;
-    }
-    write_in_progress_ = true;
-    DoWrite();
-  }
-
-  cppcoro::AsyncTask DoWrite() {
-    assert(util::Thread::current_tid() == pId_);
-    // 一次 sendmsg 合并的回复条数上限：调大以减少 sendmsg/syscall 次数。
-    // 超过 UIO_FASTIOV(8) 时内核会 kmalloc iovec 数组，但减少 syscall 的
-    // 收益通常远大于 iovec 分配代价（loopback 下 syscall 更贵）。
-    constexpr size_t kMaxWriteBatch = 64;
-    // batch/rem 提到循环外复用：clear() 保留 capacity，避免每批反复
-    // malloc/free。
-    std::vector<std::string> batch;
-    std::vector<struct iovec> rem;
-    batch.reserve(kMaxWriteBatch);
-    rem.reserve(kMaxWriteBatch);
-    while (true) {
-      if (write_queue_.empty()) {
-        write_in_progress_ = false;
-        break;
-      }
-      size_t n = std::min(write_queue_.size(), kMaxWriteBatch);
-      batch.clear();
-      for (size_t i = 0; i < n; ++i) {
-        batch.push_back(std::move(write_queue_.front()));
-        write_queue_.pop_front();
-      }
-      size_t total = 0;
-      for (auto& s : batch) {
-        total += s.size();
-      }
-
-      size_t sent = 0;
-      while (sent < total) {
-        rem.clear();
-        size_t skip = sent;
-        for (auto& s : batch) {
-          if (skip >= s.size()) {
-            skip -= s.size();
-            continue;
-          }
-          rem.push_back({s.data() + skip, s.size() - skip});
-          skip = 0;
-        }
-        if (rem.empty()) break;
-        struct msghdr msg = {};
-        msg.msg_iov = rem.data();
-        msg.msg_iovlen = rem.size();
-        auto wr = co_await socket_.AsyncWriteV(&msg);
-        if (wr <= 0) {
-          LOG(WARNING) << "Write error on fd: " << fd() << ", error: " << wr;
-          write_queue_.clear();
-          write_in_progress_ = false;
-          co_return;
-        }
-        sent += static_cast<size_t>(wr);
-      }
-      send_count++;
-    }
-    co_return;
-  }
+  void SendImp(std::string&& s) { write_batcher_.Enqueue(std::move(s)); }
 
   base::UringSocket socket_;
   ConnectionContext context_;
-  util::intrusive_ptr<Transaction> transaction_;
   ReplyBuilder::SendCallback send_cb_;
   ParseRESP parser_;
   PipelineSquasher squasher_;
-  std::deque<std::string> write_queue_;
-  bool write_in_progress_ = false;
+  WriteBatcher write_batcher_;
   pthread_t pId_;
-
-  int recv_count = 0;
-  int send_count = 0;
 };
 
 class RedisServer {
  public:
-  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true,
-              const util::JsonConfig* config = nullptr)
-      : main_proactor_(std::make_shared<base::UringProactor>(
-            CreateOptimizedRedisConfig(config))),
-        pool_(size, CreateOptimizedRedisConfig(config)),
-        ListenSocket_(main_proactor_, listenFd),
-        enable_rdb_(config ? config->GetBool("enable_rdb", enable_rdb)
-                           : enable_rdb),
-        data_dir_(config ? config->GetString("data_dir", "./.rdb") : "./.rdb") {
-    CIs = new CommandRegistry();
-    RegisterStringFamily(CIs);
-    RegisterGeneric(CIs);
-    // RegisterMulti(CIs);
-    RegisterListFamily(CIs);
-    RegisterHashFamily(CIs);
-    RegisterSetFamily(CIs);
-    RegisterZSetFamily(CIs);
-    ser = this;
+  RedisServer(const RedisServer&) = delete;
+  RedisServer& operator=(const RedisServer&) = delete;
+  RedisServer(RedisServer&&) = delete;
+  RedisServer& operator=(RedisServer&&) = delete;
+
+  // 单例初始化：main 启动时调一次。重复调用会 assert 失败。
+  static void Init(int listenFd, uint32_t size, bool enable_rdb = true,
+                   const util::JsonConfig* config = nullptr) {
+    assert(instance_ == nullptr);
+    instance_ = new RedisServer(listenFd, size, enable_rdb, config);
+  }
+
+  // 单例访问：Init 之后才能调。未初始化会 assert 失败。
+  static RedisServer& Instance() {
+    assert(instance_ != nullptr);
+    return *instance_;
+  }
+
+  // 销毁单例：main 退出前调用，释放 RedisServer 资源。
+  static void Destroy() {
+    delete instance_;
+    instance_ = nullptr;
   }
 
   // 有配置文件则从文件读取，否则使用内置默认值。
@@ -303,6 +230,9 @@ class RedisServer {
       delete shard_set;
       shard_set = nullptr;
     }
+
+    delete main_proactor_;
+    main_proactor_ = nullptr;
   }
 
   void Start() {
@@ -350,9 +280,29 @@ class RedisServer {
 
   std::string_view data_dir() const { return data_dir_; }
 
-  base::UringProactorPtr MainProactor() { return main_proactor_; }
+  base::UringProactor* MainProactor() { return main_proactor_; }
 
  private:
+  // 构造函数私有：单例模式，必须通过 Init() 创建实例。
+  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true,
+              const util::JsonConfig* config = nullptr)
+      : main_proactor_(
+            new base::UringProactor(CreateOptimizedRedisConfig(config))),
+        pool_(size, CreateOptimizedRedisConfig(config)),
+        ListenSocket_(main_proactor_, listenFd),
+        enable_rdb_(config ? config->GetBool("enable_rdb", enable_rdb)
+                           : enable_rdb),
+        data_dir_(config ? config->GetString("data_dir", "./.rdb") : "./.rdb") {
+    CIs = new CommandRegistry();
+    RegisterStringFamily(CIs);
+    RegisterGeneric(CIs);
+    // RegisterMulti(CIs);
+    RegisterListFamily(CIs);
+    RegisterHashFamily(CIs);
+    RegisterSetFamily(CIs);
+    RegisterZSetFamily(CIs);
+  }
+
   void LoadPersistentData() {
     std::atomic_bool rdb_ok{true};
     std::string dir = data_dir_;
@@ -422,13 +372,13 @@ class RedisServer {
     co_return;
   }
 
-  auto NextProactor() -> base::UringProactorPtr {
+  auto NextProactor() -> base::UringProactor* {
     NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
     return pool_[NextProIndex_];
   }
 
   ssize_t NextProIndex_ = 0;
-  base::UringProactorPtr main_proactor_;
+  base::UringProactor* main_proactor_ = nullptr;
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
   bool isRuning = false;
@@ -436,6 +386,9 @@ class RedisServer {
   bool enable_rdb_{true};
   std::string data_dir_{"./.rdb"};
   static constexpr uint64_t kSnapshotIntervalMs = 3'000;
+
+  // 单例实例指针：Init 时赋值，Destroy 时清空。
+  inline static RedisServer* instance_ = nullptr;
 };
 
 }  // namespace dfly

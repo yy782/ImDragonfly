@@ -9,6 +9,7 @@
 #include <cassert>
 #include <coroutine>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <type_traits>
 #include <utility>
@@ -257,7 +258,10 @@ class [[nodiscard]] task {
 
       decltype(auto) await_resume() {
         if (!this->m_coroutine) {
-          throw detail::broken_promise{};
+          // broken_promise 是不可恢复的协议错误，原版抛异常被项目
+          // -fno-exceptions 禁止。直接 std::terminate 语义上等价（异常被默认
+          // terminate_handler 处理）。
+          std::terminate();
         }
 
         return this->m_coroutine.promise().result();
@@ -273,7 +277,7 @@ class [[nodiscard]] task {
 
       decltype(auto) await_resume() {
         if (!this->m_coroutine) {
-          throw detail::broken_promise{};
+          std::terminate();
         }
 
         return std::move(this->m_coroutine.promise()).result();
@@ -316,9 +320,8 @@ cppcoro::task<T&> task_promise<T&>::get_return_object() noexcept {
 }
 
 template <typename AWAITABLE>
-auto make_task(AWAITABLE awaitable)
-    -> task<remove_rvalue_reference_t<
-        typename awaitable_traits<AWAITABLE>::await_result_t>> {
+auto make_task(AWAITABLE awaitable) -> task<remove_rvalue_reference_t<
+    typename awaitable_traits<AWAITABLE>::await_result_t>> {
   co_return co_await static_cast<AWAITABLE&&>(awaitable);
 }
 }  // namespace detail

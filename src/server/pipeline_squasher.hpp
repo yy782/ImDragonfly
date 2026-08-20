@@ -14,7 +14,7 @@
 #include "cppcoro/task.hpp"
 #include "detail/common_types.hpp"
 #include "detail/conn_context.hpp"
-#include "net/uring_proactor.hpp"
+#include "io/uring_proactor.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "sharding/engine_shard_set.hpp"
 #include "transaction_layer/transaction.hpp"

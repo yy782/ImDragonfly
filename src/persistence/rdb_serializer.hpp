@@ -9,24 +9,6 @@
 
 namespace dfly {
 
-// RDB 快照格式（自定义二进制，Rust 风格显式长度前缀，小端）：
-//
-//   magic: "IMDRDB02" (8 字节)
-//   每条记录：
-//     u8   0x01 (record marker)
-//     u32  ns_len | ns bytes         <- 所属命名空间（默认命名空间为空串）
-//     u32  dbid
-//     u32  key_len | key bytes
-//     u64  expire_at_ms (0 = 无 TTL，绝对毫秒时间戳，原样保存)
-//     u8   value_kind
-//         0 = int     : i64
-//         1 = string  : u32 len + bytes
-//         2 = list    : u32 count + (u32 len + bytes)*
-//         3 = hash    : u32 count + (u32 klen + kbytes + u32 vlen + vbytes)*
-//         4 = set     : u32 count + (u32 len + bytes)*
-//         5 = zset    : u32 count + (u32 len + member + u64 score_bits)*
-//   EOF: u8 0xFF
-//
 // 每个 shard 一个文件 dump-<sid>.rdb，覆盖所有 namespace 下该 shard 的
 // 全部 db。保存时先写 .tmp 再原子 rename，避免半写文件被当成有效快照加载。
 class RdbSerializer {

@@ -284,7 +284,7 @@ class BucketBase {
 
   uint8_t overflow_count_ =
       0;  // 溢出计数器。记录有多少个 Stash 引用被“溢出”存储到了邻居桶中。
-};  // BucketBase
+};        // BucketBase
 
 struct DefaultSegmentPolicy {
   static constexpr unsigned kSlotNum = 12;
@@ -586,8 +586,9 @@ void Segment<Key, Value, Policy>::Bucket::ForEachSlotImpl(This obj,
 
 template <typename Key, typename Value, typename Policy>
 template <typename Pred>
-auto Segment<Key, Value, Policy>::Bucket::FindByFp(
-    uint8_t fp_hash, bool probe, Pred&& pred) const -> SlotId {
+auto Segment<Key, Value, Policy>::Bucket::FindByFp(uint8_t fp_hash, bool probe,
+                                                   Pred&& pred) const
+    -> SlotId {
   unsigned mask = this->Find(fp_hash, probe);
   if (!mask) return kNanSlot;
 
@@ -845,8 +846,9 @@ template <typename Key, typename Value, typename Policy>
 template <typename Cb>
 void Segment<Key, Value, Policy>::TraverseAll(Cb&& cb) const {
   for (uint8_t i = 0; i < kTotalBuckets; ++i) {
-    bucket_[i].ForEachSlot(
-        [&](auto*, SlotId slot, bool) { cb(Iterator{i, slot}); });
+    bucket_[i].ForEachSlot([&](auto*, SlotId slot, bool) {
+      cb(Iterator{i, slot});
+    });
   }
 }
 
@@ -864,8 +866,10 @@ void Segment<Key, Value, Policy>::RemoveStashReference(unsigned stash_pos,
 }
 
 template <typename Key, typename Value, typename Policy>
-auto Segment<Key, Value, Policy>::TryMoveFromStash(
-    unsigned stash_id, unsigned stash_slot_id, Hash_t key_hash) -> Iterator {
+auto Segment<Key, Value, Policy>::TryMoveFromStash(unsigned stash_id,
+                                                   unsigned stash_slot_id,
+                                                   Hash_t key_hash)
+    -> Iterator {
   LogicalBid bid = HomeIndex(key_hash);
   uint8_t hash_fp = key_hash & kFpMask;
   PhysicalBid stash_bid = kBucketNum + stash_id;
@@ -920,8 +924,9 @@ int Segment<Key, Value, Policy>::MoveToOther(
 }
 
 template <typename Key, typename Value, typename Policy>
-auto Segment<Key, Value, Policy>::FindValidStartingFrom(
-    PhysicalBid bid, unsigned slot) const -> Iterator {
+auto Segment<Key, Value, Policy>::FindValidStartingFrom(PhysicalBid bid,
+                                                        unsigned slot) const
+    -> Iterator {
   while (bid < kTotalBuckets) {
     uint32_t mask = bucket_[bid].GetBusy();
     mask >>= slot;

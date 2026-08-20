@@ -21,7 +21,7 @@ add_executable(unit_tests
 )
 target_link_libraries(unit_tests PRIVATE
     imdragonfly_lib_test
-    net
+    io
     third_party_deps
     GTest::gtest_main
     GTest::gtest
@@ -31,6 +31,6 @@ target_include_directories(unit_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/util
 )
-target_compile_options(unit_tests PRIVATE ${CXX_WARNING_OPTIONS})
+target_compile_options(unit_tests PRIVATE ${CXX_WARNING_OPTIONS} -fexceptions)
 target_compile_definitions(unit_tests PRIVATE UNIT_TESTS)
 gtest_discover_tests(unit_tests)

@@ -11,11 +11,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <new>
 #include <string>
 #include <thread>
 
-#include "net/fd_wrapper.hpp"
-#include "src/network/redis_server.hpp"
+#include "io/fd_wrapper.hpp"
+#include "src/server/redis_server.hpp"
 #include "src/util/json_config.hpp"
 
 using namespace dfly;
@@ -23,6 +24,12 @@ using namespace dfly;
 // ASAN对协程有误报，注意一下
 
 int main(int argc, char* argv[]) {
+  std::set_new_handler([]() noexcept {
+    std::fputs("out of memory: operator new failed\n", stderr);
+    std::fflush(stderr);
+    std::abort();
+  });
+
   // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
   // <gflags/gflags.h>，所以不可用
 
@@ -93,10 +100,11 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  RedisServer server(listenFd, num, enable_rdb, cfg);
+  RedisServer::Init(listenFd, num, enable_rdb, cfg);
   LOG(INFO) << "RedisServer initialized with " << num << " shards"
             << ", rdb=" << (enable_rdb ? "on" : "off");
-  server.Start();
+  RedisServer::Instance().Start();
+  RedisServer::Destroy();
 
   LOG(INFO) << "ImDragonfly server shutting down...";
   google::ShutdownGoogleLogging();
