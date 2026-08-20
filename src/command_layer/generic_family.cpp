@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "cmd_support.hpp"
+#include "command_registry.hpp"
 #include "detail/common.hpp"
 #include "network/redis_server.hpp"
 #include "sharding/db_slice.hpp"
@@ -288,26 +289,24 @@ CoroTask GenericFamily::Debug(CommandContext* cmd_cntx, CmdArgList args) {
 //   // TODO
 // }
 
-using CI = CommandId;
+// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+constexpr CommandSpec kCommands[] = {
+    {"DEL", CO::JOURNALED, 1, -1, &GenericFamily::Delex},
+    {"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0, &GenericFamily::Ping},
+    {"EXISTS", CO::READONLY, 1, -1, &GenericFamily::Exists},
+    {"EXPIRE", CO::JOURNALED, 1, 1, &GenericFamily::Expire},
+    {"EXPIRETIME", CO::READONLY, 1, 1, &GenericFamily::ExpireTime},
+    {"TTL", CO::READONLY, 1, 1, &GenericFamily::Ttl},
+    {"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0, &GenericFamily::Client_Info},
+    {"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0, &GenericFamily::Client_Info},
+    {"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0, &GenericFamily::ShutDown},
+    {"SAVE", CO::GLOBAL_TRANS, 0, 0, &GenericFamily::Save},
+    {"DEBUG", CO::GLOBAL_TRANS, 0, -1, &GenericFamily::Debug},
+};
+static_assert(CheckUniqueNames(kCommands), "generic family: duplicate names");
+
 void GenericFamily::Register(CommandRegistry* registry) {
-  registry->StartFamily();
-  *registry
-      << CI{"DEL", CO::JOURNALED, 1, -1}.SetHandler(&GenericFamily::Delex)
-      << CI{"PING", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-             &GenericFamily::Ping)
-      << CI{"EXISTS", CO::READONLY, 1, -1}.SetHandler(&GenericFamily::Exists)
-      << CI{"EXPIRE", CO::JOURNALED, 1, 1}.SetHandler(&GenericFamily::Expire)
-      << CI{"EXPIRETIME", CO::READONLY, 1, 1}.SetHandler(
-             &GenericFamily::ExpireTime)
-      << CI{"TTL", CO::READONLY, 1, 1}.SetHandler(&GenericFamily::Ttl)
-      << CI{"CLIENT", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-             &GenericFamily::Client_Info)
-      << CI{"HELLO", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-             &GenericFamily::Client_Info)
-      << CI{"SHUTDOWN", CO::NO_KEY_TRANSACTIONAL, 0, 0}.SetHandler(
-             &GenericFamily::ShutDown)
-      << CI{"SAVE", CO::GLOBAL_TRANS, 0, 0}.SetHandler(&GenericFamily::Save)
-      << CI{"DEBUG", CO::GLOBAL_TRANS, 0, -1}.SetHandler(&GenericFamily::Debug);
+  registry->Register(kCommands);
 }
 
 void RegisterGeneric(CommandRegistry* registry) {

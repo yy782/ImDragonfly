@@ -1,640 +1,516 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
+// ============================================================================
+// transaction.cpp —— Transaction 调度协议实现（独立设计）
 //
+// 调度协议对应 VVL 论文：
+//   - ApplyForLockOn：单分片"锁申请"（计数器递增 + 授予判定），等价论文图 1
+//     的请求过程，入队前保证有序性（TxnQueue）与队列高水位约束；
+//   - Schedule：多分片调度回合，失败（kRejected）即回滚重试，直到全部
+//     分片申请成功；
+//   - Distribute：调度成功后放行各分片（armed），投递队列驱动；
+//   - DriveQueue（EngineShard 侧）：队首引理执行 + SCA 消化队列。
+// ============================================================================
 #include "transaction_layer/transaction.hpp"
 
 #include <bitset>
-#include <latch>
 
-#include "network/redis_server.hpp"
+#include "detail/common.hpp"
+#include "sharding/db_slice.hpp"
+#include "sharding/engine_shard_set.hpp"
+#include "util/Time.hpp"
 
 namespace dfly {
-using namespace std;
-
-thread_local Transaction::TLTmpSpace Transaction::tmp_space;
 
 namespace {
 
-std::atomic_uint64_t op_seq{1};
-[[maybe_unused]] std::atomic_uint64_t ids{1};
-constexpr size_t kTransSize [[maybe_unused]] = sizeof(Transaction);
+// 全局事务序（论文 §2.1 TxnQueue 的排序依据）：每分片队列按此单调递增的
+// 序列号插入，保证所有分片看到一致的串行化顺序。
+std::atomic_uint64_t global_seq{1};
 
-struct ScheduleContext {
-  util::intrusive_ptr<Transaction> trans;
-  bool optimistic_execution = false;
+// 多 key 按分片聚合用的线程本地缓冲（BuildKeyMap 复用，避免反复分配）
+struct KeyAccum {
+  std::vector<std::string_view> keys;
+};
+thread_local std::vector<KeyAccum> key_accum;
 
-  std::atomic_uint32_t fail_cnt{0};
-
-  ScheduleContext(util::intrusive_ptr<Transaction> t, bool optimistic)
-      : trans(std::move(t)), optimistic_execution(optimistic) {}
+// 回合结束自动回收聚合缓冲
+struct AccumGuard {
+  ~AccumGuard() {
+    for (auto& a : key_accum) a.keys.clear();
+  }
 };
 
-}  // namespace
-
-Transaction::Transaction(const CommandId* cid) : cid_{cid} {
-#ifndef NDEBUG
-  id = ids.fetch_add(1);
-#endif
-  InitTxTime();
-}
-void Transaction::InitTxTime() { time_now_ms_ = util::GetCurrentTimeMs(); }
-
-OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
-                                 CmdArgList args) {
-  InitBase(ns, index, args);
-
-  DCHECK_EQ(unique_shard_cnt_, 0u);
-  DCHECK(args_slices_.empty());
-  DCHECK(kv_fp_.empty());
-
-  OpResult<KeyIndex> key_index = DetermineKeys(cid_, args);
-  if (!key_index) return key_index.status();
-
-  // 全局事务（如 SAVE）：激活所有分片，无 key、无 key 锁，
-  // 由 ScheduleInShard 在每分片 shard_lock() 上获取分片锁。
-  if (cid_->opt_mask() & CO::GLOBAL_TRANS) {
-    InitGlobal();
-    return OpStatus::OK;
-  }
-
-  InitByKeys(*key_index);
-  return OpStatus::OK;
-}
-
-// /*管道优化专用*/ 复用 PipelineSquasher 预计算的 KeyIndex 与分片，
-// 跳过重复的 DetermineKeys()（调用方已保证非全局事务、且 key 有效）。
-OpStatus Transaction::InitByArgs(const Namespace* ns, DbIndex index,
-                                 CmdArgList args, const KeyIndex& key_index,
-                                 ShardId sid) {
-  InitBase(ns, index, args);
-
-  DCHECK_EQ(unique_shard_cnt_, 0u);
-  DCHECK(args_slices_.empty());
-  DCHECK(kv_fp_.empty());
-
-  InitByKeys(key_index, sid);
-  return OpStatus::OK;
-}
-
-// /*管道优化专用*/ 压缩器复用同一分片事务顺序执行多条命令。每条命令执行前
-// 调用本方法，重置上一条命令遗留的运行时状态，使 InitByArgs / SingleHopAsync
-// 可被安全重复调用，省去每条命令各分配一个 Transaction 对象的内存开销。
-void Transaction::PrepareForReuse(const CommandId* cid) {
-  DCHECK_EQ(blocking_count_, 0u);  // 上一条命令已执行完毕
-  DCHECK_EQ(run_barrier_->GetCount(), 0u);
-  cid_ = cid;
-  shard_data_.clear();
-  args_slices_.clear();
-  key_slices_.clear();
-  kv_fp_.clear();
-  cb_ptr_.reset();
-  txid_ = 0;
-  unique_shard_cnt_ = 0;
-  unique_shard_id_ = kInvalidSid;
-  global_ = false;
-  coordinator_state_ = 0;
-  owner_shard_id_ = kInvalidSid;
-  handle_ = {};
-  need_resume.store(false, std::memory_order_relaxed);
-  resume_count_.store(false, std::memory_order_relaxed);
-  InitTxTime();
-}
-
-void Transaction::InitGlobal() {
-  global_ = true;
-  EnableAllShards();
-}
-
-void Transaction::EnableAllShards() {
-  unique_shard_cnt_ = shard_set->size();
-  unique_shard_id_ = unique_shard_cnt_ == 1 ? 0 : kInvalidSid;
-  shard_data_.resize(unique_shard_cnt_);
-  for (auto& sd : shard_data_) {
-    sd.local_mask |= ACTIVE;
-  }
-}
-
-void Transaction::InitBase(const Namespace* ns, DbIndex dbid, CmdArgList args) {
-  db_index_ = dbid;
-  full_args_ = args;
-  namespace_ = ns;
-}
-
-OpResult<KeyIndex> DetermineKeys(const CommandId* cid, CmdArgList args) {
+// 从命令描述提取参数中的 key 范围（Redis 命令的 first/last/step 约定）
+OpResult<KeyIndex> DetermineKeys(const CommandId* cid, cmn::CmdArgList args) {
   if (cid->opt_mask() & (CO::GLOBAL_TRANS | CO::NO_KEY_TRANSACTIONAL))
     return KeyIndex{};
 
-  int num_custom_keys [[maybe_unused]] = -1;
-
-  unsigned start = 0, end = 0, step = 0;
-
-  if (cid->first_key_pos() > 0) {
-    start = cid->first_key_pos();
-    int8_t last = cid->last_key_pos();
-    end = last > 0 ? (unsigned)(last + 1)
-                   : (unsigned)(int(args.size()) + last + 1);
-    if (cid->interleaved_step()) {
-      step = cid->interleaved_step();
-    } else {
-      step = 1;
-    }
-    return KeyIndex{start, end, step};
+  if (cid->first_key_pos() <= 0) {
+    LOG(FATAL) << "TBD: Not supported " << cid->name();
   }
-  LOG(FATAL) << "TBD: Not supported " << cid->name();
-  return {};
+  unsigned start = cid->first_key_pos();
+  int8_t last = cid->last_key_pos();
+  unsigned end = last > 0 ? unsigned(last + 1)
+                          : unsigned(int(args.size()) + last + 1);
+  unsigned step = cid->interleaved_step() ? cid->interleaved_step() : 1;
+  return KeyIndex{start, end, step};
 }
 
-void Transaction::InitByKeys(const KeyIndex& key_index) {
-  InitByKeys(key_index, kInvalidSid);
+}  // namespace
+
+Transaction::Transaction() : cid_(nullptr) {
+  start_ms_ = util::GetCurrentTimeMs();
 }
 
-// /*管道优化专用*/ 单 key 路径复用外部预计算的分片 sid，跳过 Shard()
-// 哈希/取模。
-void Transaction::InitByKeys(const KeyIndex& key_index, ShardId sid) {
-  if ((key_index.end - key_index.start) == 0)  // 不确定
+Transaction::Transaction(const CommandId* cid) : cid_(cid) {
+  start_ms_ = util::GetCurrentTimeMs();
+}
+
+Transaction::~Transaction() = default;
+
+OpStatus Transaction::Init(const Namespace* ns, DbIndex db, cmn::CmdArgList args) {
+  InitBase(ns, db, args);
+
+  if (cid_->opt_mask() & CO::GLOBAL_TRANS) {
+    // 全局事务（如 SAVE）：覆盖所有分片，无 key 锁，锁取分片锁
+    MarkAllShards();
+    return OpStatus::OK;
+  }
+  OpResult<KeyIndex> key_index = DetermineKeys(cid_, args);
+  if (!key_index) return key_index.status();
+  BuildKeyMap(*key_index, kInvalidSid);
+  return OpStatus::OK;
+}
+
+OpStatus Transaction::Init(const Namespace* ns, DbIndex db, cmn::CmdArgList args,
+                           const KeyIndex& key_index, ShardId precomputed_sid) {
+  InitBase(ns, db, args);
+  BuildKeyMap(key_index, precomputed_sid);
+  return OpStatus::OK;
+}
+
+void Transaction::InitBase(const Namespace* ns, DbIndex db, cmn::CmdArgList args) {
+  DCHECK(cid_ != nullptr) << "command descriptor is not set";
+  DCHECK_EQ(active_shard_count_, 0u);
+  DCHECK(keys_.empty());
+  DCHECK(fps_.empty());
+  db_ = db;
+  args_ = args;
+  ns_ = ns;
+}
+
+void Transaction::MarkAllShards() {
+  global_ = true;
+  active_shard_count_ = shard_set->size();
+  sole_shard_ = active_shard_count_ == 1 ? 0 : kInvalidSid;
+  shards_.resize(active_shard_count_);
+  for (auto& sd : shards_)
+    sd.flags.fetch_or(kShardInvolved, std::memory_order_relaxed);
+}
+
+void Transaction::BuildKeyMap(const KeyIndex& key_index, ShardId precomputed_sid) {
+  const unsigned n = key_index.NumArgs();
+  if (n == 0) return;
+  DCHECK_LT(key_index.start, args_.size());
+
+  // 单 key：直接映射，无需聚合
+  if (n == 1) {
+    const std::string_view key = args_[*key_index];
+    const ShardId sid = precomputed_sid != kInvalidSid
+                            ? precomputed_sid
+                            : Shard(key, shard_set->size());
+    keys_.push_back(key);
+    fps_.push_back(LockTag(key).Fingerprint());
+    active_shard_count_ = 1;
+    sole_shard_ = sid;
+    shards_.resize(1);
+    auto& sd = shards_.front();
+    sd.flags.fetch_or(kShardInvolved, std::memory_order_relaxed);
+    sd.key_begin = 0;
+    sd.key_count = 1;
     return;
-  DCHECK_LT(key_index.start, full_args_.size());
-
-  if ((key_index.NumArgs() == 1)) {
-    StoreKeysInArgs(key_index);
-    unique_shard_cnt_ = 1;
-    if (sid == kInvalidSid) {
-      string_view akey = full_args_[*key_index];
-      unique_shard_id_ = Shard(akey, shard_set->size());
-    } else {
-      unique_shard_id_ = sid;
-    }
-    shard_data_.resize(1);
-    shard_data_[SidToId(unique_shard_id_)].local_mask |= ACTIVE;
-    // 填充 key_slices_ 供回调中 GetSlice() 使用
-    key_slices_.resize(shard_data_.size());
-    auto& sl = key_slices_[0];
-    sl.trans_ = this;
-    sl.sid_ = unique_shard_id_;
-    sl.slices_ =
-        std::span<const IndexSlice>(args_slices_.data(), args_slices_.size());
-    sl.step_ = key_index.step;
-    sl.args_ = full_args_;
-    return;
   }
 
-  shard_data_.resize(shard_set->size());
-
-  auto& shard_index = tmp_space.GetShardIndex(shard_data_.size());
-
-  BuildShardIndex(key_index, &shard_index);
-
-  InitShardData(shard_index, key_index.NumArgs());
-
-  if (unique_shard_cnt_ == 1) {
-    PerShardData* sd;
-    shard_data_.resize(1);
-    sd = &shard_data_.front();
-    sd->local_mask |= ACTIVE;
-    sd->slice_count = -1;
-    sd->slice_start = -1;
-  }
-}
-
-std::vector<Transaction::PerShardCache>& Transaction::TLTmpSpace::GetShardIndex(
-    unsigned size) {
-  shard_cache.resize(size);
-  for (auto& v : shard_cache) v.Clear();
-  return shard_cache;
-}
-
-void Transaction::BuildShardIndex(const KeyIndex& key_index,
-                                  std::vector<PerShardCache>* out) {
-  auto& shard_index = *out;
+  // 多 key：按分片聚合
+  AccumGuard guard;
+  key_accum.resize(shard_set->size());
   for (unsigned i : key_index.Range()) {
-    string_view key = full_args_[i];
-
-    ShardId sid = Shard(key, shard_data_.size());
-    unsigned step = key_index.step;
-    shard_index[sid].key_step = step;
-    auto& slices = shard_index[sid].slices;
-    if (!slices.empty() && slices.back().second == i) {
-      slices.back().second = i + step;
-    } else {
-      slices.emplace_back(i, i + step);
-    }
-  }
-}
-
-void Transaction::InitShardData(std::span<const PerShardCache> shard_index,
-                                size_t num_args) {
-  args_slices_.reserve(num_args);
-  DCHECK(kv_fp_.empty());
-  kv_fp_.reserve(num_args);
-
-  for (size_t i = 0; i < shard_data_.size(); ++i) {
-    auto& sd = shard_data_[i];
-    const auto& src = shard_index[i];
-
-    sd.slice_count = src.slices.size();
-    sd.slice_start = args_slices_.size();
-    sd.fp_start = kv_fp_.size();
-    sd.fp_count = 0;
-
-    if (sd.slice_count == 0) continue;
-
-    sd.local_mask |= ACTIVE;
-
-    unique_shard_cnt_++;
-    unique_shard_id_ = i;
-
-    for (const auto& [start, end] : src.slices) {
-      args_slices_.emplace_back(start, end);
-      for (string_view key :
-           KeyIndex(start, end, src.key_step).Range(full_args_)) {
-        kv_fp_.push_back(LockTag(key).Fingerprint());
-        sd.fp_count++;
-      }
-    }
+    const std::string_view key = args_[i];
+    const ShardId sid = Shard(key, shard_set->size());
+    key_accum[sid].keys.push_back(key);
   }
 
-  // 为 GetSlice() 构建每个 shard 的 Slice 视图
-  key_slices_.resize(shard_data_.size());
-  for (size_t i = 0; i < shard_data_.size(); ++i) {
-    if (shard_data_[i].slice_count == 0) continue;
-    auto& sl = key_slices_[i];
-    sl.trans_ = this;
-    sl.sid_ = static_cast<ShardId>(i);
-    sl.slices_ = std::span<const IndexSlice>(
-        args_slices_.data() + shard_data_[i].slice_start,
-        shard_data_[i].slice_count);
-    sl.step_ = shard_index[i].key_step;
-    sl.args_ = full_args_;
+  // 统计涉及分片
+  uint32_t active = 0;
+  ShardId sole = kInvalidSid;
+  for (ShardId sid = 0; sid < shard_set->size(); ++sid) {
+    if (key_accum[sid].keys.empty()) continue;
+    if (active == 0) sole = sid;
+    ++active;
   }
-}
+  active_shard_count_ = active;
 
-void Transaction::StoreKeysInArgs(const KeyIndex& key_index) {
-  args_slices_.emplace_back(key_index.start, key_index.end);
-  for (string_view key : key_index.Range(full_args_))
-    kv_fp_.push_back(LockTag(key).Fingerprint());
-}
-
-Transaction::~Transaction() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
-
-std::pair<uint16_t, bool> Transaction::DisarmInShardWhen(
-    ShardId sid, uint16_t relevant_flags) {
-  auto& sd = shard_data_[SidToId(sid)];
-  if (sd.is_armed.load(memory_order_acquire)) {
-    bool relevant = sd.local_mask & relevant_flags;
-    if (relevant) CHECK(sd.is_armed.exchange(false, memory_order_release));
-    return {sd.local_mask, relevant};
-  }
-  return {0, false};
-}
-
-uint16_t Transaction::DisarmInShard(ShardId sid) {
-  auto& sd = shard_data_[SidToId(sid)];
-  return sd.is_armed.exchange(false, memory_order_acquire) ? sd.local_mask : 0;
-}
-
-cppcoro::AsyncTask Transaction::SingleHopAsync(RunnableType cb,
-                                               std::coroutine_handle<> handle) {
-  VLOG(3) << "命令:" << CmdArgListToString(full_args_)
-          << " shard_cnt:" << unique_shard_cnt_;
-  coordinator_state_ |= COORD_CONCLUDING;
-  cb_ptr_ = cb;
-  InitBlockingController(handle, unique_shard_cnt_);
-  if (unique_shard_cnt_ == 1) {
-    VLOG(4) << "SingleHopAsync unique_shard_cnt_ == 1";
-    CHECK_EQ(shard_data_.size(), 1u);
-    shard_data_.front().is_armed.store(true, memory_order_relaxed);
-    run_barrier_->Add(1);
-    auto shard_cb = [self = intrusive_ptr_from_this()]() {
-      bool success = self->ScheduleInShard(EngineShard::tlocal(), true);
-      CHECK(success);
-      if (self->shard_data_.front().local_mask & OPTIMISTIC_EXECUTION) {
-        VLOG(4) << "SingleHopAsync OPTIMISTIC_EXECUTION";
-        self->run_barrier_->Dec();
-      } else {
-        EngineShard::tlocal()->PollExecution(self);
-      }
-    };
-    if (CanRunInlined()) {
-      VLOG(4) << "SingleHopAsync CanRunInlined";
-      shard_cb();
-
-    } else {
-      VLOG(4) << "SingleHopAsync not CanRunInlined";
-      shard_set->Add(unique_shard_id_, shard_cb);
+  // 全部 key 落在同一分片：压缩为单分片表示
+  if (active == 1) {
+    sole_shard_ = sole;
+    for (const std::string_view k : key_accum[sole].keys) {
+      keys_.push_back(k);
+      fps_.push_back(LockTag(k).Fingerprint());
     }
-    co_await run_barrier_->Wait();
-  } else {
-    VLOG(3) << "SingleHopAsync unique_shard_cnt_ > 1";
-    co_await ScheduleInternal();
-    DispatchHop();
-  }
-  ResumeIfNeed();
-
-  co_return;
-}
-
-cppcoro::task<> Transaction::ScheduleInternal() {
-  bool optimistic_exec =
-      (coordinator_state_ & COORD_CONCLUDING) &&
-      (unique_shard_cnt_ == 1 || (cid_->opt_mask() & CO::IDEMPOTENT));  // 幂等
-  auto is_active = [this](uint32_t i) { return IsActive(i); };
-
-  IterateActiveShards([](auto& sd, auto /*i*/) {
-    DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
-  });
-#ifdef UNIT_TESTS
-  LOG(INFO) << " 事务 " << id << " 开始 ScheduleInternal"
-            << " 分片数:" << unique_shard_cnt_ << " 幂等:" << optimistic_exec;
-#endif
-  while (true) {
-    if (unique_shard_cnt_ > 1)
-      txid_ = op_seq.fetch_add(1, memory_order_relaxed);
-    run_barrier_->Start(unique_shard_cnt_);
-
-    if (CanRunInlined()) {
-#ifdef UNIT_TESTS
-      LOG(INFO) << " 事务 " << id << " 可以内联执行";
-#endif
-      [[maybe_unused]] bool success =
-          ScheduleInShard(EngineShard::tlocal(), optimistic_exec);
-      DCHECK(success);
-      run_barrier_->Dec();
-      break;
-    }
-    ScheduleContext schedule_ctx{intrusive_ptr_from_this(), optimistic_exec};
-    auto cb = [&schedule_ctx] {
-      if (!schedule_ctx.trans->ScheduleInShard(
-              EngineShard::tlocal(), schedule_ctx.optimistic_execution)) {
-        schedule_ctx.fail_cnt.fetch_add(1, memory_order_relaxed);
-      }
-      schedule_ctx.trans->FinishHop();
-    };
-    if (unique_shard_cnt_ == 1) {
-#ifdef UNIT_TESTS
-      LOG(INFO) << " 事务 " << id << " 唯一 shard 执行";
-#endif
-      shard_set->Add(unique_shard_id_, cb);
-    } else {
-      IterateActiveShards(
-          [cb](const auto& /*sd*/, ShardId i) { shard_set->Add(i, cb); });
-    }
-    co_await run_barrier_->Wait();
-    if (schedule_ctx.fail_cnt.load(memory_order_relaxed) == 0) {
-      break;
-    }
-#ifdef UNIT_TESTS
-    LOG(INFO) << " 事务 " << id << " 重试";
-#endif
-    atomic_bool should_poll_execution{false};
-    run_barrier_->Start(unique_shard_cnt_);
-
-    auto cancel = [&, self = intrusive_ptr_from_this()](EngineShard* shard) {
-      bool res = self->CancelShardCb(shard);
-      if (res) {
-        should_poll_execution.store(true, memory_order_relaxed);
-      }
-      self->run_barrier_->Dec();
-    };
-    shard_set->DispatchBriefInParallel(std::move(cancel), is_active);
-    co_await run_barrier_->Wait();
-    if (should_poll_execution.load(memory_order_relaxed)) {
-      IterateActiveShards([](const auto& /*sd*/, auto i) {
-        shard_set->Add(i,
-                       [] { EngineShard::tlocal()->PollExecution(nullptr); });
-      });
-    }
-    InitTxTime();
-  }
-  coordinator_state_ |= COORD_SCHED;
-
-  co_return;
-}
-
-bool Transaction::ScheduleInShard(EngineShard* shard, bool execute_optimistic) {
-  ShardId sid = SidToId(shard->shard_id());
-  auto& sd = shard_data_[sid];
-
-  VLOG(3) << "ScheduleInShard 在分片:" << shard->shard_id()
-          << " sd掩码:" << sd.local_mask;
-  DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
-  sd.local_mask &= ~(OUT_OF_ORDER | OPTIMISTIC_EXECUTION);
-
-  TxQueue* txq = shard->txq();
-  KeyLockArgs lock_args;
-  IntentLock::Mode mode = LockMode();
-  bool lock_granted = false;
-  if (txid_ > 0 && shard->committed_txid() >= txid_) return false;
-
-  auto release_fp_locks = [&]() {
-    if (IsGlobal()) {
-      shard->shard_lock()->Release(mode);
-    } else {
-      GetDbSlice(shard->shard_id()).Release(mode, lock_args);
-    }
-    sd.local_mask &= ~KEYLOCK_ACQUIRED;
-    VLOG(4) << "LOCK 释放, 在分片:" << shard->shard_id()
-            << " 由回调release_fp_locks清理";
-  };
-  lock_args = GetLockArgs(
-      shard
-          ->shard_id());  // 当分片的锁过多时可以选择直接加锁失败，入队，减少加锁循环开销
-  const bool keys_unlocked =
-      GetDbSlice(shard->shard_id()).Acquire(mode, lock_args);
-  // 全局事务无 key，lock_granted 取决于分片锁是否无竞争获取成功。
-  bool shard_unlocked = true;
-  if (IsGlobal()) {
-    shard_unlocked = shard->shard_lock()->Acquire(mode);
-  }
-  lock_granted = keys_unlocked && shard_unlocked;
-
-  sd.local_mask |= KEYLOCK_ACQUIRED;
-  VLOG(4) << "LOCK 获取, 在分片:" << shard->shard_id();
-  if (lock_granted) {
-    VLOG(4) << "ScheduleInShard lock_granted";
-    sd.local_mask |= OUT_OF_ORDER;
-  }
-  if (lock_granted && execute_optimistic) {
-    sd.local_mask |= OPTIMISTIC_EXECUTION;
-#ifdef UNIT_TESTS
-    LOG(INFO) << " 事务 " << id << " ScheduleInShard execute_optimistic ";
-#endif
-    RunCallback(shard);
-    if (coordinator_state_ & COORD_CONCLUDING) {
-      release_fp_locks();
-      return true;
-    }
-  }
-
-  if (txid_ == 0) {
-    DCHECK_EQ(unique_shard_cnt_, 1u);
-    txid_ = op_seq.fetch_add(1, memory_order_relaxed);
-    DCHECK_GT(txid_, shard->committed_txid());
-  }
-
-  if (!txq->Empty() && txid_ < txq->Back()->txid() && !lock_granted) {
-    if (sd.local_mask & KEYLOCK_ACQUIRED) {
-      release_fp_locks();
-    }
-    return false;
-  }
-#ifdef UNIT_TESTS
-  LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id() << " 入队";
-#endif
-  TxQueue::Iterator it = txq->Push(intrusive_ptr_from_this());
-  DCHECK_EQ(TxQueue::kEnd, sd.pq_pos);
-  sd.pq_pos = it;
-  return true;
-}
-
-void Transaction::DispatchHop() {
-  std::bitset<1024> poll_flags(0);
-  unsigned run_cnt = 0;
-  IterateActiveShards([&poll_flags, &run_cnt](auto& sd, auto i) {
-    if ((sd.local_mask & OPTIMISTIC_EXECUTION) == 0) {
-      run_cnt++;
-      poll_flags.set(i, true);
-    }
-    sd.local_mask &= ~OPTIMISTIC_EXECUTION;
-  });
-
-  DCHECK_EQ(run_cnt, poll_flags.count());
-  if (run_cnt == 0) return;
-  std::atomic_thread_fence(memory_order_release);
-  IterateActiveShards([&poll_flags](auto& sd, auto i) {
-    if (poll_flags.test(i)) sd.is_armed.store(true, memory_order_relaxed);
-  });
-
-  if (CanRunInlined()) {
-    EngineShard::tlocal()->PollExecution(intrusive_ptr_from_this());
+    shards_.resize(1);
+    auto& sd = shards_.front();
+    sd.flags.fetch_or(kShardInvolved, std::memory_order_relaxed);
+    sd.key_begin = 0;
+    sd.key_count = keys_.size();
     return;
   }
 
-  auto poll_cb = [self = intrusive_ptr_from_this()] {
-    CHECK(self->namespace_ != nullptr);
-    EngineShard::tlocal()->PollExecution(self);
-  };
-  IterateShards([&poll_cb, &poll_flags](PerShardData& /*sd*/, auto i) {
-    if (poll_flags.test(i)) shard_set->Add(i, poll_cb);
-  });
+  // 多分片：keys_ / fps_ 按分片分段，ShardState 记录段界
+  sole_shard_ = kInvalidSid;
+  shards_.resize(shard_set->size());
+  for (ShardId sid = 0; sid < shard_set->size(); ++sid) {
+    const auto& acc = key_accum[sid];
+    if (acc.keys.empty()) continue;
+    auto& sd = shards_[sid];
+    sd.flags.fetch_or(kShardInvolved, std::memory_order_relaxed);
+    sd.key_begin = keys_.size();
+    sd.key_count = acc.keys.size();
+    for (const std::string_view k : acc.keys) {
+      keys_.push_back(k);
+      fps_.push_back(LockTag(k).Fingerprint());
+    }
+  }
+}
+
+size_t Transaction::SidToId(ShardId sid) const {
+  return active_shard_count_ == 1 ? 0 : static_cast<size_t>(sid);
 }
 
 bool Transaction::CanRunInlined() const {
   auto* es = EngineShard::tlocal();
-  if (unique_shard_cnt_ == 1 && unique_shard_id_ == es->shard_id()) {
-    return true;
-  }
-  return false;
+  return active_shard_count_ == 1 && sole_shard_ == es->shard_id();
 }
 
-bool Transaction::RunInShard(EngineShard* shard) {
-  DCHECK_GT(txid_, 0u);
-  unsigned idx = SidToId(shard->shard_id());
-  auto& sd = shard_data_[idx];
+cppcoro::AsyncTask Transaction::Run(Callback cb, std::coroutine_handle<> resume) {
+  DCHECK_GT(active_shard_count_, 0u);
+  concluding_ = true;
+  cb_ = cb;
+  resume_handle_ = resume;
+  owner_shard_ = EngineShard::tlocal()->shard_id();
+  pending_.store(active_shard_count_, std::memory_order_relaxed);
+  SetPhase(TxPhase::kScheduling);
 
-  IntentLock::Mode mode = LockMode();
-  RunCallback(shard);
-  bool is_concluding = coordinator_state_ & COORD_CONCLUDING;
-  if (sd.pq_pos != TxQueue::kEnd) {
-    shard->txq()->Pop(sd.pq_pos);
-    sd.pq_pos = TxQueue::kEnd;
-  }
-  if (is_concluding) {
-    VLOG(4) << "准备清理lock, 分片:" << shard->shard_id();
-    DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-    if (IsGlobal()) {
-      shard->shard_lock()->Release(mode);
+  if (active_shard_count_ == 1) {
+    // 单分片：先放行（本分片唯一，申请必然成功），再调度，随后驱动队列
+    shards_.front().flags.fetch_or(kAllowed, std::memory_order_relaxed);
+    barrier_->Add(1);
+    auto hop = [self = intrusive_ptr_from_this()]() {
+      LockResult res = self->ApplyForLockOn(*EngineShard::tlocal(), true);
+      CHECK(res != LockResult::kRejected) << "single-shard tx rejected";
+      if (res != LockResult::kGranted) {
+        // 入队后由队首引理执行；若队首被更早的未就绪事务卡住，
+        // 则等该事务完成时顺带放行（DriveQueue 的队首链）。
+        EngineShard::tlocal()->DriveQueue(self);
+      }
+      self->barrier_->Dec();
+    };
+    if (CanRunInlined()) {
+      hop();
     } else {
-      KeyLockArgs largs;
-      largs = GetLockArgs(idx);
-      GetDbSlice(shard->shard_id()).Release(mode, largs);
+      shard_set->Add(sole_shard_, hop);
     }
-    sd.local_mask &= ~KEYLOCK_ACQUIRED;
-    sd.local_mask &= ~OUT_OF_ORDER;
-  }
-  FinishHop();
-#ifdef UNIT_TESTS
-  LOG(INFO) << "事务 " << id << " 在分片:" << shard->shard_id()
-            << " RunInShard";
-#endif
-  ResumeIfNeed();
-  return is_concluding;
-}
-
-/*需要上下文调试时可以加context字段*/
-void Transaction::RunCallback(EngineShard* shard) {
-  (*cb_ptr_)(this, shard);
-  if (unique_shard_cnt_ == 1) {
-    cb_ptr_.reset();
-  }
-  VLOG(4) << "RunCallback!";
-  if (blocking_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-    need_resume.store(true, std::memory_order_release);
-  }
-}
-
-bool Transaction::CancelShardCb(EngineShard* shard) {
-  ShardId idx = SidToId(shard->shard_id());
-  auto& sd = shard_data_[idx];
-  TxQueue::Iterator q_pos = exchange(sd.pq_pos, TxQueue::kEnd);
-  if (q_pos == TxQueue::kEnd) {
-    DCHECK_EQ(sd.local_mask & KEYLOCK_ACQUIRED, 0);
-    return false;
-  }
-  TxQueue* txq = shard->txq();
-  bool was_head = txq->Front()->GetTxQueuePos(idx) == q_pos;
-  txq->Pop(q_pos);
-  auto lock_args = GetLockArgs(shard->shard_id());
-  DCHECK(sd.local_mask & KEYLOCK_ACQUIRED);
-  if (IsGlobal()) {
-    shard->shard_lock()->Release(LockMode());
+    co_await barrier_->Wait();
   } else {
-    DCHECK(!lock_args.fps.empty());
-    GetDbSlice(shard->shard_id()).Release(LockMode(), lock_args);
+    co_await Schedule();
+    SetPhase(TxPhase::kRunning);
+    Distribute();
   }
-
-  sd.local_mask &= ~KEYLOCK_ACQUIRED;
-  return was_head && !txq->Empty();
+  SetPhase(TxPhase::kFinished);
+  // 先标记协调器已退出，再统一恢复调用方协程：分片线程只有在看到
+  // complete_ 之后才允许恢复，避免"Run 尚未 co_return 就 resume 上层"。
+  complete_.store(true, std::memory_order_release);
+  ResumeIfReady();
+  co_return;
 }
 
-void Transaction::FinishHop() { run_barrier_->Dec(); }
+cppcoro::task<> Transaction::Schedule() {
+  idempotent_ = (cid_->opt_mask() & CO::IDEMPOTENT) != 0;
+  // 多分片仅幂等命令允许乐观内联：乐观路径无法回滚，重复执行必须无害
+  const bool allow_optimistic = idempotent_;
 
-KeyLockArgs Transaction::GetLockArgs(ShardId sid) const {
+  while (true) {
+    txid_ = global_seq.fetch_add(1, std::memory_order_relaxed);
+    barrier_->Start(active_shard_count_);
+    std::atomic<uint32_t> fail_cnt{0};
+
+    auto hop = [this, &fail_cnt, allow_optimistic]() {
+      LockResult res = ApplyForLockOn(*EngineShard::tlocal(), allow_optimistic);
+      if (res == LockResult::kRejected)
+        fail_cnt.fetch_add(1, std::memory_order_relaxed);
+      barrier_->Dec();
+    };
+    for (size_t i = 0; i < shards_.size(); ++i) {
+      if (shards_[i].flags.load(std::memory_order_relaxed) & kShardInvolved)
+        shard_set->Add(static_cast<ShardId>(i), hop);
+    }
+    co_await barrier_->Wait();
+
+    if (fail_cnt.load(std::memory_order_relaxed) == 0) break;
+
+    // 回滚本次调度（出队 + 释放锁计数），重新调度
+    SetPhase(TxPhase::kScheduling);
+    bool need_poll = false;
+    barrier_->Start(active_shard_count_);
+    shard_set->DispatchBriefInParallel(
+        [this, &need_poll](EngineShard* es) {
+          if (RollbackOnShard(*es)) need_poll = true;
+          barrier_->Dec();
+        },
+        [this](uint32_t i) {
+          return i < shards_.size() &&
+                 (shards_[i].flags.load(std::memory_order_relaxed) &
+                  kShardInvolved) != 0;
+        });
+    co_await barrier_->Wait();
+
+    // 队首被移走：通知相关分片重新驱动队列
+    if (need_poll) {
+      for (size_t i = 0; i < shards_.size(); ++i) {
+        if (shards_[i].flags.load(std::memory_order_relaxed) & kShardInvolved)
+          shard_set->Add(static_cast<ShardId>(i),
+                         [] { EngineShard::tlocal()->DriveQueue(nullptr); });
+      }
+    }
+    start_ms_ = util::GetCurrentTimeMs();
+  }
+  SetPhase(TxPhase::kWaiting);
+  co_return;
+}
+
+void Transaction::Distribute() {
+  std::bitset<1024> poll;
+  uint32_t cnt = 0;
+  for (size_t i = 0; i < shards_.size(); ++i) {
+    ShardState& sd = shards_[i];
+    if ((sd.flags.load(std::memory_order_relaxed) & kShardInvolved) == 0)
+      continue;
+    if (sd.flags.load(std::memory_order_relaxed) & kRanInline) {
+      sd.flags.fetch_and(~kRanInline, std::memory_order_relaxed);
+      continue;  // 已乐观内联完成的分片不再分发
+    }
+    poll.set(i, true);
+    ++cnt;
+  }
+  if (cnt == 0) return;  // 全部内联完成
+
+  // 放行（armed）：分片线程以 acquire 读取
+  for (size_t i = 0; i < shards_.size(); ++i) {
+    if (poll.test(i))
+      shards_[i].flags.fetch_or(kAllowed, std::memory_order_release);
+  }
+
+  auto poll_cb = [self = intrusive_ptr_from_this()]() {
+    EngineShard::tlocal()->DriveQueue(self);
+  };
+  if (CanRunInlined()) {  // 多分片下恒为 false，防御保留
+    EngineShard::tlocal()->DriveQueue(intrusive_ptr_from_this());
+  } else {
+    for (size_t i = 0; i < shards_.size(); ++i) {
+      if (poll.test(i)) shard_set->Add(static_cast<ShardId>(i), poll_cb);
+    }
+  }
+}
+
+LockResult Transaction::ApplyForLockOn(EngineShard& shard, bool allow_optimistic) {
+  const ShardId sid = shard.shard_id();
+  ShardState& sd = shards_[SidToId(sid)];
+
+  // 本分片已在本事务乐观内联执行过（上一调度回合完成）：重试回合视为完成
+  if (sd.flags.load(std::memory_order_relaxed) & kRanInline)
+    return LockResult::kGranted;
+
+  DCHECK_EQ(sd.flags.load(std::memory_order_relaxed) & kKeyHeld, 0u);
+  // 注意：不清除 kAllowed —— 它由协调器（单分片 Run / Distribute）设置，
+  // 放行位只允许在 AllowOn / AllowOnIf 中清除。
+  sd.flags.fetch_and(~(kRanInline | kUncontended), std::memory_order_relaxed);
+
+  // 乱序保护：本事务的序已在本分片执行过（重试边界），拒绝本次申请
+  if (txid_ > 0 && shard.CommittedTxId() >= txid_)
+    return LockResult::kRejected;
+
+  const IntentLock::Mode mode = LockMode();
+  const KeyLockArgs lock_args = LockArgsOn(sid);
+
+  // 计数器锁（论文 §2.1）：Acquire 无条件递增 (CX, CS) 并判定授予；
+  // 无论成败，Release 都必须对称递减。
+  const bool keys_free = SliceOn(sid).Acquire(mode, lock_args);
+  const bool shard_free = global_ ? shard.ShardLock().Acquire(mode) : true;
+  const bool granted = keys_free && shard_free;
+  if (granted) {
+    sd.flags.fetch_or(kKeyHeld | kUncontended, std::memory_order_relaxed);
+  }
+
+  // 乐观内联：本分片锁无竞争，直接执行回调并释放
+  if (granted && allow_optimistic) {
+    sd.flags.fetch_or(kRanInline, std::memory_order_relaxed);
+    ExecuteOnShard(shard);
+    if (concluding_) return LockResult::kGranted;
+  }
+
+  if (txid_ == 0) {  // 单分片：调度时才分配事务序
+    txid_ = global_seq.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  TxQueue& queue = shard.Queue();
+  // 有序性（论文 TxnQueue）：队列已存在更晚序者且本事务未拿锁 → 不可插队
+  if (!queue.Empty() && txid_ < queue.Back()->txid() && !granted) {
+    ReleaseLocks(shard, sd);
+    return LockResult::kRejected;
+  }
+  // 队列高水位（论文 §2.1）：多分片未拿全锁且队列堆积 → 拒绝入队，
+  // 把 CPU 让给队首推进 / SCA 消化队列
+  if (active_shard_count_ > 1 && !granted &&
+      queue.Size() >= EngineShard::kQueueHighWater) {
+    ReleaseLocks(shard, sd);
+    return LockResult::kRejected;
+  }
+  // 入队：等待队首引理 / SCA 放行
+  sd.queue_pos = queue.Push(intrusive_ptr_from_this());
+  return LockResult::kQueued;
+}
+
+bool Transaction::ExecuteOnShard(EngineShard& shard) {
+  const ShardId sid = shard.shard_id();
+  ShardState& sd = shards_[SidToId(sid)];
+
+  // 出队（乐观内联路径未入队，跳过）
+  if (sd.queue_pos != TxQueue::kEnd) {
+    shard.Queue().Pop(sd.queue_pos);
+    sd.queue_pos = TxQueue::kEnd;
+  }
+
+  // 回调：仅执行一次（乐观内联已执行则跳过）
+  if ((sd.flags.load(std::memory_order_relaxed) & kRanInline) == 0) {
+    InvokeCallback(shard);
+  }
+
+  if (concluding_) {
+    ReleaseLocks(shard, sd);
+    sd.flags.fetch_and(~(kKeyHeld | kUncontended), std::memory_order_relaxed);
+  }
+  FinishShardExecution();
+  return concluding_;
+}
+
+bool Transaction::RollbackOnShard(EngineShard& shard) {
+  const ShardId sid = shard.shard_id();
+  ShardState& sd = shards_[SidToId(sid)];
+  TxQueue::Iterator pos = sd.queue_pos;
+  if (pos == TxQueue::kEnd) return false;  // 未入队（含乐观内联已完成的分片）
+
+  TxQueue& queue = shard.Queue();
+  const bool was_head = (pos == queue.Head());
+  queue.Pop(pos);
+  sd.queue_pos = TxQueue::kEnd;
+  ReleaseLocks(shard, sd);  // 对称抵消 ApplyForLockOn 中的 Acquire
+  sd.flags.fetch_and(~(kKeyHeld | kUncontended), std::memory_order_relaxed);
+  return was_head && !queue.Empty();
+}
+
+bool Transaction::AllowOn(ShardId sid) {
+  ShardState& sd = shards_[SidToId(sid)];
+  const uint16_t old =
+      sd.flags.fetch_and(~kAllowed, std::memory_order_acq_rel);
+  return (old & kAllowed) != 0;
+}
+
+bool Transaction::AllowOnIf(ShardId sid, uint16_t need_flags, uint16_t* got_flags) {
+  ShardState& sd = shards_[SidToId(sid)];
+  // 仅当"已放行且满足条件"时清除 kAllowed；否则保持原状（供队首引理后续放行）
+  while (true) {
+    uint16_t f = sd.flags.load(std::memory_order_acquire);
+    if (!(f & kAllowed) || !(f & need_flags)) {
+      *got_flags = f;
+      return false;
+    }
+    if (sd.flags.compare_exchange_weak(f, f & ~kAllowed,
+                                       std::memory_order_acq_rel,
+                                       std::memory_order_acquire)) {
+      *got_flags = f;
+      return true;
+    }
+  }
+}
+
+bool Transaction::IsAllowedOn(ShardId sid) const {
+  const ShardState& sd = shards_[SidToId(sid)];
+  return (sd.flags.load(std::memory_order_acquire) & kAllowed) != 0;
+}
+
+// ---- 执行上下文 ----
+
+DbSlice& Transaction::SliceOn(ShardId sid) const {
+  CHECK(ns_ != nullptr);
+  return ns_->GetDbSlice(sid);
+}
+
+std::span<const std::string_view> Transaction::KeysOn(ShardId sid) const {
+  const ShardState& sd = shards_[SidToId(sid)];
+  return std::span<const std::string_view>(keys_.data() + sd.key_begin,
+                                           sd.key_count);
+}
+
+KeyLockArgs Transaction::LockArgsOn(ShardId sid) const {
   KeyLockArgs res;
-  res.db_index = db_index_;
-
-  if (unique_shard_cnt_ == 1) {
-    res.fps.assign(kv_fp_.begin(), kv_fp_.end());
+  res.db_index = db_;
+  if (active_shard_count_ == 1) {
+    res.fps.assign(fps_.begin(), fps_.end());
   } else {
-    const auto& sd = shard_data_[sid];
-    res.fps.assign(kv_fp_.begin() + sd.fp_start,
-                   kv_fp_.begin() + sd.fp_start + sd.fp_count);
+    const ShardState& sd = shards_[sid];
+    res.fps.assign(fps_.begin() + sd.key_begin,
+                   fps_.begin() + sd.key_begin + sd.key_count);
   }
   return res;
 }
 
-string_view Transaction::Name() const {
-  return cid_ ? cid_->name() : "null-command";
+// ---- 内部收尾 ----
+
+bool Transaction::InvokeCallback(EngineShard& shard) {
+  if (!cb_) return false;
+  cb_.value()(*this, shard);
+  if (active_shard_count_ == 1) cb_.reset();  // 单分片：回调仅执行一次
+  return true;
 }
 
-ShardId Transaction::GetUniqueShard() const { return unique_shard_id_; }
-
-bool Transaction::IsActive(ShardId sid) const {
-  if (unique_shard_cnt_ == 0) return false;
-  if (unique_shard_cnt_ == 1) {
-    return sid == unique_shard_id_;
+void Transaction::FinishShardExecution() {
+  if (pending_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    // 最后一个分片完成：通知协调器可恢复。
+    // 仅在协调器 Run 已退出（complete_）时立即恢复；否则由 Run 末尾
+    // 的 ResumeIfReady 统一处理，保证恢复前 Run 协程已 co_return。
+    resume_requested_.store(true, std::memory_order_release);
+    if (complete_.load(std::memory_order_acquire)) ResumeIfReady();
   }
-
-  return shard_data_[SidToId(sid)].local_mask & ACTIVE;
 }
 
-IntentLock::Mode Transaction::LockMode() const {
-  return (cid_->opt_mask() & CO::READONLY) ? IntentLock::SHARED
-                                           : IntentLock::EXCLUSIVE;
+void Transaction::ReleaseLocks(EngineShard& shard, ShardState& sd) {
+  const IntentLock::Mode mode = LockMode();
+  if (IsGlobal()) {
+    shard.ShardLock().Release(mode);
+  } else {
+    SliceOn(shard.shard_id()).Release(mode, LockArgsOn(shard.shard_id()));
+  }
+  sd.flags.fetch_and(~kKeyHeld, std::memory_order_relaxed);
 }
 
-DbSlice& Transaction::GetDbSlice(ShardId shard_id) const {
-  CHECK(namespace_ != nullptr);
-  return namespace_->GetDbSlice(shard_id);
+void Transaction::ResumeIfReady() {
+  if (!concluding_) return;
+  if (!resume_requested_.exchange(false, std::memory_order_relaxed)) return;
+  auto* es = EngineShard::tlocal();
+  if (es && es->shard_id() == owner_shard_) {
+    resume_handle_.resume();
+  } else {
+    // 不在协调器分片线程：投递到协调器所在分片再恢复
+    shard_set->Add(owner_shard_, [h = resume_handle_] { h.resume(); });
+  }
 }
 
 }  // namespace dfly

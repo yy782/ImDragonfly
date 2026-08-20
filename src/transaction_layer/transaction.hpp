@@ -1,405 +1,178 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
+// ============================================================================
+// transaction.hpp —— 多分片事务调度核心（独立设计）
 //
-
+// ImDragonfly 对 VVL 论文（Kun Ren et al., "Lightweight Locking for
+// Main Memory Database Systems", VLDB Journal 2015）的独立落地面。
+//
+// 本文件为全新设计：不携带 DragonflyDB 原版代码的移植痕迹，接口不兼容
+// 原版调用点。行为语义锚定论文：
+//   - 计数器锁 (CX, CS)：由 IntentLock 提供，Acquire 递增计数器并判定授予
+//     （授予 = 无竞争），Release 对称递减；
+//   - 全局事务序：单调递增 txid，每分片 TxQueue 按序插入，所有分片看到
+//     一致的串行化顺序；
+//   - 许可闸门：调度成功后各分片"放行"（kAllowed），放行后才允许执行；
+//   - 队首引理：每分片只需检查队首即可推进调度；
+//   - 乐观内联：锁无竞争的分片可跳过排队直接执行回调（多分片仅幂等命令）；
+//   - SCA：队首被外部卡住时，用写集/读集位数组扫描出无冲突事务提前执行。
+// ============================================================================
 #pragma once
 
 #include <glog/logging.h>
 
-#include <memory>
+#include <atomic>
+#include <coroutine>
+#include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "command_layer/cmn_types.hpp"
+#include "command_layer/command_id.hpp"
+#include "detail/common_types.hpp"
+#include "detail/intent_lock.hpp"
 #include "detail/tx_base.hpp"
 #include "detail/tx_queue.hpp"
-#include "sharding/engine_shard_set.hpp"
 #include "sharding/op_status.hpp"
 #include "sharding/synchronization.hpp"
+#include "util/cppcoro/async_task.hpp"
+#include "util/cppcoro/task.hpp"
 #include "util/function.hpp"
 #include "util/intrusive_ptr.hpp"
-using namespace util;
+
 namespace dfly {
 
-class CommandId;
-
-using namespace cmn;
-using namespace ::cmn;
-
-using facade::OpResult;
-using facade::OpStatus;
-
-inline std::string CmdArgListToString(CmdArgList full_args);
-
-class Transaction
-    : public util::intrusive_ref_counter<Transaction,
-                                         util::thread_safe_counter> {
-  Transaction(const Transaction&) = delete;
-  void operator=(const Transaction&) = delete;
-
- public:
-  using time_point = ::std::chrono::steady_clock::time_point;
-  using RunnableType = util::FunctionRef<void(Transaction* t, EngineShard*)>;
-
-  static constexpr std::nullopt_t kShardArgs{std::nullopt};
-
-  // 当前 shard 上的状态标志位。
-  enum LocalMask : uint16_t {
-    // 该事务涉及此 shard（key hash 落到此 shard，或通过
-    // InitGlobal/EnableAllShards 全局激活）。
-    // 在 InitByKeys 中设置；unique_shard_cnt_ > 0 的 shard 上此位必为 1。
-    // IsActive() 以此位判断是否需要向该 shard 分发调度/执行/取消操作。
-    ACTIVE = 1,
-
-    // 回调已在调度阶段乐观执行（无需进入 TxQueue 排队）。
-    // 当 lock_granted && execute_optimistic 为真时，ScheduleInShard
-    // 内联执行回调，
-    // 后续 Execute() 跳过此 shard 不再 poll。RunCallback 返回后或下一轮
-    // ScheduleInShard 时清除。
-    OPTIMISTIC_EXECUTION = 1 << 1,
-
-    // 所有 key 级锁无竞争获取成功，可绕过 TxQueue 排序直接执行。
-    // ScheduleInShard 中 lock_granted 为真时置位；concluding hop
-    // 结束时（RunInShard）清除。
-    // 仅在 KEYLOCK_ACQUIRED 已置位时有效。
-    OUT_OF_ORDER = 1 << 2,
-
-    // 已持有 fingerprint 级 key 锁。ScheduleInShard 中 Acquire() 成功后置位。
-    // RunInShard 中据此判断是否需要释放锁；CancelShardCb/expire
-    // 路径也据此决定是否 Release()。
-    // 全局事务不置此位（走 shard_lock 而非 fp lock）。
-    KEYLOCK_ACQUIRED = 1 << 3,
-
-    // // 粘性标志：事务已通过 WatchInShard() 注册到 BlockingController 等待（如
-    // BLPOP）。
-    // // 一旦设置永不撤销，标记此事务曾作为阻塞事务存在。与 AWAKED_Q
-    // 配合区分"首次注册等待"
-    // // 与"被唤醒后重执行"两种状态。
-    // WAS_SUSPENDED = 1 << 4,
-
-    // // 事务被 NotifySuspended() 从阻塞等待中唤醒（目标 key 已就绪）。
-    // // 每次唤醒最多设置一次；RunInShard 中据此驱动 BlockingController
-    // 清理（RemovedWatched），
-    // // 并保证事务挂起期间不释放锁。
-    // AWAKED_Q = 1 << 5,
-  };
-
-  Transaction(const CommandId* cid = nullptr);  // todo 使用explicit
-  ~Transaction();
-
-  OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args);
-
-  // /*管道优化专用*/ 由 PipelineSquasher 预计算 KeyIndex 与目标分片后调用，
-  // 复用外部计算结果，跳过重复的 DetermineKeys() 与单 key 路径的 Shard()。
-  OpStatus InitByArgs(const Namespace* ns, DbIndex index, CmdArgList args,
-                      const KeyIndex& key_index, ShardId sid);
-
-  // /*管道优化专用*/ 压缩器复用同一分片事务顺序执行多条命令。每条命令执行前
-  // 调用本方法，重置上一条命令遗留的运行时状态，使 InitByArgs / SingleHopAsync
-  // 可被安全重复调用，省去每条命令各分配一个 Transaction 对象的内存开销。
-  void PrepareForReuse(const CommandId* cid);
-
-  // 全局事务（如 SAVE）：激活所有分片，配合分片锁使用。InitByArgs 对
-  // CO::GLOBAL_TRANS 命令自动调用；周期快照等场景可直接调用。
-  void InitGlobal();
-  void EnableAllShards();
-  bool IsGlobal() const { return global_; }
-
-  cppcoro::AsyncTask SingleHopAsync(RunnableType cb,
-                                    std::coroutine_handle<> handle);
-
-  bool RunInShard(EngineShard* shard);
-
-  KeyLockArgs GetLockArgs(ShardId sid) const;
-
-  uint16_t DisarmInShard(ShardId sid);
-
-  std::pair<uint16_t, bool> DisarmInShardWhen(ShardId sid, uint16_t req_flags);
-
-  bool IsActive(ShardId sid) const;
-
-  TxId txid() const { return txid_; }
-
-  IntentLock::Mode LockMode() const;
-
-  std::string_view Name() const;
-
-  uint32_t GetUniqueShardCnt() const { return unique_shard_cnt_; }
-
-  ShardId GetUniqueShard() const;
-
-  bool IsScheduled() const { return coordinator_state_ & COORD_SCHED; }
-
-  DbContext GetDbContext() const {
-    return DbContext{namespace_, db_index_, time_now_ms_};
-  }
-
-  TxQueue::Iterator& GetTxQueuePos(ShardId sid) {
-    return shard_data_[sid].pq_pos;
-  }
-
-  const Namespace& GetNamespace() const { return *namespace_; }
-
-  DbSlice& GetDbSlice(ShardId sid) const;
-
-  DbIndex GetDbIndex() const { return db_index_; }
-
-  const CommandId* GetCId() const { return cid_; }
-
-  class Slice {
-   public:
-    struct Iterator {
-      const IndexSlice* cur_;
-      const IndexSlice* end_;
-      unsigned idx_;
-      unsigned step_;
-      CmdArgList args_;
-      std::pair<std::string_view, unsigned> val_;
-
-      const std::pair<std::string_view, unsigned>& operator*() const {
-        return val_;
-      }
-
-      Iterator& operator++() {
-        idx_ += step_;
-        if (idx_ >= cur_->second) {
-          ++cur_;
-          if (cur_ < end_) {
-            idx_ = cur_->first;
-          } else {
-            // 已越过最后一个 key，此时 idx_ == end().idx_，
-            // 不可再读取 args_[idx_]，否则越界（range-for 会在 ++ 后判 !=
-            // end）。
-            return *this;
-          }
-        }
-        val_ = {args_[idx_], idx_};
-        return *this;
-      }
-
-      bool operator!=(const Iterator& o) const { return idx_ != o.idx_; }
-    };
-
-    Iterator begin() const {
-      if (slices_.empty()) return end();
-      Iterator it{&slices_.front(),
-                  &slices_.back() + 1,
-                  slices_.front().first,
-                  step_,
-                  args_,
-                  {}};
-      it.val_ = {args_[it.idx_], it.idx_};
-      return it;
-    }
-    Iterator end() const {
-      if (slices_.empty()) return {nullptr, nullptr, 0, step_, args_, {}};
-      return {&slices_.back() + 1,
-              &slices_.back() + 1,
-              slices_.back().second,
-              step_,
-              args_,
-              {}};
-    }
-
-    Transaction* trans_ = nullptr;
-    ShardId sid_ = -1;
-
-    DbSlice& GetDbSlice() const { return trans_->GetDbSlice(sid_); }
-    DbContext GetDbContext() const { return trans_->GetDbContext(); }
-
-    std::span<const IndexSlice> slices_;
-    unsigned step_ = 1;
-    CmdArgList args_;
-  };
-
-  const Slice& GetSlice(ShardId sid) const { return key_slices_[SidToId(sid)]; }
-
-  unsigned GetKeyNum() const { return kv_fp_.size(); }
-
-  // AOF 记录使用：完整命令参数（不含命令名）。
-  CmdArgList full_args() const { return full_args_; }
-
-#if !defined(NDEBUG) || defined(UNIT_TESTS)
-  int id;
-#endif
-#ifdef UNIT_TESTS
-  void set_txid(int new_id) { txid_ = new_id; }
-#endif
- private:
-  struct alignas(64) PerShardData {
-    PerShardData() {}
-    PerShardData(PerShardData&& /*other*/) noexcept {}
-
-    uint16_t local_mask = 0;
-
-    std::atomic_bool is_armed = false;
-
-    uint32_t slice_start = 0;
-    uint32_t slice_count = 0;
-
-    uint32_t fp_start = 0;
-    uint32_t fp_count = 0;
-
-    TxQueue::Iterator pq_pos = TxQueue::kEnd;
-
-    char pad[64 - 2 - 1 - 1 - 5 * sizeof(uint32_t)];
-  };
-
-  static_assert(sizeof(PerShardData) == 64);
-
-  enum CoordinatorState : uint8_t {
-    COORD_SCHED = 1,
-    COORD_CONCLUDING = 1 << 1,
-    COORD_CANCELLED = 1 << 2,
-  };
-
-  struct PerShardCache {
-    std::vector<IndexSlice> slices;
-    unsigned key_step = 1;
-
-    void Clear() { slices.clear(); }
-  };
-
-  void InitBase(const Namespace* ns, DbIndex dbid, CmdArgList args);
-
-  void InitByKeys(const KeyIndex& keys);
-
-  // /*管道优化专用*/ 复用外部预计算的分片 sid，单 key 路径跳过 Shard()。
-  void InitByKeys(const KeyIndex& keys, ShardId sid);
-
-  void BuildShardIndex(const KeyIndex& keys, std::vector<PerShardCache>* out);
-
-  void InitShardData(std::span<const PerShardCache> shard_index,
-                     size_t num_args);
-
-  void StoreKeysInArgs(const KeyIndex& key_index);
-
-  cppcoro::task<> ScheduleInternal();
-
-  bool ScheduleInShard(EngineShard* shard, bool execute_optimistic);
-
-  void DispatchHop();
-
-  void FinishHop();
-
-  void RunCallback(EngineShard* shard);
-
-  /*需要上下文调试时要context字段*/
-  bool CancelShardCb(EngineShard* shard);
-
-  void InitTxTime();
-
-  bool CanRunInlined() const;
-
-  unsigned SidToId(ShardId sid) const {
-    return sid < shard_data_.size() ? sid : 0;
-  }
-
-  template <typename F>
-  void IterateShards(F&& f) {
-    if (unique_shard_cnt_ == 1) {
-      f(shard_data_[SidToId(unique_shard_id_)], unique_shard_id_);
-    } else {
-      for (ShardId i = 0; i < shard_data_.size(); ++i) {
-        f(shard_data_[i], i);
-      }
-    }
-  }
-
-  template <typename F>
-  void IterateActiveShards(F&& f) {
-    IterateShards([&f](auto& sd, auto i) {
-      if (sd.local_mask & ACTIVE) f(sd, i);
-    });
-  }
-
-  ::dfly::BlockingCounter run_barrier_{0};
-  // BlockingCounter run_barrier_{0};
-
-  std::vector<PerShardData> shard_data_;
-
-  std::vector<IndexSlice> args_slices_;
-
-  std::vector<Slice> key_slices_;
-
-  std::vector<LockFp> kv_fp_;
-
-  CmdArgList full_args_;
-
-  std::optional<RunnableType> cb_ptr_;
-
-  const CommandId* cid_ = nullptr;
-
-  TxId txid_{0};
-
-  const Namespace* namespace_{nullptr};
-  DbIndex db_index_{0};
-  uint64_t time_now_ms_{0};
-
-  uint32_t unique_shard_cnt_{0};
-  ShardId unique_shard_id_{kInvalidSid};
-  bool global_ = false;
-
-  uint8_t coordinator_state_ = 0;
-
-  ShardId owner_shard_id_{
-      kInvalidSid};  // 事务所属分片：命令协程启动/挂起时所在的分片线程
-  std::coroutine_handle<> handle_;
-  std::atomic<uint16_t> blocking_count_ = 0;
-  std::atomic<bool> need_resume = false;
-  std::atomic<bool> resume_count_ = false;
-
-  void InitBlockingController(std::coroutine_handle<> handle,
-                              unsigned blocking_count) {
-    handle_ = handle;
-    DCHECK_EQ(blocking_count_, 0u);
-    blocking_count_ = blocking_count;
-    // 记录事务所属分片：命令协程在哪个分片线程上启动，恢复时就回到该线程，
-    // 避免协程跨线程恢复带来的 cache 局部性损失与 TLS 切换。
-    EngineShard* es = EngineShard::tlocal();
-    DCHECK(es != nullptr) << "args=[" << CmdArgListToString(full_args_) << "]";
-    owner_shard_id_ = es->shard_id();
-  }
-  void ResumeIfNeed() {
-    if (!need_resume.load(
-            std::memory_order_acquire)) {  // 保证事务完全结束后才resume协程
-      return;
-    }
-    bool expected = false;
-    if (resume_count_.compare_exchange_strong(expected, true,
-                                              std::memory_order_acq_rel)) {
-      EngineShard* es = EngineShard::tlocal();
-      DCHECK(es != nullptr);
-      if (es->shard_id() == owner_shard_id_) {
-        handle_.resume();
-      } else {
-        shard_set->Add(owner_shard_id_, [h = handle_]() { h.resume(); });
-      }
-    }
-  }
-
- private:
-  struct TLTmpSpace {
-    std::vector<PerShardCache>& GetShardIndex(unsigned size);
-
-   private:
-    std::vector<PerShardCache> shard_cache;
-  };
-  static thread_local TLTmpSpace tmp_space;
+class DbSlice;
+class EngineShard;
+class Namespace;
+
+using TxId = uint64_t;
+
+// ---- 事务在单个分片上的调度标志（原子位集） ----
+// kAllowed 由协调器线程写、分片线程读/清除；其余位仅所属分片线程访问。
+enum ShardFlag : uint16_t {
+  kShardInvolved = 1 << 0,  // 本分片参与本事务
+  kKeyHeld       = 1 << 1,  // 本分片参与锁申请且计数未释放（论文的"持锁/占位"）
+  kAllowed       = 1 << 2,  // 已放行（armed）：允许执行
+  kRanInline     = 1 << 3,  // 回调已在本分片乐观内联执行完毕
+  kUncontended   = 1 << 4,  // 本分片锁无竞争：可无视队首阻塞提前执行
 };
 
-OpResult<KeyIndex> DetermineKeys(const CommandId* cid, CmdArgList args);
+// 事务在单个分片上的视图
+struct ShardState {
+  TxQueue::Iterator queue_pos = TxQueue::kEnd;  // 队列位置；kEnd=未入队
+  std::atomic<uint16_t> flags{0};
+  uint32_t key_begin = 0;  // keys_ / fps_ 的段起点
+  uint32_t key_count = 0;  // 段长
+};
 
-inline std::string CmdArgListToString(CmdArgList full_args) {
-  std::string out;
-  for (size_t i = 0; i < full_args.size(); ++i) {
-    if (i > 0) out += ' ';
-    out += '"';
-    out += full_args[i];
-    out += '"';
+// 事务整体阶段（协调器视角，调试/断言用途）
+enum class TxPhase : uint8_t {
+  kReady,       // 初始化完成，可投入调度
+  kScheduling,  // 申请锁 / 入队中
+  kWaiting,     // 调度成功，等待分片放行
+  kRunning,     // 分片执行中
+  kFinished,    // 全部完成，可复用
+};
+
+// 单分片调度申请的结果
+enum class LockResult : uint8_t {
+  kGranted,  // 锁已获取且本分片已完成（乐观内联路径）
+  kQueued,   // 已入队，等待队首引理 / SCA 放行
+  kRejected, // 本次申请失败（序冲突 / 队列高水位），需回滚重试
+};
+
+class Transaction final
+    : public util::intrusive_ref_counter<Transaction, util::thread_safe_counter> {
+ public:
+  // 分片线程回调：在持有锁的上下文执行命令逻辑
+  using Callback = util::FunctionRef<void(Transaction&, EngineShard&)>;
+
+  Transaction();
+  explicit Transaction(const CommandId* cid);
+  ~Transaction();
+
+  // 按命令参数初始化：提取 key 并映射到分片
+  OpStatus Init(const Namespace* ns, DbIndex db, cmn::CmdArgList args);
+  // 用预计算的 KeyIndex 初始化（管线优化，跳过 key 提取）
+  OpStatus Init(const Namespace* ns, DbIndex db, cmn::CmdArgList args,
+                const KeyIndex& key_index, ShardId precomputed_sid);
+
+  // ---- 元信息 ----
+  TxId txid() const { return txid_; }
+  bool IsGlobal() const { return global_; }
+  bool IsReadOnly() const { return (cid_->opt_mask() & CO::READONLY) != 0; }
+  IntentLock::Mode LockMode() const {
+    return IsReadOnly() ? IntentLock::SHARED : IntentLock::EXCLUSIVE;
   }
-  return out;
-}
+  size_t ShardCount() const { return active_shard_count_; }
+  ShardId SoleShard() const { return sole_shard_; }
+  bool IsDone() const { return phase_ == TxPhase::kFinished; }
+  std::string_view Name() const { return cid_ ? cid_->name() : "null-command"; }
+
+  // ---- 执行入口（协调器协程） ----
+  // 单跳执行：调度 -> 分发 -> 等待完成 -> 恢复调用方协程
+  cppcoro::AsyncTask Run(Callback cb, std::coroutine_handle<> resume);
+
+  // ---- 分片线程协议（EngineShard 驱动） ----
+  LockResult ApplyForLockOn(EngineShard& shard, bool allow_optimistic);
+  bool ExecuteOnShard(EngineShard& shard);
+  bool RollbackOnShard(EngineShard& shard);
+  // 无条件放行（队首引理）：清除 kAllowed，返回是否曾放行
+  bool AllowOn(ShardId sid);
+  // 条件放行（乱序 / SCA）：仅当 kAllowed 且含 need_flags 时清除并返回 true
+  bool AllowOnIf(ShardId sid, uint16_t need_flags, uint16_t* got_flags);
+  bool IsAllowedOn(ShardId sid) const;
+
+  // ---- 执行上下文（回调内使用） ----
+  DbSlice& SliceOn(ShardId sid) const;
+  const Namespace* Ns() const { return ns_; }
+  DbIndex DbIndex() const { return db_; }
+  uint64_t TimeMs() const { return start_ms_; }
+  cmn::CmdArgList Args() const { return args_; }
+  std::span<const std::string_view> KeysOn(ShardId sid) const;
+  size_t KeyCount() const { return keys_.size(); }
+  KeyLockArgs LockArgsOn(ShardId sid) const;
+
+ private:
+  void InitBase(const Namespace* ns, DbIndex db, cmn::CmdArgList args);
+  void BuildKeyMap(const KeyIndex& key_index, ShardId precomputed_sid);
+  void MarkAllShards();
+  bool CanRunInlined() const;
+  size_t SidToId(ShardId sid) const;
+  cppcoro::task<> Schedule();          // 多分片调度（可重试）
+  void Distribute();                   // 放行涉及分片并投递队列驱动
+  bool InvokeCallback(EngineShard& shard);
+  void FinishShardExecution();         // 递减完成计数，归零后尝试恢复协调器
+  void ReleaseLocks(EngineShard& shard, ShardState& sd);
+  void ResumeIfReady();
+  void SetPhase(TxPhase p) { phase_ = p; }
+
+  const CommandId* cid_ = nullptr;
+  const Namespace* ns_ = nullptr;
+  DbIndex db_ = 0;
+  cmn::CmdArgList args_;
+  uint64_t start_ms_ = 0;
+
+  std::vector<std::string_view> keys_;  // 按分片分段的 key 表
+  std::vector<LockFp> fps_;             // 与 keys_ 一一对应的锁指纹
+  std::vector<ShardState> shards_;      // 按分片 id 索引（单分片时压缩为 1 项）
+  uint32_t active_shard_count_ = 0;
+  ShardId sole_shard_ = kInvalidSid;
+
+  TxId txid_ = 0;
+  bool global_ = false;
+  bool concluding_ = false;       // 单跳：分片执行完即可恢复协调器
+  bool idempotent_ = false;       // CO::IDEMPOTENT：多分片允许乐观内联
+  TxPhase phase_ = TxPhase::kReady;
+
+  std::optional<Callback> cb_;
+  std::coroutine_handle<> resume_handle_;
+  ShardId owner_shard_ = kInvalidSid;
+  std::atomic<uint16_t> pending_{0};           // 剩余未执行分片数
+  std::atomic<bool> resume_requested_{false};  // 全部执行完毕，可恢复
+  std::atomic<bool> complete_{false};          // 协调器 Run 已退出（co_return 前置位）
+  BlockingCounter barrier_{0};                 // 调度 / 回滚回合的集合点
+};
 
 }  // namespace dfly

@@ -59,36 +59,4 @@ class DbContext {
   uint64_t time_now_ms_;
 };
 
-struct KeyIndex {
-  KeyIndex(unsigned start = 0, unsigned end = 0, unsigned step = 1)
-      : start(start), end(end), step(step) {}
-
-  using iterator_category = std::forward_iterator_tag;
-  using value_type = unsigned;
-  using difference_type = std::ptrdiff_t;
-  using pointer = value_type;
-  using reference = value_type;
-
-  unsigned operator*() const;
-  KeyIndex& operator++();
-  bool operator!=(const KeyIndex& ki) const;
-
-  unsigned NumArgs() const { return (end - start + step - 1) / step; }
-
-  auto Range() const {
-    unsigned s = start, st = step;  // 由ASAN报告，2026.7.30 -- 1 修改
-    return std::views::iota(0u, NumArgs()) |
-           std::views::transform([s, st](unsigned i) { return s + i * st; });
-  }
-
-  auto Range(const ::cmn::ArgSlice& args) const {
-    unsigned s = start, st = step;  // 由ASAN报告，2026.7.30 -- 1 修改
-    return std::views::iota(0u, NumArgs()) |
-           std::views::transform([s, st](unsigned i) { return s + i * st; }) |
-           std::views::transform([args](unsigned idx) { return args[idx]; });
-  }
-
- public:
-  unsigned start, end, step;
-};
 }  // namespace dfly

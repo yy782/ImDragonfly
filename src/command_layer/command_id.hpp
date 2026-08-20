@@ -10,33 +10,6 @@
 
 #include "command_layer/cmd_support.hpp"
 #include "command_layer/cmn_types.hpp"
-#include "util/function.hpp"
-namespace facade {
-
-class CommandId {
- public:
-  CommandId(const char* name, uint32_t mask, int8_t first_key, int8_t last_key);
-
-  std::string_view name() const { return name_; }
-
-  uint32_t opt_mask() const { return opt_mask_; }
-  int8_t first_key_pos() const { return first_key_; }
-  int8_t last_key_pos() const { return last_key_; }
-
-  void SetFamily(size_t fam) { family_ = fam; }
-
-  void SetFlag(uint32_t flag) { opt_mask_ |= flag; }
-
- protected:
-  std::string name_;
-  uint32_t opt_mask_;
-
-  int8_t first_key_;
-  int8_t last_key_;
-  size_t family_;
-};
-
-}  // namespace facade
 
 namespace dfly {
 
@@ -54,42 +27,102 @@ enum CommandOpt : uint32_t {
 
 }  // namespace CO
 
-class CommandId;
 class CommandContext;
+struct CommandSpec;  // 命令目录条目（数据行），定义于 command_registry.hpp
 
-class CommandId : public facade::CommandId {
+// 命令描述符：元数据 + 键遍历 + 执行入口，单类内聚。
+class CommandId {
  public:
   using CmdArgList = ::cmn::CmdArgList;
+  using Arg = ::cmn::Arg;
 
-  using Handler =
-      util::function_base<true, true, fu2::capacity_default, false, false,
-                          cmd::CoroTask(CommandContext*, CmdArgList) const>;
+  // handler 为静态成员 / 自由函数指针，返回命令协程（由调用方 co_await）。
+  using Handler = cmd::CoroTask (*)(CommandContext*, CmdArgList);
 
-  CommandId(const char* name, uint32_t mask, int8_t first_key, int8_t last_key);
+  // 从命令目录数据行构造（表驱动注册的唯一入口）。
+  explicit CommandId(const CommandSpec& spec);
 
   CommandId(CommandId&& o) = default;
+  CommandId& operator=(CommandId&& o) = default;
 
+  CommandId(const CommandId&) = delete;
+  CommandId& operator=(const CommandId&) = delete;
+
+  std::string_view name() const { return name_; }
+  uint32_t opt_mask() const { return opt_mask_; }
+  int8_t first_key_pos() const { return first_key_; }
+  int8_t last_key_pos() const { return last_key_; }
+  int8_t key_step() const { return key_step_; }  // 被事务层消费，名字暂不动
+
+  // 键迭代器：按命令的 first/last/step 规则步进遍历参数中的键
+  // （如 MSET 键位于 1, 3, 5...，step 步进即可跳过值位）。
+  // 仅需键遍历：值由命令自身按约定解析，不属于键元数据。
+  class KeyIterator {
+   public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = Arg;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const Arg*;
+    using reference = Arg;
+
+    reference operator*() const { return args_[pos_]; }
+    Arg key() const { return args_[pos_]; }
+
+    KeyIterator& operator++() {
+      pos_ += step_;
+      if (pos_ >= end_)
+        pos_ = end_;
+      return *this;
+    }
+    KeyIterator operator++(int) {
+      KeyIterator tmp = *this;
+      ++*this;
+      return tmp;
+    }
+    bool operator==(const KeyIterator& o) const {
+      return args_.data() == o.args_.data() && pos_ == o.pos_;
+    }
+    bool operator!=(const KeyIterator& o) const { return !(*this == o); }
+
+   private:
+    friend class CommandId;
+    KeyIterator(cmn::CmdArgList args, unsigned pos, unsigned end, unsigned step)
+        : args_(args), pos_(pos), end_(end), step_(step) {}
+
+    cmn::CmdArgList args_;
+    unsigned pos_;
+    unsigned end_;
+    unsigned step_;
+  };
+
+  // Keys() 返回的范围，支持 range-for 与显式迭代器访问。
+  class KeyRange {
+   public:
+    KeyIterator begin() const { return begin_; }
+    KeyIterator end() const { return end_; }
+
+   private:
+    friend class CommandId;
+    KeyRange(KeyIterator b, KeyIterator e) : begin_(b), end_(e) {}
+    KeyIterator begin_, end_;
+  };
+
+  // 遍历参数中的键：
+  //   for (std::string_view k : cid->Keys(args)) { ... }
+  KeyRange Keys(cmn::CmdArgList args) const;
+
+  // 执行命令：返回命令协程，由调用方 co_await。
   cmd::CoroTask Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
     return handler_(cmd_cntx, args);
   }
 
-  // bool IsTransactional() const;
-
-  int8_t interleaved_step() const { return interleave_step_; }
-
-  CommandId&& SetHandler(Handler f) && {
-    handler_ = std::move(f);
-    return std::move(*this);
-  }
-
-  CommandId&& SetInterleavedStep(int8_t step) && {
-    interleave_step_ = step;
-    return std::move(*this);
-  }
-
  private:
-  int8_t interleave_step_{0};
-  Handler handler_;
+  std::string name_;
+  uint32_t opt_mask_;
+  int8_t first_key_;
+  int8_t last_key_;
+  int8_t key_step_{0};  // 键在参数中的步长（如 MSET 为 2），0 表示默认 1
+  Handler handler_{nullptr};
 };
 
 }  // namespace dfly

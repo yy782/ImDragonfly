@@ -4,28 +4,20 @@
 
 #include "command_registry.hpp"
 
-#include "Strings.hpp"
+#include <glog/logging.h>
 
 namespace dfly {
 
-using namespace facade;
-
 CommandRegistry::CommandRegistry() {}
 
-CommandRegistry& CommandRegistry::operator<<(CommandId cmd) {
-  std::string k = std::string(cmd.name());
-  cmd.SetFamily(family_of_commands_.size() - 1);
-  cmd_map_.emplace(k, std::move(cmd));
-  return *this;
-}
-
-void CommandRegistry::StartFamily() {
-  family_of_commands_.emplace_back();
-  bit_index_ = 0;
-}
-
-CommandRegistry::FamiliesVec CommandRegistry::GetFamilies() {
-  return std::move(family_of_commands_);
+// 表驱动注册：各模块把自己的 constexpr 命令目录（CommandSpec 表）交进来，
+// 这里统一构建成运行期查找结构。目录内重名已被编译期 CheckUniqueNames 拦截。
+void CommandRegistry::Register(std::span<const CommandSpec> specs) {
+  for (const CommandSpec& s : specs) {
+    auto [it, inserted] = cmd_map_.emplace(s.name, CommandId{s});
+    (void)it;
+    CHECK(inserted) << "duplicate command: " << s.name;
+  }
 }
 
 }  // namespace dfly

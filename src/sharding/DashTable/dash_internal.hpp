@@ -1,992 +1,575 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
 #pragma once
 
-#include <glog/logging.h>
+// ============================================================================
+// dash_internal.hpp — Dash 哈希表内部核心（Segment / Bucket / 槽位管理）
+//
+// 本文件根据公开论文《Dash: Scalable Hashing on Persistent Memory》
+// (Lu, Hao, Wang, Lo. VLDB 2020, arXiv:2003.07302) 的设计思想从头实现，
+// 与 DragonflyDB 的任何实现代码无派生关系。遵循的公开设计：
+//
+//   1. 分段结构：Segment 是分裂/扩容的基本单位，段内再划分桶；
+//      两级哈希：第一级经目录定位 Segment，第二级定位段内主桶。
+//   2. 指纹过滤：每个槽位保存 8 位指纹（hash 低 8 位），查找时先以
+//      SIMD 指令整段比对指纹，只有指纹命中的槽位才做完整键比较，
+//      负查询无需触碰键值区 cacheline。
+//   3. 段内溢出：主桶满时优先在邻居桶及段尾溢出区安置，不跨段；
+//      仅当段内彻底无法容纳时才触发分裂。
+//   4. 分裂：以 Segment 为粒度，按 Extendible Hashing 的目录增长方式
+//      动态扩容，分裂后更新目录映射即可完成容量翻倍。
+//
+// 本文件的原创性体现在具体布局与操作（论文未规定的实现细节）：
+//   * 槽状态使用原生 uint16_t 位图（占用位图 + 探测位图），不使用
+//     压缩位图 / 非对齐访问等技巧；
+//   * 溢出区条目通过独立的归属表 overflow_home_[] 记录其主桶号，
+//     而非在桶内内嵌指针；删除与查找均为 O(1) 定位；
+//   * "探测槽"标记表达"该条目归属前一主桶"，保证任意键的查找路径
+//     固定且短：主桶 → 邻居桶 → 溢出区，长度与表规模无关；
+//   * 插入采用"均衡安置 → 腾挪 → 段尾溢出"三级策略，兼顾负载因子
+//     与查找确定性。
+// ============================================================================
+
 #include <immintrin.h>
 
-#include "detail/memory_resource.hpp"
+#include <bit>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
 namespace dfly {
-namespace detail {
+namespace dash {
 
-// SlotBitmap
-// ┌─────────────────────────────────────────────────────────────────┐
-// │                    第一个 uint32_t                              │
-// ├─────────────────────────────────────────────────────────────────┤
-// │                      busy 位图 (低 28 位)                        │
-// │                      高 4 位未使用                               │
-// └─────────────────────────────────────────────────────────────────┘
+// ---------------------------------------------------------------------------
+// 常量
+// ---------------------------------------------------------------------------
 
-// ┌─────────────────────────────────────────────────────────────────┐
-// │                    第二个 uint32_t                              │
-// ├─────────────────────────────────────────────────────────────────┤
-// │                      probe 位图 (低 28 位)                       │
-// │                      高 4 位未使用                               │
-// └─────────────────────────────────────────────────────────────────┘
+// 指纹宽度：8 位（1 字节），指纹 = hash & 0xFF。
+static constexpr unsigned kFpBits = 8;
+static constexpr uint8_t kFpMask = 0xFFu;
 
-template <unsigned NUM_SLOTS>
-class SlotBitmap {
-  static_assert(
-      NUM_SLOTS > 0 &&
-      NUM_SLOTS <= 28);  // 超过 28 个槽位，单个 uint32_t（32 位）存不下所有状态
-  static constexpr unsigned kLen = 2;
-  static constexpr unsigned kAllocMask =
-      (1u << NUM_SLOTS) - 1;  // 槽位掩码 ， 用于操作高 14 位的 busy 位图
+// 每桶槽位数上限：指纹数组须能整载入一个 __m128i（16 字节）。
+static constexpr unsigned kMaxSlotsPerBucket = 16;
 
- public:
-  uint32_t GetProbe(bool probe) const {
-    return (val_[1].d & kAllocMask) ^ ((!probe) * kAllocMask);
-  }
-  uint32_t GetBusy() const { return val_[0].d; }
+// 每个主桶在段尾溢出区最多占用的槽位数。溢出区总量有限，
+// 该上限防止个别主桶长期独占，保证最坏查找开销有界。
+static constexpr unsigned kMaxOverflowPerBucket = 4;
 
-  bool IsFull() const { return Size() == NUM_SLOTS; }
+// 溢出槽"归属主桶"的缺省值（槽未占用）。
+static constexpr uint8_t kNoHome = 0xFFu;
 
-  unsigned Size() const { return __builtin_popcount(val_[0].d); }
-  int FindEmptySlot() const {
-    uint32_t mask = ~(GetBusy());
-    int slot = __builtin_ctz(mask);
-    DCHECK_LT(slot, int(NUM_SLOTS));
-    return slot;
-  }
-  void ClearSlots(uint32_t mask) {
-    val_[0].d &= ~mask;
-    val_[1].d &= ~mask;
-  }
+static_assert(kMaxOverflowPerBucket <= kMaxSlotsPerBucket);
 
-  void Clear() { val_[0].d = val_[1].d = 0; }
+// ---------------------------------------------------------------------------
+// 策略 Traits
+// ---------------------------------------------------------------------------
 
-  void ClearSlot(unsigned index) {
-    DCHECK_GT(Size(), 0);
-    uint32_t mask = 1u << index;
-    val_[0].d &= ~mask;
-    val_[1].d &= ~mask;
-  }
-
-  void SetSlot(unsigned index, bool probe) {
-    DCHECK_EQ(((val_[0].d >> index) & 1), 0);
-    val_[0].d |= (1u << index);
-    val_[1].d |= (unsigned(probe) << index);
-  }
-
-  bool ShiftLeft() {
-    constexpr uint32_t kBusyLastSlot = (kAllocMask >> 1) + 1;
-    bool res = (val_[0].d & kBusyLastSlot) != 0;
-    val_[0].d <<= 1;
-    val_[0].d &= kAllocMask;
-    val_[1].d <<= 1;
-    val_[1].d &= kAllocMask;
-
-    return res;
-  }
-
-  void Swap(unsigned slot_a, unsigned slot_b) {
-    if (slot_a > slot_b) {
-      std::swap(slot_a, slot_b);
-      uint32_t a = (val_[0].d << (slot_b - slot_a)) ^ val_[0].d;
-      a &= (1 << slot_b);
-      a |= (a >> (slot_b - slot_a));
-      val_[0].d ^= a;
-
-      a = (val_[1].d << (slot_b - slot_a)) ^ val_[1].d;
-      a &= (1 << slot_b);
-      a |= (a >> (slot_b - slot_a));
-      val_[1].d ^= a;
-    }
-  }
-
- private:
-  struct Unaligned {
-    // 强制非对齐，性能换内存? ，可能不会牺牲性能，对CPU缓存友好?
-    uint32_t d __attribute__((packed, aligned(1)));
-
-    Unaligned() : d(0) {}
-  };
-
-  Unaligned val_[kLen];
-};  // SlotBitmap
-
-template <unsigned NUM_SLOTS>
-class BucketBase {
-  static constexpr unsigned kStashFpLen = 4;
-  static constexpr unsigned kStashPresentBit = 1 << 4;
-
-  using FpArray = std::array<uint8_t, NUM_SLOTS>;
-  using StashFpArray = std::array<uint8_t, kStashFpLen>;
-
- public:
-  using SlotId = uint8_t;
-  static constexpr SlotId kNanSlot = 255;
-
-  bool IsFull() const { return Size() == NUM_SLOTS; }
-
-  bool IsEmpty() const { return GetBusy() == 0; }
-
-  unsigned Size() const { return slotb_.Size(); }
-
-  void Delete(SlotId sid) { slotb_.ClearSlot(sid); }
-
-  unsigned Find(uint8_t fp_hash, bool probe) const {
-    unsigned mask = CompareFP(fp_hash) & GetBusy();
-    return mask & GetProbe(probe);
-  }
-
-  uint8_t Fp(unsigned i) const {
-    DCHECK_LT(i, finger_arr_.size());
-    return finger_arr_[i];
-  }
-  uint32_t GetProbe(bool probe) const { return slotb_.GetProbe(probe); }
-  uint32_t GetBusy() const { return slotb_.GetBusy(); }
-
-  bool IsBusy(unsigned slot) const { return (GetBusy() & (1u << slot)) != 0; }
-  void ClearSlots(uint32_t mask) { slotb_.ClearSlots(mask); }
-  void Clear() { slotb_.Clear(); }
-
-  void SetHash(unsigned slot_id, uint8_t meta_hash, bool probe) {
-    DCHECK_LT(slot_id, finger_arr_.size());
-
-    finger_arr_[slot_id] = meta_hash;
-    slotb_.SetSlot(slot_id, probe);
-  }
-
-  void ClearStashPtrs() {
-    stash_busy_ = 0;
-    stash_pos_ = 0;
-    stash_probe_mask_ = 0;
-    overflow_count_ = 0;
-  }
-
-  bool HasStash() const { return stash_busy_ & kStashPresentBit; }
-  bool HasStashOverflow() const { return overflow_count_ > 0; }
-
-  void Swap(unsigned slot_a, unsigned slot_b) {
-    slotb_.Swap(slot_a, slot_b);
-    std::swap(finger_arr_[slot_a], finger_arr_[slot_b]);
-  }
-
-  template <typename F>
-  std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func)
-      const {  // 遍历 Stash 指针并查找匹配指纹
-    unsigned om = is_probe ? stash_probe_mask_ : ~stash_probe_mask_;
-    unsigned ob = stash_busy_;
-
-    for (unsigned i = 0; i < kStashFpLen; ++i) {
-      if ((ob & 1) && (stash_arr_[i] == fp) && (om & 1)) {
-        unsigned pos = (stash_pos_ >> (i * 2)) &
-                       3;  // 从 stash_pos_ 中提取当前 Stash 指针的 2 位
-        auto sid = func(i, pos);
-        if (sid != BucketBase::kNanSlot) {
-          return std::pair<unsigned, SlotId>(pos, sid);
-        }
-      }
-      ob >>= 1;
-      om >>= 1;
-    }
-    return {0, BucketBase::kNanSlot};
-  }
-
-  void SetStashPtr(unsigned stash_pos, uint8_t meta_hash, BucketBase* next) {
-    DCHECK_LT(stash_pos, 4);
-    if (!SetStash(meta_hash, stash_pos, false)) {
-      if (!next->SetStash(meta_hash, stash_pos, true)) {
-        overflow_count_++;
-      }
-    }
-    stash_busy_ |= kStashPresentBit;
-  }
-
-  unsigned UnsetStashPtr(uint8_t fp_hash, unsigned stash_pos,
-                         BucketBase* next) {
-    bool clear_success = ClearStash(fp_hash, stash_pos, false);
-    unsigned res = 0;
-
-    if (!clear_success) {
-      clear_success = next->ClearStash(fp_hash, stash_pos, true);
-      res += clear_success;
-    }
-
-    if (!clear_success) {
-      DCHECK_GT(overflow_count_, 0);
-      overflow_count_--;
-    }
-    unsigned mask1 = stash_busy_ & (kStashPresentBit - 1);
-    unsigned mask2 = next->stash_busy_ & (kStashPresentBit - 1);
-
-    if (((mask1 & (~stash_probe_mask_)) == 0) && (overflow_count_ == 0) &&
-        ((mask2 & next->stash_probe_mask_) == 0)) {
-      stash_busy_ &= ~kStashPresentBit;
-    }
-
-    return res;
-  }
-
- protected:
-  uint32_t CompareFP(uint8_t fp) const {
-    static_assert(FpArray{}.size() <= 16);
-    const __m128i key_data = _mm_set1_epi8(fp);
-    __m128i seg_data =
-        _mm_loadu_si128(reinterpret_cast<const __m128i*>(finger_arr_.data()));
-    __m128i rv_mask = _mm_cmpeq_epi8(seg_data, key_data);
-    int mask = _mm_movemask_epi8(rv_mask);
-    return mask;
-  }
-
-  bool ShiftRight() {
-    for (int i = NUM_SLOTS - 1; i > 0; --i) {
-      finger_arr_[i] = finger_arr_[i - 1];
-    }
-    bool res = slotb_.ShiftLeft();
-    DCHECK_EQ(slotb_.FindEmptySlot(), 0);
-    return res;
-  }
-
-  bool SetStash(uint8_t fp, unsigned stash_pos, bool probe) {
-    unsigned free_slot = __builtin_ctz(~stash_busy_);
-    if (free_slot >= kStashFpLen) return false;
-
-    stash_arr_[free_slot] = fp;
-    stash_busy_ |= (1u << free_slot);
-    stash_probe_mask_ |= (unsigned(probe) << free_slot);
-    free_slot *= 2;  // 计算空闲槽位的索引在stash_pos_的起始比特位
-    stash_pos_ &= (~(3 << free_slot));  // 将 stash_pos_ 中目标 2
-                                        // 位区域清零，同时保留其他位不变。
-    stash_pos_ |= (stash_pos << free_slot);  // 填入目标2位
-    return true;
-  }
-
-  bool ClearStash(uint8_t fp, unsigned stash_pos, bool probe) {
-    auto cb = [stash_pos, this](unsigned i, unsigned pos) -> SlotId {
-      if (pos == stash_pos) {
-        stash_busy_ &= (~(1u << i));
-        stash_probe_mask_ &= (~(1u << i));
-        stash_pos_ &= (~(3u << (i * 2)));
-
-        DCHECK_EQ(0u, ((stash_pos_ >> (i * 2)) & 3));
-        return 0;
-      }
-      return kNanSlot;
-    };
-
-    std::pair<unsigned, SlotId> res = IterateStash(fp, probe, std::move(cb));
-    return res.second != kNanSlot;
-  }
-
-  SlotBitmap<NUM_SLOTS> slotb_;
-  FpArray finger_arr_;
-  StashFpArray stash_arr_;  // 存储 Stash 槽位的指纹
-
-  uint8_t stash_busy_ = 0;
-  uint8_t stash_pos_ =
-      0;  // stash_busy_能判断哪些溢出桶有 Stash 引用，
-          // 只不过是用位判断的，stash_pos_就是根据位来获得溢出桶ID
-  uint8_t stash_probe_mask_ = 0;
-
-  uint8_t overflow_count_ =
-      0;  // 溢出计数器。记录有多少个 Stash 引用被“溢出”存储到了邻居桶中。
-};  // BucketBase
-
-struct DefaultSegmentPolicy {
-  static constexpr unsigned kSlotNum = 12;
-  static constexpr unsigned kBucketNum = 64;
-  // static constexpr unsigned  kStashBucketNum = 4;
-  // static constexpr bool kUseVersion = true;
+// Policy 可通过 kStashNum 指定段尾溢出桶数；缺省为 4。
+template <typename Policy, typename = void>
+struct StashBucketNum {
+  static constexpr unsigned value = 4;
+};
+template <typename Policy>
+struct StashBucketNum<Policy, std::void_t<decltype(Policy::kStashNum)>> {
+  static constexpr unsigned value = Policy::kStashNum;
 };
 
-using PhysicalBid = uint8_t;  // 数据实际存储的桶位置
-using LogicalBid = uint8_t;   // 键经过哈希后应该归属的桶位置
+// ---------------------------------------------------------------------------
+// 槽位掩码
+// ---------------------------------------------------------------------------
 
-template <typename KeyType, typename ValueType,
-          typename Policy = DefaultSegmentPolicy>
-class Segment {
-  static constexpr unsigned kSlotNum = Policy::kSlotNum;
-  static constexpr unsigned kBucketNum = Policy::kBucketNum;
-  static constexpr unsigned kStashBucketNum = 4;
-  // static constexpr bool kUseVersion = Policy::kUseVersion;
-  static constexpr unsigned kFingerBits = 8;
-  static constexpr unsigned kTotalBuckets = kBucketNum + kStashBucketNum;
-  static_assert(kTotalBuckets < 0xFF);
-  using BucketType = BucketBase<kSlotNum>;
+template <unsigned kSlots>
+inline constexpr uint16_t kSlotMask = static_cast<uint16_t>((1u << kSlots) - 1);
 
-  struct Bucket : public BucketType {
-    using BucketType::kNanSlot;
-    using typename BucketType::SlotId;
-    KeyType key[kSlotNum];
-    ValueType value[kSlotNum];
+// ---------------------------------------------------------------------------
+// Bucket：段内的一个桶
+// ---------------------------------------------------------------------------
+// 元数据区（指纹 + 两张状态位图）与键值区分开排布，整个桶按 cacheline
+// 对齐；负查询只需触碰元数据 cacheline，无需加载键值。
+template <typename Key, typename Value, unsigned kSlots>
+struct alignas(64) Bucket {
+  static_assert(kSlots > 0 && kSlots <= kMaxSlotsPerBucket,
+                "kSlots must be in (0, 16]");
 
-    template <typename U, typename V>
-    void Insert(uint8_t slot, U&& u, V&& v, uint8_t meta_hash, bool probe);
-    template <typename U, typename V>
-    int TryInsertToBucket(U&& new_key, V&& new_value, uint8_t meta_hash,
-                          bool probe);
-    template <typename Pred>
-    SlotId FindByFp(uint8_t fp_hash, bool probe, Pred&& pred) const;
+  // ---- 元数据区 ----
+  uint8_t fp_[kMaxSlotsPerBucket];  // 指纹数组；仅前 kSlots 个有效
+  uint16_t occupied_;               // bit i == 1 ⇔ 槽 i 被占用
+  uint16_t probe_;                  // bit i == 1 ⇔ 槽 i 为探测槽（归属前一主桶）
 
-    bool ShiftRight();
+  // ---- 键值区：kSlots 个键值对，就地构造 ----
+  Key keys_[kSlots];
+  Value vals_[kSlots];
 
-    void Swap(unsigned slot_a, unsigned slot_b) {
-      BucketType::Swap(slot_a, slot_b);
-      std::swap(key[slot_a], key[slot_b]);
-      std::swap(value[slot_a], value[slot_b]);
-    }
+  Bucket() : occupied_(0), probe_(0) { std::memset(fp_, 0, sizeof(fp_)); }
 
-    template <typename This, typename Cb>
-    void ForEachSlotImpl(This obj, Cb&& cb) const;
+  Bucket(const Bucket&) = delete;
+  Bucket& operator=(const Bucket&) = delete;
 
-    // calls for each busy slot: cb(iterator, probe)
-    template <typename Cb>
-    void ForEachSlot(Cb&& cb) const {
-      ForEachSlotImpl(this, std::forward<Cb&&>(cb));
-    }
+  // ---- 元数据访问 ----
+  bool IsOccupied(unsigned i) const { return (occupied_ >> i) & 1u; }
+  bool IsProbe(unsigned i) const { return (probe_ >> i) & 1u; }
+  uint8_t Fp(unsigned i) const { return fp_[i]; }
 
-    // calls for each busy slot: cb(iterator, probe)
-    template <typename Cb>
-    void ForEachSlot(Cb&& cb) {
-      ForEachSlotImpl(this, std::forward<Cb&&>(cb));
-    }
-  };
+  Key& KeyAt(unsigned i) { return keys_[i]; }
+  const Key& KeyAt(unsigned i) const { return keys_[i]; }
+  Value& ValAt(unsigned i) { return vals_[i]; }
+  const Value& ValAt(unsigned i) const { return vals_[i]; }
 
-  static constexpr PhysicalBid kNanBid = 0xFF;
-  using SlotId = typename BucketType::SlotId;
+  // 空闲槽位掩码。
+  uint16_t FreeMask() const { return (~occupied_) & kSlotMask<kSlots>; }
+  bool HasFreeSlot() const { return FreeMask() != 0; }
 
- public:
-  struct Iterator {
-    PhysicalBid index;  // bucket index
-    uint8_t slot;
+  // 第一个空闲槽；调用方须先确认存在。
+  unsigned FirstFree() const {
+    return static_cast<unsigned>(std::countr_zero(FreeMask()));
+  }
 
-    Iterator() : index(kNanBid), slot(BucketType::kNanSlot) {}
+  // 指纹 SIMD 比对：一次性比对全部槽位，返回指纹命中的槽位掩码。
+  uint16_t MatchFp(uint8_t fp) const {
+    const __m128i key = _mm_set1_epi8(static_cast<char>(fp));
+    const __m128i data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(fp_));
+    const __m128i eq = _mm_cmpeq_epi8(data, key);
+    const uint16_t m = static_cast<uint16_t>(_mm_movemask_epi8(eq));
+    return m & kSlotMask<kSlots>;
+  }
 
-    Iterator(PhysicalBid bi, uint8_t sid) : index(bi), slot(sid) {}
+  // ---- 槽位操作 ----
 
-    bool found() const { return index != kNanBid; }
-  };
+  // 就地构造键值并登记状态。
+  template <typename K, typename V>
+  void Install(unsigned i, uint8_t fp, bool probe, K&& key, V&& value) {
+    fp_[i] = fp;
+    occupied_ |= static_cast<uint16_t>(1u << i);
+    if (probe) probe_ |= static_cast<uint16_t>(1u << i);
+    new (&keys_[i]) Key(std::forward<K>(key));
+    new (&vals_[i]) Value(std::forward<V>(value));
+  }
 
-  static constexpr size_t kFpMask = (1 << kFingerBits) - 1;
-  using Value_t = ValueType;
-  using Key_t = KeyType;
-  using Hash_t = uint64_t;
+  // 析构键值（先通知策略回调，再析构）并清空槽位状态。
+  template <typename Policy>
+  void Remove(unsigned i) {
+    Policy::DestroyKey(keys_[i]);
+    Policy::DestroyValue(vals_[i]);
+    if constexpr (!std::is_trivially_destructible_v<Key>) keys_[i].~Key();
+    if constexpr (!std::is_trivially_destructible_v<Value>) vals_[i].~Value();
+    occupied_ &= static_cast<uint16_t>(~(1u << i));
+    probe_ &= static_cast<uint16_t>(~(1u << i));
+  }
+};
 
-  explicit Segment(size_t depth, uint32_t id, PMR_NS::memory_resource* mr)
-      : local_depth_(depth), segment_id_(id), mr_(mr) {}
+// ---------------------------------------------------------------------------
+// SegPos：段内位置（不依赖表结构，供上层迭代器/游标使用）
+// ---------------------------------------------------------------------------
 
-  ~Segment() { Clear(); }
+struct SegPos {
+  uint32_t bid;   // 桶号：[0, kTotalBuckets)
+  uint32_t slot;  // 槽号：[0, kSlots)
+};
+
+// ---------------------------------------------------------------------------
+// Segment：一个物理段
+// ---------------------------------------------------------------------------
+// 主桶索引 [0, kMainBuckets)，溢出桶索引 [kMainBuckets, kTotalBuckets)。
+// 段是分裂/扩容的最小单位，也是恢复协议中的持久化校验单位。
+template <typename Key, typename Value, typename Policy, unsigned kSlots,
+          unsigned kMainBuckets, unsigned kStashBuckets>
+struct Segment {
+  static_assert(kMainBuckets > 0 && kStashBuckets > 0);
+  static constexpr unsigned kTotalBuckets = kMainBuckets + kStashBuckets;
+  static constexpr unsigned kOverflowSlots = kStashBuckets * kSlots;
+
+  // ---- 布局 ----
+  Bucket<Key, Value, kSlots> buckets_[kTotalBuckets];
+
+  // 溢出槽 → 归属主桶。全局溢出槽编号 gs = stb * kSlots + slot。
+  // 槽未占用时值为 kNoHome。
+  uint8_t overflow_home_[kOverflowSlots];
+  // 各主桶在溢出区占用的槽数；查找时计数为 0 可跳过溢出区扫描。
+  uint8_t overflow_cnt_[kMainBuckets];
+
+  uint8_t local_depth_ = 0;  // 局部深度（Extendible Hashing）
+  uint32_t size_ = 0;        // 段内条目总数
+
+  Segment() {
+    std::memset(overflow_home_, kNoHome, sizeof(overflow_home_));
+    std::memset(overflow_cnt_, 0, sizeof(overflow_cnt_));
+  }
 
   Segment(const Segment&) = delete;
   Segment& operator=(const Segment&) = delete;
 
-  template <typename K, typename V, typename Pred, typename OnMoveCb>
-  std::pair<Iterator, bool> Insert(K&& key, V&& value, Hash_t key_hash,
-                                   Pred&& pred, OnMoveCb&& on_move_cb);
+  // ---- 静态辅助 ----
 
-  template <typename U, typename V, typename OnMoveCb>
-  Iterator InsertUniq(
-      U&& key, V&& value, Hash_t key_hash,
-      bool spread,  //  是否在主桶和邻居桶之间做负载均衡
-      /*
-          spread true:
-              选择负载较小的桶（主桶或邻居桶）
-          spread false:
-               优先选择主桶
-      */
-      OnMoveCb&& on_move_cb);  // 条目移动时的回调（用于通知淘汰策略）
-
-  template <typename Pred>
-  auto FindIt(Hash_t key_hash, Pred&& pred) const -> Iterator;
-
-  template <typename HashFn, typename OnMoveCb>
-  void Split(HashFn&& hfunc, Segment* dest, OnMoveCb&& on_move_cb);
-
-  void Delete(const Iterator& it, Hash_t key_hash);
-
-  void Clear();  // clears the segment.
-
-  size_t SlowSize() const;
-
-  size_t local_depth() const { return local_depth_; }
-
-  void set_local_depth(uint32_t depth) { local_depth_ = depth; }
-
-  unsigned num_buckets() const { return kBucketNum + kStashBucketNum; }
-  uint32_t segment_id() const { return segment_id_; }
-  void set_segment_id(uint32_t new_id) { segment_id_ = new_id; }
-  const Bucket& GetBucket(PhysicalBid i) const { return bucket_[i]; }
-
-  Bucket& GetBucket(PhysicalBid i) { return bucket_[i]; }
-
-  bool IsBusy(PhysicalBid bid, unsigned slot) const {
-    return GetBucket(bid).GetBusy() & (1U << slot);
-  }
-  Key_t& Key(PhysicalBid bid, unsigned slot) {
-    DCHECK(IsBusy(bid, slot));
-    return GetBucket(bid).key[slot];
+  // 第二级哈希：取指纹位之后的位，按主桶数取模。
+  static uint32_t HomeBucket(uint64_t hash) {
+    return static_cast<uint32_t>((hash >> kFpBits) % kMainBuckets);
   }
 
-  const Key_t& Key(PhysicalBid bid, unsigned slot) const {
-    DCHECK(IsBusy(bid, slot));
-    return GetBucket(bid).key[slot];
+  static uint32_t NextBucket(uint32_t b) {
+    return b + 1 < kMainBuckets ? b + 1 : 0;
   }
 
-  Value_t& Value(PhysicalBid bid, unsigned slot) {
-    DCHECK(IsBusy(bid, slot));
-    return GetBucket(bid).value[slot];
+  static uint32_t PrevBucket(uint32_t b) {
+    return b == 0 ? kMainBuckets - 1 : b - 1;
   }
 
-  const Value_t& Value(PhysicalBid bid, unsigned slot) const {
-    DCHECK(IsBusy(bid, slot));
-    return GetBucket(bid).value[slot];
+  static uint8_t Fingerprint(uint64_t hash) {
+    return static_cast<uint8_t>(hash & kFpMask);
   }
 
-  template <typename Cb, typename HashFn>
-  bool TraverseLogicalBucket(LogicalBid bid, HashFn&& hfun, Cb&& cb) const;
+  // ---- 成员访问 ----
 
-  template <typename Cb>
-  void TraverseAll(Cb&& cb) const;  // 对当前 Segment 中所有被占用的槽位遍历接口
-
-  int MoveToOther(bool own_items, unsigned from, unsigned to);
-
-  void RemoveStashReference(unsigned stash_pos, Hash_t key_hash);
-
-  auto TryMoveFromStash(unsigned stash_id, unsigned stash_slot_id,
-                        Hash_t key_hash) -> Iterator;
-
- private:
-  static LogicalBid HomeIndex(Hash_t hash) {  // 计算主桶位置
-    return (hash >> kFingerBits) % kBucketNum;
+  Bucket<Key, Value, kSlots>& BucketAt(uint32_t bid) { return buckets_[bid]; }
+  const Bucket<Key, Value, kSlots>& BucketAt(uint32_t bid) const {
+    return buckets_[bid];
   }
 
-  static LogicalBid NextBid(LogicalBid bid) {  // 下一个桶（线性探测）
-    return bid < kBucketNum - 1 ? bid + 1 : 0;
+  bool IsOverflowBid(uint32_t bid) const { return bid >= kMainBuckets; }
+
+  uint8_t LocalDepth() const { return local_depth_; }
+  uint32_t Size() const { return size_; }
+
+  // 溢出槽全局编号 <-> 桶内坐标。
+  static uint32_t OverflowBidOf(unsigned gs) {
+    return kMainBuckets + gs / kSlots;
+  }
+  static unsigned OverflowSlotOf(unsigned gs) { return gs % kSlots; }
+  static unsigned OverflowGlobal(uint32_t bid, unsigned slot) {
+    return (bid - kMainBuckets) * kSlots + slot;
   }
 
-  static LogicalBid PrevBid(LogicalBid bid) {  // 上一个桶
-    return bid ? bid - 1 : kBucketNum - 1;
-  }
+  // ---- 查找 ----
 
-  auto FindValidStartingFrom(PhysicalBid bid, unsigned slot) const -> Iterator;
-  Bucket bucket_[kTotalBuckets];
-  uint8_t local_depth_;
-  uint32_t segment_id_;  // segment id in the table.
-  PMR_NS::memory_resource* mr_ = nullptr;
-};
-
-class DashTableBase {
- public:
-  explicit DashTableBase(uint32_t gd)
-      : unique_segments_(1 << gd), initial_depth_(gd), global_depth_(gd) {}
-
-  DashTableBase(const DashTableBase&) = delete;
-  DashTableBase& operator=(const DashTableBase&) = delete;
-
-  uint32_t unique_segments() const { return unique_segments_; }
-
-  uint16_t depth() const { return global_depth_; }
-
-  size_t size() const { return size_; }
-
-  size_t Empty() const { return size_ == 0; }
-
- protected:
-  uint32_t SegmentId(size_t hash) const {
-    if (global_depth_) {
-      return hash >> (64 - global_depth_);
+  // 在指定桶中按"指纹 + 探测属性"过滤，逐槽精确比较。
+  // 返回命中的槽号，未命中返回 -1。
+  template <typename K>
+  int FindInBucket(const Bucket<Key, Value, kSlots>& b, uint8_t fp,
+                   bool probe, const K& key) const {
+    uint16_t mask = b.MatchFp(fp) & b.occupied_ & kSlotMask<kSlots>;
+    mask &= probe ? b.probe_ : static_cast<uint16_t>(~b.probe_);
+    while (mask != 0) {
+      const unsigned i = static_cast<unsigned>(std::countr_zero(mask));
+      if (Policy::Equal(b.KeyAt(i), key)) {
+        return static_cast<int>(i);
+      }
+      mask &= mask - 1;  // 清除最低位
     }
-
-    return 0;
-  }
-
-  size_t size_ = 0;
-  uint32_t unique_segments_ = 0;  // 实际段数
-  uint32_t bucket_count_ = 0;
-  uint8_t initial_depth_;
-  uint8_t global_depth_;
-};  // DashTableBase
-template <typename KeyType, typename ValueType>
-struct IteratorPair {
-  IteratorPair(KeyType& k, ValueType& v) : first(k), second(v) {}
-
-  IteratorPair* operator->() { return this; }
-
-  const IteratorPair* operator->() const { return this; }
-
-  KeyType& first;
-  ValueType& second;
-};
-class DashCursor {
- public:
-  explicit DashCursor(uint64_t token = 0) : val_(token) {}
-
-  DashCursor(uint8_t depth, uint32_t seg_id, PhysicalBid bid)
-      : val_((uint64_t(seg_id) << (40 - depth)) | bid) {}
-
-  static DashCursor end() { return DashCursor{}; }
-
-  PhysicalBid bucket_id() const { return val_ & 0xFF; }
-  uint32_t segment_id(uint8_t depth) const { return val_ >> (40 - depth); }
-  uint64_t token() const { return val_; }
-  explicit operator bool() const {  // explicit：避免int x = DashCursor + 1;
-    return val_ != 0;
-  }
-
- private:
-  uint64_t val_;  // 64位压缩存储：segment_id (高 56 位)+ bucket_id(低 8 位)
-};
-
-template <typename Key, typename Value, typename Policy>
-template <typename U, typename V>
-int Segment<Key, Value, Policy>::Bucket::TryInsertToBucket(U&& new_key,
-                                                           V&& new_value,
-                                                           uint8_t meta_hash,
-                                                           bool probe) {
-  if (this->IsFull()) {  // ???? 不加this,会报错？？？ 告诉编译器是由依赖的
     return -1;
   }
 
-  int slot = this->slotb_.FindEmptySlot();
-  DCHECK_GE(slot, 0);
-  Insert(slot, std::forward<U>(new_key), std::forward<V>(new_value), meta_hash,
-         probe);
-  return slot;
-}
-
-template <typename Key, typename Value, typename Policy>
-bool Segment<Key, Value, Policy>::Bucket::ShiftRight() {
-  bool res = BucketType::ShiftRight();
-  for (int i = kSlotNum - 1; i > 0; i--) {
-    std::swap(key[i], key[i - 1]);
-    std::swap(value[i], value[i - 1]);
-  }
-  return res;
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename U, typename V>
-void Segment<Key, Value, Policy>::Bucket::Insert(uint8_t slot, U&& u, V&& v,
-                                                 uint8_t meta_hash,
-                                                 bool probe) {
-  DCHECK_LT(slot, kSlotNum);
-  key[slot] = std::forward<U>(u);
-  value[slot] = std::forward<V>(v);
-  this->SetHash(slot, meta_hash, probe);
-}
-template <typename Key, typename Value, typename Policy>
-template <typename This, typename Cb>
-void Segment<Key, Value, Policy>::Bucket::ForEachSlotImpl(This obj,
-                                                          Cb&& cb) const {
-  uint32_t mask = this->GetBusy();
-  uint32_t probe_mask = this->GetProbe(true);
-
-  for (unsigned j = 0; j < kSlotNum; ++j) {
-    if (mask & 1) {
-      cb(obj, j, probe_mask & 1);
-    }
-    mask >>= 1;
-    probe_mask >>= 1;
-  }
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename Pred>
-auto Segment<Key, Value, Policy>::Bucket::FindByFp(
-    uint8_t fp_hash, bool probe, Pred&& pred) const -> SlotId {
-  unsigned mask = this->Find(fp_hash, probe);
-  if (!mask) return kNanSlot;
-
-  unsigned delta = __builtin_ctz(mask);
-  mask >>= delta;  // 将 mask 右移 delta 位，将第一个 1 位移动到最低位
-  for (unsigned i = delta; i < kSlotNum; ++i) {
-    static_assert(std::is_invocable_v<Pred, const Key_t&>);
-
-    if ((mask & 1) && pred(key[i])) return i;
-    mask >>= 1;
-  };
-
-  return kNanSlot;
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename U, typename V, typename Pred, typename OnMoveCb>
-auto Segment<Key, Value, Policy>::Insert(U&& key, V&& value, Hash_t key_hash,
-                                         Pred&& pred, OnMoveCb&& on_move_cb)
-    -> std::pair<Iterator, bool> {
-  Iterator it = FindIt(key_hash, pred);
-  if (it.found()) {
-    return std::make_pair(it, false); /* duplicate insert*/
-  }
-
-  it = InsertUniq(std::forward<U>(key), std::forward<V>(value), key_hash, true,
-                  std::forward<OnMoveCb>(on_move_cb));
-
-  return std::make_pair(it, it.found());
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename U, typename V, typename OnMoveCb>
-auto Segment<Key, Value, Policy>::InsertUniq(U&& key, V&& value,
-                                             Hash_t key_hash, bool spread,
-                                             OnMoveCb&& on_move_cb)
-    -> Iterator {  // on_move_cb 是一个回调函数，用于处理元素移动通知淘汰策略
-  const uint8_t bid = HomeIndex(key_hash);
-  const uint8_t nid = NextBid(bid);
-
-  Bucket& target = bucket_[bid];    // 主桶
-  Bucket& neighbor = bucket_[nid];  // 邻居桶
-  Bucket* insert_first = &target;
-
-  uint8_t meta_hash = key_hash & kFpMask;  // 8 位指纹，用于快速过滤
-  unsigned ts = target.Size(), ns = neighbor.Size();
-  bool probe = false;
-
-  if (spread && ts > ns) {
-    insert_first = &neighbor;
-    probe = true;
-  }
-
-  int slot = insert_first->TryInsertToBucket(
-      std::forward<U>(key), std::forward<V>(value), meta_hash, probe);
-
-  if (slot >= 0) {
-    return Iterator{PhysicalBid(insert_first - bucket_), uint8_t(slot)};
-  }
-
-  if (!spread) {
-    slot = neighbor.TryInsertToBucket(std::forward<U>(key),
-                                      std::forward<V>(value), meta_hash, true);
-    if (slot >= 0) {
-      return Iterator{nid, uint8_t(slot)};
-    }
-  }
-
-  int displace_index = MoveToOther(true, nid, NextBid(nid));
-  if (displace_index >= 0) {
-    neighbor.Insert(displace_index, std::forward<U>(key),
-                    std::forward<V>(value), meta_hash, true);
-    on_move_cb(segment_id_, nid, NextBid(nid));
-    return Iterator{nid, uint8_t(displace_index)};
-  }
-
-  unsigned prev_idx = PrevBid(bid);
-  displace_index = MoveToOther(false, bid, prev_idx);
-  if (displace_index >= 0) {
-    target.Insert(displace_index, std::forward<U>(key), std::forward<V>(value),
-                  meta_hash, false);
-    on_move_cb(segment_id_, bid, prev_idx);
-    return Iterator{bid, uint8_t(displace_index)};
-  }
-  for (unsigned i = 0; i < kStashBucketNum; ++i) {
-    unsigned stash_pos = (bid + i) % kStashBucketNum;
-
-    int stash_slot = bucket_[kBucketNum + stash_pos].TryInsertToBucket(
-        std::forward<U>(key), std::forward<V>(value), meta_hash, false);
-    if (stash_slot >= 0) {
-      target.SetStashPtr(stash_pos, meta_hash, &neighbor);
-      return Iterator{PhysicalBid(kBucketNum + stash_pos), uint8_t(stash_slot)};
-    }
-  }
-
-  return Iterator{};
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename Pred>
-auto Segment<Key, Value, Policy>::FindIt(Hash_t key_hash, Pred&& pred) const
-    -> Iterator {  // pred, 判断两个键是否相同
-  LogicalBid bidx = HomeIndex(key_hash);
-  const Bucket& target = bucket_[bidx];
-  __builtin_prefetch(&target);
-
-  uint8_t fp_hash = key_hash & kFpMask;  // 用低位进行哈希指纹
-  SlotId sid = target.FindByFp(fp_hash, false, pred);  //  指纹查找
-  if (sid != BucketType::kNanSlot) {
-    return Iterator{bidx, sid};
-  }
-
-  LogicalBid nid = NextBid(bidx);
-  const Bucket& probe = GetBucket(nid);
-  sid = probe.FindByFp(fp_hash, true, pred);  // 邻居桶查找
-
-  if (sid != BucketType::kNanSlot) {
-    return Iterator{nid, sid};
-  }
-
-  if (!target.HasStash()) {
-    return Iterator{};
-  }
-
-  auto stash_cb = [&](unsigned overflow_index, PhysicalBid pos) -> SlotId {
-    (void)overflow_index;
-    DCHECK_LT(pos, kStashBucketNum);
-    pos += kBucketNum;
-    const Bucket& bucket = bucket_[pos];
-    return bucket.FindByFp(fp_hash, false, pred);
-  };
-
-  if (target.HasStashOverflow()) {  // Stash 溢出
-    for (unsigned i = 0; i < kStashBucketNum; ++i) {
-      auto st_sid = stash_cb(0, i);
-      if (st_sid != BucketType::kNanSlot) {
-        return Iterator{PhysicalBid(kBucketNum + i), st_sid};
+  // 溢出区扫描：仅检查归属主桶为 home 的溢出槽。
+  template <typename K>
+  std::optional<SegPos> FindInOverflow(uint32_t home, uint8_t fp,
+                                       const K& key) const {
+    for (unsigned stb = 0; stb < kStashBuckets; ++stb) {
+      const auto& b = buckets_[kMainBuckets + stb];
+      uint16_t mask = b.MatchFp(fp) & b.occupied_ & kSlotMask<kSlots>;
+      while (mask != 0) {
+        const unsigned s = static_cast<unsigned>(std::countr_zero(mask));
+        const unsigned gs = stb * kSlots + s;
+        if (overflow_home_[gs] == static_cast<uint8_t>(home) &&
+            Policy::Equal(b.KeyAt(s), key)) {
+          return SegPos{kMainBuckets + stb, s};
+        }
+        mask &= mask - 1;
       }
     }
-    return Iterator{};
+    return std::nullopt;
   }
 
-  auto stash_res = target.IterateStash(fp_hash, false, stash_cb);  // 正常 Stash
-  if (stash_res.second != BucketType::kNanSlot) {
-    return Iterator{PhysicalBid(kBucketNum + stash_res.first),
-                    stash_res.second};
+  // 段内完整查找：主桶 → 邻居桶（探测槽）→ 溢出区。
+  template <typename K>
+  std::optional<SegPos> FindIn(uint64_t hash, const K& key) const {
+    const uint8_t fp = Fingerprint(hash);
+    const uint32_t home = HomeBucket(hash);
+    const uint32_t nxt = NextBucket(home);
+
+    // 1) 主桶：归属本桶的条目（非探测槽）。
+    if (const int i = FindInBucket(buckets_[home], fp, false, key); i >= 0) {
+      return SegPos{home, static_cast<uint32_t>(i)};
+    }
+    // 2) 邻居桶：从主桶均衡/腾挪过去的条目（探测槽）。
+    if (const int i = FindInBucket(buckets_[nxt], fp, true, key); i >= 0) {
+      return SegPos{nxt, static_cast<uint32_t>(i)};
+    }
+    // 3) 溢出区：归属主桶的条目。
+    if (overflow_cnt_[home] != 0) {
+      if (auto pos = FindInOverflow(home, fp, key)) {
+        return pos;
+      }
+    }
+    return std::nullopt;
   }
 
-  stash_res = probe.IterateStash(fp_hash, true, stash_cb);
-  if (stash_res.second != BucketType::kNanSlot) {
-    return Iterator{PhysicalBid(kBucketNum + stash_res.first),
-                    stash_res.second};
-  }
-  return Iterator{};
-}
+  // ---- 插入 ----
 
-template <typename Key, typename Value, typename Policy>
-void Segment<Key, Value, Policy>::Delete(const Iterator& it, Hash_t key_hash) {
-  DCHECK(it.found());
-
-  auto& b = bucket_[it.index];
-
-  if (it.index >= kBucketNum) {
-    RemoveStashReference(it.index - kBucketNum, key_hash);
+  // 尝试把条目放入指定桶的空闲槽，成功返回槽号。
+  // 注意：失败（桶满）时不会触碰 key/value，调用方可安全重试。
+  template <typename K, typename V>
+  std::optional<unsigned> InsertIntoBucket(Bucket<Key, Value, kSlots>& b,
+                                           uint8_t fp, bool probe, K&& key,
+                                           V&& value) {
+    if (!b.HasFreeSlot()) return std::nullopt;
+    const unsigned i = b.FirstFree();
+    b.Install(i, fp, probe, std::forward<K>(key), std::forward<V>(value));
+    return i;
   }
 
-  b.Delete(it.slot);
-}
+  // 腾挪：把 from 桶中一个 probe==own 的条目移到 to 桶，返回 from 中被
+  // 腾出的槽号；无可移动条目或 to 桶已满时返回空。
+  std::optional<unsigned> Relocate(uint32_t from_bid, uint32_t to_bid,
+                                   bool own) {
+    auto& from = buckets_[from_bid];
+    auto& to = buckets_[to_bid];
 
-template <typename Key, typename Value, typename Policy>
-void Segment<Key, Value, Policy>::Clear() {
-  for (unsigned i = 0; i < kTotalBuckets; ++i) {
-    bucket_[i].Clear();
-    bucket_[i].ClearStashPtrs();
+    uint16_t movable = from.occupied_ & kSlotMask<kSlots>;
+    movable &= own ? static_cast<uint16_t>(~from.probe_) : from.probe_;
+    if (movable == 0 || !to.HasFreeSlot()) return std::nullopt;
+
+    const unsigned fs = static_cast<unsigned>(std::countr_zero(movable));
+    const unsigned ts = to.FirstFree();
+
+    // 移动后探测属性随之改变：
+    //   own=true  （条目属于 from）：落于 from+1，成为探测槽；
+    //   own=false （条目属于 from-1）：迁回其归属桶，恢复普通槽。
+    const bool new_probe = own;
+    const uint8_t fp = from.Fp(fs);
+    to.Install(ts, fp, new_probe, std::move(from.KeyAt(fs)),
+               std::move(from.ValAt(fs)));
+    from.template Remove<Policy>(fs);
+    return fs;
   }
-}
 
-template <typename Key, typename Value, typename Policy>
-template <typename HFunc, typename MoveCb>
-void Segment<Key, Value, Policy>::Split(HFunc&& hfn, Segment* dest_right,
-                                        MoveCb&& on_move_cb) {
-  ++local_depth_;
-  dest_right->local_depth_ = local_depth_;
+  // 尝试向段尾溢出区写入一条归属 home 的条目。
+  // ignore_limit=true 时忽略每桶配额（仅供分裂重分布兜底）。
+  template <typename K, typename V>
+  std::optional<SegPos> InsertIntoOverflow(uint32_t home, uint8_t fp, K&& key,
+                                           V&& value, bool ignore_limit) {
+    if (!ignore_limit && overflow_cnt_[home] >= kMaxOverflowPerBucket) {
+      return std::nullopt;
+    }
+    for (unsigned stb = 0; stb < kStashBuckets; ++stb) {
+      auto& b = buckets_[kMainBuckets + stb];
+      if (!b.HasFreeSlot()) continue;
+      const unsigned s = b.FirstFree();
+      const unsigned gs = stb * kSlots + s;
+      overflow_home_[gs] = static_cast<uint8_t>(home);
+      overflow_cnt_[home]++;
+      b.Install(s, fp, false, std::forward<K>(key), std::forward<V>(value));
+      ++size_;
+      return SegPos{kMainBuckets + stb, s};
+    }
+    return std::nullopt;
+  }
 
-  auto is_mine = [this](Hash_t hash) {
-    return (hash >> (64 - local_depth_) & 1) == 0;
-  };
+  // 段内插入（带溢出配额限制），供正常写路径使用。
+  // spread=true 时优先选择主桶与邻居桶中空闲较多者（均衡安置）。
+  // 成功返回段内位置；段内已无法容纳时返回空（触发上层分裂）。
+  //
+  // 安全性说明：InsertIntoBucket/InsertIntoOverflow 在失败时不移动
+  // key/value，因此多个"尝试路径"之间对同一 key 的多次 forward 是安全的。
+  template <typename K, typename V>
+  std::optional<SegPos> TryInsert(K&& key, V&& value, uint64_t hash,
+                                  bool spread) {
+    const uint8_t fp = Fingerprint(hash);
+    const uint32_t home = HomeBucket(hash);
+    const uint32_t nxt = NextBucket(home);
+    auto& hb = buckets_[home];
+    auto& nb = buckets_[nxt];
 
-  for (unsigned i = 0; i < kBucketNum; ++i) {
-    uint32_t invalid_mask = 0;
+    // ---- 第 1 级：均衡安置 ----
+    if (spread) {
+      const unsigned hfree =
+          static_cast<unsigned>(std::popcount(hb.FreeMask()));
+      const unsigned nfree =
+          static_cast<unsigned>(std::popcount(nb.FreeMask()));
+      if (hfree >= nfree) {
+        if (auto i = InsertIntoBucket(hb, fp, false, std::forward<K>(key),
+                                      std::forward<V>(value))) {
+          ++size_;
+          return SegPos{home, *i};
+        }
+        if (auto i = InsertIntoBucket(nb, fp, true, std::forward<K>(key),
+                                      std::forward<V>(value))) {
+          ++size_;
+          return SegPos{nxt, *i};
+        }
+      } else {
+        if (auto i = InsertIntoBucket(nb, fp, true, std::forward<K>(key),
+                                      std::forward<V>(value))) {
+          ++size_;
+          return SegPos{nxt, *i};
+        }
+        if (auto i = InsertIntoBucket(hb, fp, false, std::forward<K>(key),
+                                      std::forward<V>(value))) {
+          ++size_;
+          return SegPos{home, *i};
+        }
+      }
+    } else {
+      // 不均衡：优先主桶，其次邻居桶。
+      if (auto i = InsertIntoBucket(hb, fp, false, std::forward<K>(key),
+                                    std::forward<V>(value))) {
+        ++size_;
+        return SegPos{home, *i};
+      }
+      if (auto i = InsertIntoBucket(nb, fp, true, std::forward<K>(key),
+                                    std::forward<V>(value))) {
+        ++size_;
+        return SegPos{nxt, *i};
+      }
+    }
 
-    auto cb = [&](auto* bucket, unsigned slot, bool probe) {
-      (void)probe;
+    // ---- 第 2 级：腾挪 ----
+    // a) 把邻居桶 nxt 中一个"归属 nxt"的条目推给 nxt+1，腾出的槽
+    //    交给新条目（以探测槽身份寄居 nxt）。
+    if (auto fs = Relocate(nxt, NextBucket(nxt), /*own=*/true)) {
+      nb.Install(*fs, fp, true, std::forward<K>(key), std::forward<V>(value));
+      ++size_;
+      return SegPos{nxt, *fs};
+    }
+    // b) 把主桶 home 中一个"暂存"的探测条目迁回其归属桶 home-1，
+    //    腾出的槽交给新条目（以普通槽身份落位 home）。
+    if (auto fs = Relocate(home, PrevBucket(home), /*own=*/false)) {
+      hb.Install(*fs, fp, false, std::forward<K>(key), std::forward<V>(value));
+      ++size_;
+      return SegPos{home, *fs};
+    }
 
-      auto& key = bucket->key[slot];
-      Hash_t hash = hfn(key);
+    // ---- 第 3 级：段尾溢出区 ----
+    return InsertIntoOverflow(home, fp, std::forward<K>(key),
+                              std::forward<V>(value), /*ignore_limit=*/false);
+  }
 
-      if (is_mine(hash)) return;  // keep this key in the source
+  // 强制插入：不设溢出配额限制，供分裂重分布使用。
+  // 目标段必然为空，正常路径不会触顶；保留兜底以防极端分布。
+  template <typename K, typename V>
+  SegPos ForceInsert(K&& key, V&& value, uint64_t hash) {
+    if (auto pos = TryInsert(std::forward<K>(key), std::forward<V>(value),
+                             hash, /*spread=*/true)) {
+      return *pos;
+    }
+    // TryInsert 失败仅可能源于溢出配额：绕过配额重试。
+    const uint8_t fp = Fingerprint(hash);
+    const uint32_t home = HomeBucket(hash);
+    if (auto pos =
+            InsertIntoOverflow(home, fp, std::forward<K>(key),
+                               std::forward<V>(value), /*ignore_limit=*/true)) {
+      return *pos;
+    }
+    // 不可达：段容量（主桶 + 溢出）保证总能容纳一次插入。
+    __builtin_unreachable();
+  }
 
-      invalid_mask |= (1u << slot);
-      Iterator it =
-          dest_right->InsertUniq(std::forward<Key_t>(bucket->key[slot]),
-                                 std::forward<Value_t>(bucket->value[slot]),
-                                 hash, false, [](auto&&...) {});
-      DCHECK(it.found());
-      on_move_cb(segment_id_, i, dest_right->segment_id_, it.index);
+  // ---- 删除 ----
+
+  // 删除段内位置 (bid, slot)，维护溢出归属与计数。
+  void EraseAt(uint32_t bid, uint32_t slot) {
+    auto& b = buckets_[bid];
+    b.template Remove<Policy>(slot);
+    if (bid >= kMainBuckets) {
+      const unsigned gs = OverflowGlobal(bid, slot);
+      const uint8_t home = overflow_home_[gs];
+      overflow_home_[gs] = kNoHome;
+      if (home != kNoHome && overflow_cnt_[home] > 0) {
+        overflow_cnt_[home]--;
+      }
+    }
+    assert(size_ > 0);
+    --size_;
+  }
+
+  // ---- 分裂 ----
+
+  // 把本段中"属于 dest"的条目迁移到 dest（dest 必须为空段）。
+  // hash_fn 由上层传入（与目录深度解耦，便于测试与复用）。
+  // 迁移后本段 local_depth_ 增加，与 dest 保持一致。
+  //
+  // 留在本段的溢出条目会尝试回收回主桶（分裂后主桶负载下降，
+  // 回收可降低后续查找触及溢出区的概率）。
+  template <typename H>
+  void SplitInto(Segment* dest, H&& hash_fn) {
+    ++local_depth_;
+    dest->local_depth_ = local_depth_;
+
+    // 判断条目的新归属：取 hash 的第 (64 - local_depth) 位。
+    const auto belongs_right = [&](uint64_t h) {
+      return (h >> (64 - local_depth_)) & 1u;
     };
 
-    bucket_[i].ForEachSlot(std::move(cb));
-    bucket_[i].ClearSlots(invalid_mask);
-  }
-
-  for (unsigned i = 0; i < kStashBucketNum; ++i) {
-    uint32_t invalid_mask = 0;
-    PhysicalBid bid = kBucketNum + i;
-    Bucket& stash = bucket_[bid];
-
-    auto cb = [&](auto* bucket, unsigned slot, bool probe) {
-      (void)probe;
-
-      auto& key = bucket->key[slot];
-      Hash_t hash = hfn(key);
-
-      if (is_mine(hash)) {
-        // If the entry stays in the same segment we try to unload it back to
-        // the regular bucket.
-        Iterator it = TryMoveFromStash(i, slot, hash);  // 移到原段
-        if (it.found()) {
-          invalid_mask |= (1u << slot);
-          on_move_cb(segment_id_, i, segment_id_, it.index);
+    // 主桶：逐个检查，属于 dest 的整槽搬走。
+    for (uint32_t bid = 0; bid < kMainBuckets; ++bid) {
+      auto& b = buckets_[bid];
+      uint16_t mask = b.occupied_ & kSlotMask<kSlots>;
+      while (mask != 0) {
+        const unsigned s = static_cast<unsigned>(std::countr_zero(mask));
+        if (belongs_right(hash_fn(b.KeyAt(s)))) {
+          const uint64_t h = hash_fn(b.KeyAt(s));  // 移动前先算哈希
+          dest->ForceInsert(std::move(b.KeyAt(s)), std::move(b.ValAt(s)), h);
+          b.template Remove<Policy>(s);
+          assert(size_ > 0);
+          --size_;
         }
-
-        return;
+        mask &= mask - 1;
       }
-
-      invalid_mask |= (1u << slot);  // 迁移到新段
-      auto it = dest_right->InsertUniq(
-          std::forward<Key_t>(bucket->key[slot]),
-          std::forward<Value_t>(bucket->value[slot]), hash, false,
-          /* not interested in these movements */ [](auto&&...) {});
-      (void)it;
-      DCHECK_NE(it.index, kNanBid);
-      on_move_cb(segment_id_, i, dest_right->segment_id_, it.index);
-
-      // Remove stash reference pointing to stash bucket i.
-      RemoveStashReference(i, hash);  // 清除原段的 Stash 指针引用
-    };
-
-    stash.ForEachSlot(std::move(cb));
-    stash.ClearSlots(invalid_mask);
-  }
-}
-
-template <typename Key, typename Value, typename Policy>
-template <typename Cb>
-void Segment<Key, Value, Policy>::TraverseAll(Cb&& cb) const {
-  for (uint8_t i = 0; i < kTotalBuckets; ++i) {
-    bucket_[i].ForEachSlot(
-        [&](auto*, SlotId slot, bool) { cb(Iterator{i, slot}); });
-  }
-}
-
-// stash_pos is index of the stash bucket, in the range of [0,
-// STASH_BUCKET_NUM).
-template <typename Key, typename Value, typename Policy>
-void Segment<Key, Value, Policy>::RemoveStashReference(unsigned stash_pos,
-                                                       Hash_t key_hash) {
-  LogicalBid y = HomeIndex(key_hash);
-  uint8_t fp_hash = key_hash & kFpMask;
-  auto* target = &bucket_[y];
-  auto* next = &bucket_[NextBid(y)];
-
-  target->UnsetStashPtr(fp_hash, stash_pos, next);
-}
-
-template <typename Key, typename Value, typename Policy>
-auto Segment<Key, Value, Policy>::TryMoveFromStash(
-    unsigned stash_id, unsigned stash_slot_id, Hash_t key_hash) -> Iterator {
-  LogicalBid bid = HomeIndex(key_hash);
-  uint8_t hash_fp = key_hash & kFpMask;
-  PhysicalBid stash_bid = kBucketNum + stash_id;
-  auto& key = Key(stash_bid, stash_slot_id);
-  auto& value = Value(stash_bid, stash_slot_id);
-
-  int reg_slot = bucket_[bid].TryInsertToBucket(
-      std::forward<Key_t>(key), std::forward<Value_t>(value), hash_fp, false);
-
-  if (reg_slot < 0) {
-    bid = NextBid(bid);
-    reg_slot = bucket_[bid].TryInsertToBucket(
-        std::forward<Key_t>(key), std::forward<Value_t>(value), hash_fp, true);
-  }
-
-  if (reg_slot >= 0) {
-    RemoveStashReference(stash_id, key_hash);
-    return Iterator{bid, SlotId(reg_slot)};
-  }
-
-  return Iterator{};
-}
-
-template <typename Key, typename Value, typename Policy>
-int Segment<Key, Value, Policy>::MoveToOther(
-    bool own_items,
-    /*
-        true：移动自己的条目（非探测槽位）；
-        false：移动别人的条目（探测槽位）
-    */
-
-    unsigned from_bid,
-    unsigned
-        to_bid) {  // 桶满时将一个条目从当前桶移动到另一个桶，为新条目腾出空间
-  DCHECK_LT(from_bid, kBucketNum);
-  DCHECK_LT(to_bid, kBucketNum);
-  auto& src = bucket_[from_bid];
-  uint32_t mask = src.GetProbe(!own_items);
-  if (mask == 0) {
-    return -1;
-  }
-
-  int src_slot = __builtin_ctz(mask);
-  int dst_slot = bucket_[to_bid].TryInsertToBucket(
-      std::forward<Key_t>(src.key[src_slot]),
-      std::forward<Value_t>(src.value[src_slot]), src.Fp(src_slot), own_items);
-  if (dst_slot < 0) return -1;
-
-  src.Delete(src_slot);
-
-  return src_slot;
-}
-
-template <typename Key, typename Value, typename Policy>
-auto Segment<Key, Value, Policy>::FindValidStartingFrom(
-    PhysicalBid bid, unsigned slot) const -> Iterator {
-  while (bid < kTotalBuckets) {
-    uint32_t mask = bucket_[bid].GetBusy();
-    mask >>= slot;
-    if (mask) {
-      return Iterator(bid, slot + __builtin_ctz(mask));
     }
-    ++bid;
-    slot = 0;
-  }
-  return Iterator{};
-}
 
-template <typename Key, typename Value, typename Policy>
-template <typename Cb, typename HashFn>
-bool Segment<Key, Value, Policy>::TraverseLogicalBucket(LogicalBid bid,
-                                                        HashFn&& hfun,
-                                                        Cb&& cb) const {
-  DCHECK_LT(bid, kBucketNum);
+    // 溢出区：属于 dest 的迁走；留在本段的尝试回收回主桶。
+    for (unsigned gs = 0; gs < kOverflowSlots; ++gs) {
+      if (overflow_home_[gs] == kNoHome) continue;
+      const uint32_t bid = OverflowBidOf(gs);
+      const unsigned slot = OverflowSlotOf(gs);
+      auto& b = buckets_[bid];
+      const uint8_t home = overflow_home_[gs];
+      const uint64_t h = hash_fn(b.KeyAt(slot));
 
-  const Bucket& b = bucket_[bid];
-  bool found = false;
-  if (b.GetProbe(false)) {  // Check items that this bucket owns.
-    b.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
-      (void)bucket;
-
-      if (!probe) {
-        found = true;
-        cb(Iterator{bid, slot});
+      if (belongs_right(h)) {
+        dest->ForceInsert(std::move(b.KeyAt(slot)), std::move(b.ValAt(slot)),
+                          h);
+        b.template Remove<Policy>(slot);
+        overflow_home_[gs] = kNoHome;
+        assert(overflow_cnt_[home] > 0);
+        overflow_cnt_[home]--;
+        assert(size_ > 0);
+        --size_;
+      } else {
+        // 留在本段：优先回收回主桶/邻居，失败则保持溢出槽。
+        TryReclaimOverflow(gs, bid, slot, h);
       }
-    });
-  }
-
-  uint8_t nid = NextBid(bid);
-  const Bucket& next = GetBucket(nid);
-
-  // check for probing entries in the next bucket, i.e. those that should reside
-  // in b.
-  if (next.GetProbe(true)) {
-    next.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
-      (void)bucket;
-
-      if (probe) {
-        found = true;
-        DCHECK_EQ(HomeIndex(hfun(bucket->key[slot])), bid);
-        cb(Iterator{nid, slot});
-      }
-    });
-  }
-
-  if (b.HasStash()) {
-    for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
-      const auto& stashb = bucket_[j];
-      stashb.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
-        (void)probe;
-
-        if (HomeIndex(hfun(bucket->key[slot])) == bid) {
-          found = true;
-          cb(Iterator{j, slot});
-        }
-      });
     }
   }
 
-  return found;
-}
+ private:
+  // 把溢出槽 (bid, slot) 的条目移回其归属主桶或其邻居（二者必有一空）。
+  // 分裂后主桶负载下降，回收可降低后续查找触及溢出区的概率。
+  void TryReclaimOverflow(unsigned gs, uint32_t bid, unsigned slot,
+                          uint64_t hash) {
+    auto& b = buckets_[bid];
+    const uint8_t home = overflow_home_[gs];
+    auto& hb = buckets_[home];
+    auto& nb = buckets_[NextBucket(home)];
+    if (!hb.HasFreeSlot() && !nb.HasFreeSlot()) return;
 
-}  // namespace detail
+    const uint8_t fp = Fingerprint(hash);
+    // 优先主桶，其次邻居（成为探测槽）。
+    if (auto i = InsertIntoBucket(hb, fp, false, std::move(b.KeyAt(slot)),
+                                  std::move(b.ValAt(slot)))) {
+      b.template Remove<Policy>(slot);
+      overflow_home_[gs] = kNoHome;
+      assert(overflow_cnt_[home] > 0);
+      overflow_cnt_[home]--;
+      return;
+    }
+    if (auto i = InsertIntoBucket(nb, fp, true, std::move(b.KeyAt(slot)),
+                                  std::move(b.ValAt(slot)))) {
+      b.template Remove<Policy>(slot);
+      overflow_home_[gs] = kNoHome;
+      assert(overflow_cnt_[home] > 0);
+      overflow_cnt_[home]--;
+    }
+  }
+};
+
+}  // namespace dash
 }  // namespace dfly

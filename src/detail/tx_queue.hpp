@@ -30,6 +30,20 @@ class TxQueue {
   util::intrusive_ptr<Transaction> Back();
   size_t Size() const;
   bool Empty() const { return head_ == kEnd; }
+
+  // 队首节点迭代器；空队列返回 kEnd。SCA 扫描用：从队首沿 next 遍历，
+  // 队列按 txid 有序，遍历顺序即串行化顺序。
+  Iterator Head() const { return head_; }
+  // 迭代器指向的事务节点（调用方保证 it != kEnd）。
+  util::intrusive_ptr<Transaction> At(Iterator it) const {
+    DCHECK(it != kEnd) << "At: kEnd is not a valid node";
+    return vec_[it].trans;
+  }
+  // 迭代器的后继节点；已到队尾返回 kEnd。
+  Iterator Next(Iterator it) const {
+    DCHECK(it != kEnd) << "Next: kEnd has no successor";
+    return vec_[it].next;
+  }
   bool IsInFreeList(Iterator it) const;
   bool IsInUsedList(Iterator it) const;
   // friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);

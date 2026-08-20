@@ -27,8 +27,6 @@ namespace dfly {
 
 namespace {
 
-using CI = CommandId;
-
 constexpr uint32_t kMaxStrLen [[maybe_unused]] = 1 << 28;
 
 using ::cmd::CmdArgParser;
@@ -661,38 +659,36 @@ CoroTask CmdGetdel(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
+// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+constexpr CommandSpec kCommands[] = {
+    {"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, CmdSet},
+    {"GET", CO::READONLY, 1, 1, CmdGet},
+    {"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1, CmdMGet},
+    {"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1, CmdMSet,
+     2},
+    {"APPEND", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     CmdAppend},
+    {"STRLEN", CO::READONLY, 1, 1, CmdStrlen},
+    {"INCR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, Incr},
+    {"INCRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, IncrBy},
+    {"DECR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, Decr},
+    {"DECRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, DecrBy},
+    {"SETNX", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     CmdSetnx},
+    {"GETSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     CmdGetset},
+    {"GETRANGE", CO::READONLY, 1, 1, CmdGetrange},
+    {"SETRANGE", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     CmdSetrange},
+    {"GETDEL", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     CmdGetdel},
+};
+static_assert(CheckUniqueNames(kCommands), "string family: duplicate names");
+
 }  // namespace
 
 void RegisterStringFamily(CommandRegistry* registry) {
-  registry->StartFamily();
-  *registry
-      << CI{"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdSet)
-      << CI{"GET", CO::READONLY, 1, 1}.SetHandler(CmdGet)
-      << CI{"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1}.SetHandler(CmdMGet)
-      << CI{"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1}
-             .SetInterleavedStep(2)
-             .SetHandler(CmdMSet)
-      << CI{"APPEND", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdAppend)
-      << CI{"STRLEN", CO::READONLY, 1, 1}.SetHandler(CmdStrlen)
-      << CI{"INCR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Incr)
-      << CI{"INCRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(IncrBy)
-      << CI{"DECR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(Decr)
-      << CI{"DECRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(DecrBy)
-      << CI{"SETNX", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdSetnx)
-      << CI{"GETSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdGetset)
-      << CI{"GETRANGE", CO::READONLY, 1, 1}.SetHandler(CmdGetrange)
-      << CI{"SETRANGE", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdSetrange)
-      << CI{"GETDEL", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1}
-             .SetHandler(CmdGetdel);
+  registry->Register(kCommands);
 }
 
 }  // namespace dfly
