@@ -1,6 +1,4 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
+
 
 #include "generic_family.hpp"
 
@@ -21,29 +19,23 @@
 namespace dfly {
 using namespace dfly::cmd;
 
-facade::OpResult<uint32_t> OpDel(Transaction* tx, DbSlice& db_slice) {
-  uint32_t res = 0;
-  auto& slice = tx->GetSlice(db_slice.shard_id());
-  for (const auto& [key, keyId] : slice) {
-    auto it = db_slice.FindMutable(tx->GetDbContext(), key).it;
-    if (!IsValid(it.GetInnerIt())) {
-      continue;
-    }
-    db_slice.Del(tx->GetDbContext(), it, nullptr);
-    ++res;
-  }
-
-  return res;
-}
-
 CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
   (void)args;
 
   std::atomic<uint32_t> result = 0;
   auto cb = [&](Transaction* tx, EngineShard* es) -> facade::OpResult<void> {
     DbSlice& dbslice = tx->GetDbSlice(es->shard_id());
-    auto res = OpDel(tx, dbslice);
-    result.fetch_add(res.value_or(0), std::memory_order_relaxed);
+    uint32_t res = 0;
+    const auto& slice = tx->GetSlice(dbslice.shard_id());
+    for (const auto& [key, keyId] : slice) {
+      auto it = dbslice.FindMutable(tx->GetDbContext(), key).it;
+      if (!IsValid(it.GetInnerIt())) {
+        continue;
+      }
+      dbslice.Del(tx->GetDbContext(), it, nullptr);
+      ++res;
+    }
+    result.fetch_add(res, std::memory_order_relaxed);
     return {OpStatus::OK};
   };
 
@@ -78,7 +70,7 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
   auto Op = [](Transaction* tx,
                DbSlice& db_slice) -> facade::OpResult<uint32_t> {
-    auto& slice = tx->GetSlice(db_slice.shard_id());
+    const auto& slice = tx->GetSlice(db_slice.shard_id());
     uint32_t res = 0;
     for (const auto& [key, keyId] : slice) {
       auto find_res = db_slice.FindReadOnly(tx->GetDbContext(), key);

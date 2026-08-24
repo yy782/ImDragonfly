@@ -1,233 +1,241 @@
-// #include "cmd_arg_parser.hpp"
-// #include "cmd_support.hpp"
-// #include "command_registry.hpp"
-// #include "detail/conn_context.hpp"
-// #include "redis/redis_aux.hpp"
-// #include "sharding/DashTable/compact_obj.hpp"
-// #include "sharding/db_slice.hpp"
-// #include "sharding/engine_shard.hpp"
-// #include "sharding/op_status.hpp"
-// #include "transaction_layer/transaction.hpp"
+#include "hash_family.hpp"
 
-// namespace dfly {
+#include "cmd_arg_parser.hpp"
+#include "cmd_support.hpp"
+#include "command_registry.hpp"
+#include "detail/conn_context.hpp"
+#include "redis/redis_aux.hpp"
+#include "sharding/DashTable/compact_obj.hpp"
+#include "sharding/shard.hpp"
+#include "sharding/op_status.hpp"
+#include "transaction_layer/transaction.hpp"
 
-// namespace {
+namespace dfly {
 
-// using CI = CommandId;
-// using cmd::CoroTask;
-// using Slice = Transaction::Slice;
+using cmd::CoroTask;
 
-// HashObject* GetOrCreateHash(Transaction* tx, EngineShard* es,
-//                             std::string_view key) {
-//   auto& db_slice = tx->GetDbSlice(es->shard_id());
-//   auto op_res = db_slice.AddOrFind(tx->GetDbContext(), key, OBJ_HASH);
+namespace {
 
-//   if (!op_res) {
-//     return nullptr;
-//   }
+using Slice = Transaction::Slice;
 
-//   PrimeValue& prime_value = op_res->it->second;
+HashObject* GetOrCreateHash(Transaction* tx, Shard* shard,
+                            std::string_view key) {
+  auto& storage = shard->GetShardStorage();
+  const DbContext cntx = tx->GetDbContext();
+  HashObject* hash = nullptr;
+  storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+    if (pv->IsEmpty()) {
+      *pv = CompactValue::MakeHash();
+    } else if (pv->ObjType() != OBJ_HASH) {
+      return;  // 类型不符 → hash 保持 nullptr → WRONG_TYPE
+    }
+    hash = pv->GetHash();
+  });
+  return hash;
+}
 
-//   if (op_res->is_new) {
-//     prime_value = CompactValue::MakeHash();
-//   } else if (prime_value.ObjType() != OBJ_HASH) {
-//     return nullptr;
-//   }
+// HSET 命令：设置哈希表中的字段值
+CoroTask HashFamily::HSet(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto field = args[2];
+  auto value = args[3];
 
-//   return prime_value.GetHash();
-// }
+  auto cb = [key, field, value](Transaction* tx,
+                                Shard* shard) -> OpResult<int> {
+    HashObject* hash = GetOrCreateHash(tx, shard, key);
+    if (!hash) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-// // HSET 命令：设置哈希表中的字段值
-// CoroTask CmdHSet(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto field = args[2];
-//   auto value = args[3];
+    bool existed = hash->Exists(std::string(field));
+    hash->Set(std::string(field), std::string(value));
+    return existed ? 0 : 1;
+  };
 
-//   auto cb = [key, field, value](Transaction* tx,
-//                                 EngineShard* es) -> OpResult<int> {
-//     HashObject* hash = GetOrCreateHash(tx, es, key);
-//     if (!hash) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     bool existed = hash->Exists(std::string(field));
-//     hash->Set(std::string(field), std::string(value));
-//     return existed ? 0 : 1;
-//   };
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+  co_return;
+}
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+// HGET 命令：获取哈希表中字段的值
+CoroTask HashFamily::HGet(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto field = args[2];
 
-//   co_return;
-// }
+  auto cb = [key, field](Transaction* tx,
+                         Shard* shard) -> OpResult<std::string> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-// // HGET 命令：获取哈希表中字段的值
-// CoroTask CmdHGet(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto field = args[2];
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return OpStatus::KEY_NOTFOUND;
+    }
 
-//   auto cb = [key, field](Transaction* tx,
-//                          EngineShard* es) -> OpResult<std::string> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_HASH) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
+    const HashObject* hash = pv->GetHash();
+    std::string val = hash->Get(std::string(field));
+    if (val.empty()) {
+      return OpStatus::KEY_NOTFOUND;
+    }
+    return val;
+  };
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_HASH) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const HashObject* hash = prime_value.GetHash();
-//     std::string val = hash->Get(std::string(field));
-//     if (val.empty()) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
-//     return val;
-//   };
+  if (result.status() == OpStatus::OK) {
+    rb->BuildBulkString(result.value());
+  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+    rb->BuildNullBulkString();
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+  co_return;
+}
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildBulkString(result.value());
-//   } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-//     rb->BuildNullBulkString();
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+// HDEL 命令：删除哈希表中的一个或多个字段
+CoroTask HashFamily::HDel(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto fields = args.subspan(2);
 
-//   co_return;
-// }
+  auto cb = [key, fields](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-// // HDEL 命令：删除哈希表中的一个或多个字段
-// CoroTask CmdHDel(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto fields = args.subspan(2);
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return 0ULL;  // 不存在 → 0
+    }
+    if (f->obj_type() != OBJ_HASH) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key, fields](Transaction* tx,
-//                           EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
+    size_t deleted = 0;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      HashObject* hash = pv->GetHash();
+      for (const auto& field : fields) {
+        deleted += hash->Del(std::string(field));
+      }
+    });
+    if (!up) return util::make_unexpected(up.error());
+    return deleted;
+  };
 
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_HASH) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     HashObject* hash = prime_value.GetHash();
-//     size_t deleted = 0;
-//     for (const auto& field : fields) {
-//       deleted += hash->Del(std::string(field));
-//     }
-//     return deleted;
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// HEXISTS 命令：检查哈希表中是否存在指定字段
+CoroTask HashFamily::HExists(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto field = args[2];
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+  auto cb = [key, field](Transaction* tx, Shard* shard) -> OpResult<int> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-//   co_return;
-// }
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return 0;  // 不存在 → 0
+    }
 
-// // HEXISTS 命令：检查哈希表中是否存在指定字段
-// CoroTask CmdHExists(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto field = args[2];
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_HASH) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key, field](Transaction* tx, EngineShard* es) -> OpResult<int> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const HashObject* hash = pv->GetHash();
+    return hash->Exists(std::string(field)) ? 1 : 0;
+  };
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return 0;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_HASH) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     const HashObject* hash = prime_value.GetHash();
-//     return hash->Exists(std::string(field)) ? 1 : 0;
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// HLEN 命令：返回哈希表中字段的数量
+CoroTask HashFamily::HLen(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-//   co_return;
-// }
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return 0ULL;  // 不存在 → 0
+    }
 
-// // HLEN 命令：返回哈希表中字段的数量
-// CoroTask CmdHLen(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_HASH) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const HashObject* hash = pv->GetHash();
+    return hash->Length();
+  };
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_HASH) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     const HashObject* hash = prime_value.GetHash();
-//     return hash->Length();
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+constexpr CommandSpec kCommands[] = {
+    {"HSET", CO::JOURNALED, 1, 1, &HashFamily::HSet},
+    {"HGET", CO::READONLY, 1, 1, &HashFamily::HGet},
+    {"HDEL", CO::JOURNALED, 1, 1, &HashFamily::HDel},
+    {"HEXISTS", CO::READONLY, 1, 1, &HashFamily::HExists},
+    {"HLEN", CO::READONLY, 1, 1, &HashFamily::HLen},
+};
+static_assert(CheckUniqueNames(kCommands), "hash family: duplicate names");
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+}  // namespace
 
-//   co_return;
-// }
+void RegisterHashFamily(CommandRegistry* registry) {
+  registry->Register(kCommands);
+}
 
-// }  // namespace
-
-// void RegisterHashFamily(CommandRegistry* registry) {
-//   registry->StartFamily();
-//   *registry << CI{"HSET", CO::JOURNALED, 1, 1}.SetHandler(CmdHSet)
-//             << CI{"HGET", CO::READONLY, 1, 1}.SetHandler(CmdHGet)
-//             << CI{"HDEL", CO::JOURNALED, 1, 1}.SetHandler(CmdHDel)
-//             << CI{"HEXISTS", CO::READONLY, 1, 1}.SetHandler(CmdHExists)
-//             << CI{"HLEN", CO::READONLY, 1, 1}.SetHandler(CmdHLen);
-// }
-
-// }  // namespace dfly
+}  // namespace dfly

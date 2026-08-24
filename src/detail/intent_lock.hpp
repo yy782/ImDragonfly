@@ -17,20 +17,20 @@ class IntentLock {
     return m == SHARED || cnt_[EXCLUSIVE] == 1;
   }
 
-  bool Check(Mode m) const {
-    unsigned s = cnt_[EXCLUSIVE];
-    if (s) return false;
+  // bool Check(Mode m) const {
+  //   unsigned s = cnt_[EXCLUSIVE];
+  //   if (s) return false;
 
-    return (m == SHARED) ? true : cnt_[SHARED] == 0;
-  }
+  //   return (m == SHARED) ? true : cnt_[SHARED] == 0;
+  // }
 
-  bool IsContended() const {
-    return (cnt_[EXCLUSIVE] > 1) || (cnt_[EXCLUSIVE] == 1 && cnt_[SHARED] > 0);
-  }
+  // bool IsContended() const {
+  //   return (cnt_[EXCLUSIVE] > 1) || (cnt_[EXCLUSIVE] == 1 && cnt_[SHARED] > 0);
+  // }
 
-  unsigned ContentionScore() const {
-    return cnt_[EXCLUSIVE] * 256 + cnt_[SHARED];
-  }
+  // unsigned ContentionScore() const {
+  //   return cnt_[EXCLUSIVE] * 256 + cnt_[SHARED];
+  // }
 
   void Release(Mode m, unsigned val = 1) {
     DCHECK_GE(cnt_[m], val);

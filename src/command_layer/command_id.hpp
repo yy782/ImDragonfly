@@ -1,7 +1,3 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
-
 #pragma once
 
 #include <cstdint>
@@ -52,7 +48,15 @@ class CommandId {
   uint32_t opt_mask() const { return opt_mask_; }
   int8_t first_key_pos() const { return first_key_; }
   int8_t last_key_pos() const { return last_key_; }
-  int8_t key_step() const { return key_step_; }  // 被事务层消费，名字暂不动
+  unsigned key_step() const { return key_step_; }  // 键步长（0=默认 1）
+
+  // 键遍历元素：键值 + 在 full_args 中的原始下标。
+  // 键步长是命令级属性（key_step()），对所有键恒定，不随元素携带：
+  //   for (const auto& kv : cid->Keys(args)) { kv.key, kv.pos }
+  struct KeyValue {
+    Arg key;
+    unsigned pos;  // 键在 full_args 中的下标（事务层建 IndexSlice 段用）
+  };
 
   // 键迭代器：按命令的 first/last/step 规则步进遍历参数中的键
   // （如 MSET 键位于 1, 3, 5...，step 步进即可跳过值位）。
@@ -60,12 +64,12 @@ class CommandId {
   class KeyIterator {
    public:
     using iterator_category = std::forward_iterator_tag;
-    using value_type = Arg;
+    using value_type = KeyValue;
     using difference_type = std::ptrdiff_t;
-    using pointer = const Arg*;
-    using reference = Arg;
+    using pointer = const KeyValue*;
+    using reference = KeyValue;
 
-    reference operator*() const { return args_[pos_]; }
+    reference operator*() const { return {args_[pos_], pos_}; }
     Arg key() const { return args_[pos_]; }
 
     KeyIterator& operator++() {
@@ -107,8 +111,8 @@ class CommandId {
     KeyIterator begin_, end_;
   };
 
-  // 遍历参数中的键：
-  //   for (std::string_view k : cid->Keys(args)) { ... }
+  // 遍历参数中的键（含原始下标与步长）：
+  //   for (const auto& kv : cid->Keys(args)) { ... }
   KeyRange Keys(cmn::CmdArgList args) const;
 
   // 执行命令：返回命令协程，由调用方 co_await。
@@ -121,7 +125,7 @@ class CommandId {
   uint32_t opt_mask_;
   int8_t first_key_;
   int8_t last_key_;
-  int8_t key_step_{0};  // 键在参数中的步长（如 MSET 为 2），0 表示默认 1
+  int8_t key_step_{1};  // 键在参数中的步长（如 MSET 为 2），0 表示默认 1
   Handler handler_{nullptr};
 };
 

@@ -14,7 +14,6 @@ add_executable(unit_tests
     rdb_serializer_test.cpp
     reply_builder_test.cpp
     skiplist_test.cpp
-    string_or_view_test.cpp
     wait_queue_test.cpp
     transaction_test.cpp
     intrusive_ptr_test.cpp

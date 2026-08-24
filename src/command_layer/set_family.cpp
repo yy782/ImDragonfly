@@ -1,231 +1,237 @@
-// #include "cmd_arg_parser.hpp"
-// #include "cmd_support.hpp"
-// #include "command_registry.hpp"
-// #include "detail/conn_context.hpp"
-// #include "redis/redis_aux.hpp"
-// #include "sharding/DashTable/compact_obj.hpp"
-// #include "sharding/db_slice.hpp"
-// #include "sharding/engine_shard.hpp"
-// #include "sharding/op_status.hpp"
-// #include "transaction_layer/transaction.hpp"
+#include "set_family.hpp"
 
-// namespace dfly {
+#include "cmd_arg_parser.hpp"
+#include "cmd_support.hpp"
+#include "command_registry.hpp"
+#include "detail/conn_context.hpp"
+#include "redis/redis_aux.hpp"
+#include "sharding/DashTable/compact_obj.hpp"
+#include "sharding/shard.hpp"
+#include "sharding/op_status.hpp"
+#include "transaction_layer/transaction.hpp"
 
-// namespace {
+namespace dfly {
 
-// using CI = CommandId;
-// using cmd::CoroTask;
-// using Slice = Transaction::Slice;
+using cmd::CoroTask;
 
-// SetObject* GetOrCreateSet(Transaction* tx, EngineShard* es,
-//                           std::string_view key) {
-//   auto& db_slice = tx->GetDbSlice(es->shard_id());
-//   auto op_res = db_slice.AddOrFind(tx->GetDbContext(), key, OBJ_SET);
+namespace {
 
-//   if (!op_res) {
-//     return nullptr;
-//   }
+using Slice = Transaction::Slice;
 
-//   PrimeValue& prime_value = op_res->it->second;
+SetObject* GetOrCreateSet(Transaction* tx, Shard* shard,
+                          std::string_view key) {
+  auto& storage = shard->GetShardStorage();
+  const DbContext cntx = tx->GetDbContext();
+  SetObject* set = nullptr;
+  storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+    if (pv->IsEmpty()) {
+      *pv = CompactValue::MakeSet();
+    } else if (pv->ObjType() != OBJ_SET) {
+      return;  // 类型不符 → set 保持 nullptr → WRONG_TYPE
+    }
+    set = pv->GetSet();
+  });
+  return set;
+}
 
-//   if (op_res->is_new) {
-//     prime_value = CompactValue::MakeSet();
-//   } else if (prime_value.ObjType() != OBJ_SET) {
-//     return nullptr;
-//   }
+// SADD 命令：向集合添加一个或多个成员
+CoroTask SetFamily::SAdd(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto members = args.subspan(2);
 
-//   return prime_value.GetSet();
-// }
+  auto cb = [key, members](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    SetObject* set = GetOrCreateSet(tx, shard, key);
+    if (!set) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-// // SADD 命令：向集合添加一个或多个成员
-// CoroTask CmdSAdd(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto members = args.subspan(2);
+    size_t added = 0;
+    for (const auto& member : members) {
+      added += set->Add(std::string(member));
+    }
+    return added;
+  };
 
-//   auto cb = [key, members](Transaction* tx,
-//                            EngineShard* es) -> OpResult<size_t> {
-//     SetObject* set = GetOrCreateSet(tx, es, key);
-//     if (!set) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     size_t added = 0;
-//     for (const auto& member : members) {
-//       added += set->Add(std::string(member));
-//     }
-//     return added;
-//   };
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+  co_return;
+}
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+// SREM 命令：从集合中移除一个或多个成员
+CoroTask SetFamily::SRem(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto members = args.subspan(2);
 
-//   co_return;
-// }
+  auto cb = [key, members](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-// // SREM 命令：从集合中移除一个或多个成员
-// CoroTask CmdSRem(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto members = args.subspan(2);
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return 0ULL;  // 不存在 → 0
+    }
+    if (f->obj_type() != OBJ_SET) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key, members](Transaction* tx,
-//                            EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
+    size_t removed = 0;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      SetObject* set = pv->GetSet();
+      for (const auto& member : members) {
+        removed += set->Remove(std::string(member));
+      }
+    });
+    if (!up) return util::make_unexpected(up.error());
+    return removed;
+  };
 
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_SET) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     SetObject* set = prime_value.GetSet();
-//     size_t removed = 0;
-//     for (const auto& member : members) {
-//       removed += set->Remove(std::string(member));
-//     }
-//     return removed;
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// SMEMBERS 命令：返回集合中的所有成员
+CoroTask SetFamily::SMembers(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  std::vector<std::string> members;
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+  auto cb = [key, &members](Transaction* tx, Shard* shard) -> OpResult<void> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-//   co_return;
-// }
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return {};  // 不存在 → 空数组
+    }
 
-// // SMEMBERS 命令：返回集合中的所有成员
-// CoroTask CmdSMembers(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   std::vector<std::string> members;
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_SET) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key, &members](Transaction* tx,
-//                             EngineShard* es) -> OpResult<void> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const SetObject* set = pv->GetSet();
+    for (const auto& member : set->Data()) {
+      members.push_back(member);
+    }
+    return {};
+  };
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return {};
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_SET) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildArray(std::move(members));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     const SetObject* set = prime_value.GetSet();
-//     for (const auto& member : set->Data()) {
-//       members.push_back(member);
-//     }
-//     return {};
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// SCARD 命令：返回集合的大小
+CoroTask SetFamily::SCard(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildArray(std::move(members));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-//   co_return;
-// }
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return 0ULL;  // 不存在 → 0
+    }
 
-// // SCARD 命令：返回集合的大小
-// CoroTask CmdSCard(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_SET) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const SetObject* set = pv->GetSet();
+    return set->Length();
+  };
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_SET) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     const SetObject* set = prime_value.GetSet();
-//     return set->Length();
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// SISMEMBER 命令：检查成员是否在集合中
+CoroTask SetFamily::SIsMember(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto member = args[2];
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<int> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-//   co_return;
-// }
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return 0;  // 不存在 → 0
+    }
 
-// // SISMEMBER 命令：检查成员是否在集合中
-// CoroTask CmdSIsMember(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto member = args[2];
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_SET) {
+      return OpStatus::WRONG_TYPE;
+    }
 
-//   auto cb = [key, member](Transaction* tx, EngineShard* es) -> OpResult<int> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
+    const SetObject* set = pv->GetSet();
+    return set->Contains(std::string(member)) ? 1 : 0;
+  };
 
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return 0;
-//     }
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
 
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_SET) {
-//       return OpStatus::WRONG_TYPE;
-//     }
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
 
-//     const SetObject* set = prime_value.GetSet();
-//     return set->Contains(std::string(member)) ? 1 : 0;
-//   };
+  co_return;
+}
 
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
+// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+constexpr CommandSpec kCommands[] = {
+    {"SADD", CO::JOURNALED, 1, 1, &SetFamily::SAdd},
+    {"SREM", CO::JOURNALED, 1, 1, &SetFamily::SRem},
+    {"SMEMBERS", CO::READONLY, 1, 1, &SetFamily::SMembers},
+    {"SCARD", CO::READONLY, 1, 1, &SetFamily::SCard},
+    {"SISMEMBER", CO::READONLY, 1, 1, &SetFamily::SIsMember},
+};
+static_assert(CheckUniqueNames(kCommands), "set family: duplicate names");
 
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
+}  // namespace
 
-//   co_return;
-// }
+void RegisterSetFamily(CommandRegistry* registry) {
+  registry->Register(kCommands);
+}
 
-// }  // namespace
-
-// void RegisterSetFamily(CommandRegistry* registry) {
-//   registry->StartFamily();
-//   *registry << CI{"SADD", CO::JOURNALED, 1, 1}.SetHandler(CmdSAdd)
-//             << CI{"SREM", CO::JOURNALED, 1, 1}.SetHandler(CmdSRem)
-//             << CI{"SMEMBERS", CO::READONLY, 1, 1}.SetHandler(CmdSMembers)
-//             << CI{"SCARD", CO::READONLY, 1, 1}.SetHandler(CmdSCard)
-//             << CI{"SISMEMBER", CO::READONLY, 1, 1}.SetHandler(CmdSIsMember);
-// }
-
-// }  // namespace dfly
+}  // namespace dfly

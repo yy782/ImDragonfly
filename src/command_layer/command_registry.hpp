@@ -74,4 +74,16 @@ class CommandRegistry {
   CmdMap cmd_map_;
 };
 
+// 各命令家族的注册入口（声明统一集中于此）。
+void RegisterStringFamily(CommandRegistry* registry);
+void RegisterGeneric(CommandRegistry* registry);
+void RegisterHashFamily(CommandRegistry* registry);
+void RegisterSetFamily(CommandRegistry* registry);
+void RegisterZSetFamily(CommandRegistry* registry);
+void RegisterListFamily(CommandRegistry* registry);
+
+
+
+
+
 }  // namespace dfly

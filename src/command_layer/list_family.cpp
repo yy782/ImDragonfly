@@ -1,453 +1,511 @@
-// #include "cmd_arg_parser.hpp"
-// #include "cmd_support.hpp"
-// #include "command_registry.hpp"
-// #include "detail/conn_context.hpp"
-// #include "redis/redis_aux.hpp"
-// #include "sharding/DashTable/compact_obj.hpp"
-// #include "sharding/db_slice.hpp"
-// #include "sharding/engine_shard.hpp"
-// #include "sharding/op_status.hpp"
-// #include "transaction_layer/transaction.hpp"
-
-// namespace dfly {
-
-// namespace {
-
-// using CI = CommandId;
-// using cmd::CoroTask;
-// using Slice = Transaction::Slice;
-
-// // 辅助函数：确保键存在且是列表类型
-// ListObject* GetOrCreateList(Transaction* tx, EngineShard* es,
-//                             std::string_view key) {
-//   auto& db_slice = tx->GetDbSlice(es->shard_id());
-//   auto op_res = db_slice.AddOrFind(tx->GetDbContext(), key, OBJ_LIST);
-
-//   if (!op_res) {
-//     return nullptr;
-//   }
-
-//   PrimeValue& prime_value = op_res->it->second;
-
-//   if (op_res->is_new) {
-//     prime_value = CompactValue::MakeList();
-//   } else if (prime_value.ObjType() != OBJ_LIST) {
-//     return nullptr;
-//   }
-
-//   return prime_value.GetList();
-// }
-
-// // LPUSH 命令：将一个或多个值插入到列表头部
-// CoroTask CmdLPush(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto values = args.subspan(2);
-
-//   auto cb = [key, values](Transaction* tx,
-//                           EngineShard* es) -> OpResult<size_t> {
-//     ListObject* list = GetOrCreateList(tx, es, key);
-//     if (!list) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     for (const auto& val : values) {
-//       list->PushFront(std::string(val));
-//     }
-//     return list->Length();
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // RPUSH 命令：将一个或多个值插入到列表尾部
-// CoroTask CmdRPush(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   auto values = args.subspan(2);
-
-//   auto cb = [key, values](Transaction* tx,
-//                           EngineShard* es) -> OpResult<size_t> {
-//     ListObject* list = GetOrCreateList(tx, es, key);
-//     if (!list) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     for (const auto& val : values) {
-//       list->PushBack(std::string(val));
-//     }
-//     return list->Length();
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LPOP 命令：移除并返回列表的第一个元素
-// CoroTask CmdLPop(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-
-//   auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<std::string> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
-
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     ListObject* list = prime_value.GetList();
-//     if (list->Empty()) {
-//       return std::string("");
-//     }
-
-//     return list->PopFront();
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     if (result.value().empty()) {
-//       rb->BuildError("ERR");
-//     } else {
-//       rb->BuildBulkString(result.value());
-//     }
-//   } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-//     rb->BuildError("ERR");
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // RPOP 命令：移除并返回列表的最后一个元素
-// CoroTask CmdRPop(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-
-//   auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<std::string> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
-
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     ListObject* list = prime_value.GetList();
-//     if (list->Empty()) {
-//       return std::string("");
-//     }
-
-//     return list->PopBack();
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     if (result.value().empty()) {
-//       rb->BuildError("ERR");
-//     } else {
-//       rb->BuildBulkString(result.value());
-//     }
-//   } else if (result.status() == OpStatus::KEY_NOTFOUND) {
-//     rb->BuildError("ERR");
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LLEN 命令：返回列表的长度
-// CoroTask CmdLLen(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-
-//   auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
-
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
-
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     const ListObject* list = prime_value.GetList();
-//     return list->Length();
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LINDEX 命令：获取列表中指定索引的元素
-// CoroTask CmdLIndex(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   int64_t index = std::stoll(std::string(args[2]));
-
-//   auto cb = [key, index](Transaction* tx,
-//                          EngineShard* es) -> OpResult<std::string> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
-
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
-
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     const ListObject* list = prime_value.GetList();
-//     std::string val = list->GetElement(index);
-//     if (val.empty()) {
-//       return OpStatus::KEY_NOTFOUND;
-//     }
-//     return val;
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildBulkString(result.value());
-//   } else {
-//     rb->BuildBulkString(std::string());
-//   }
-
-//   co_return;
-// }
-
-// // LSET 命令：设置列表中指定索引的元素
-// CoroTask CmdLSet(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   int64_t index = std::stoll(std::string(args[2]));
-//   auto value = args[3];
-
-//   auto cb = [key, index, value](Transaction* tx,
-//                                 EngineShard* es) -> OpResult<void> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return OpStatus::NO_KEY;
-//     }
-
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     ListObject* list = prime_value.GetList();
-//     if (!list->SetElement(index, std::string(value))) {
-//       return OpStatus::OUT_OF_RANGE;
-//     }
-//     return {};
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildSimpleString("OK");
-//   } else if (result.status() == OpStatus::NO_KEY) {
-//     rb->BuildError("no such key");
-//   } else if (result.status() == OpStatus::OUT_OF_RANGE) {
-//     rb->BuildError("index out of range");
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LRANGE 命令：获取列表指定范围的元素
-// CoroTask CmdLRange(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   int64_t start = std::stoll(std::string(args[2]));
-//   int64_t end = std::stoll(std::string(args[3]));
-//   std::vector<std::string> result_values;
-
-//   auto cb = [key, start, end, &result_values](
-//                 Transaction* tx, EngineShard* es) -> OpResult<void> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
-
-//     if (it_res.GetInnerIt().owner() == nullptr) {
-//       return {};
-//     }
-
-//     const PrimeValue& prime_value = it_res.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     const ListObject* list = prime_value.GetList();
-//     result_values = list->GetRange(start, end);
-//     return {};
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildArray(std::move(result_values));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LREM 命令：从列表中删除元素
-// CoroTask CmdLRem(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   int64_t count = std::stoll(std::string(args[2]));
-//   auto value = args[3];
-
-//   auto cb = [key, count, value](Transaction* tx,
-//                                 EngineShard* es) -> OpResult<size_t> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return 0ULL;
-//     }
-
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     ListObject* list = prime_value.GetList();
-//     return list->Remove(count, std::string(value));
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     rb->BuildInteger(static_cast<int64_t>(result.value()));
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// // LINSERT 命令：在列表中插入元素
-// CoroTask CmdLInsert(CommandContext* cmd_cntx, CmdArgList args) {
-//   auto key = args[1];
-//   std::string pos(args[2]);
-//   auto pivot = args[3];
-//   auto value = args[4];
-
-//   auto cb = [key, pos, pivot, value](Transaction* tx,
-//                                      EngineShard* es) -> OpResult<int> {
-//     auto& db_slice = tx->GetDbSlice(es->shard_id());
-//     auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-
-//     if (it_res.it.GetInnerIt().owner() == nullptr) {
-//       return 0;
-//     }
-
-//     PrimeValue& prime_value = it_res.it.GetInnerIt()->second;
-//     if (prime_value.ObjType() != OBJ_LIST) {
-//       return OpStatus::WRONG_TYPE;
-//     }
-
-//     ListObject* list = prime_value.GetList();
-//     bool inserted = false;
-//     if (pos == "BEFORE") {
-//       inserted = list->InsertBefore(std::string(pivot), std::string(value));
-//     } else if (pos == "AFTER") {
-//       inserted = list->InsertAfter(std::string(pivot), std::string(value));
-//     } else {
-//       return OpStatus::SYNTAX_ERROR;
-//     }
-
-//     return inserted ? static_cast<int>(list->Length()) : -1;
-//   };
-
-//   auto result = co_await cmd::SingleHopT(cb);
-//   auto* rb = cmd_cntx->rb();
-
-//   if (result.status() == OpStatus::OK) {
-//     if (result.value() == -1) {
-//       rb->BuildError("no such pivot");
-//     } else {
-//       rb->BuildInteger(static_cast<int64_t>(result.value()));
-//     }
-//   } else if (result.status() == OpStatus::SYNTAX_ERROR) {
-//     rb->BuildError("syntax error");
-//   } else {
-//     rb->BuildError(
-//         "WRONGTYPE Operation against a key holding the wrong kind of value");
-//   }
-
-//   co_return;
-// }
-
-// }  // namespace
-
-// void RegisterListFamily(CommandRegistry* registry) {
-//   registry->StartFamily();
-//   *registry << CI{"LPUSH", CO::JOURNALED, 1, 1}.SetHandler(CmdLPush)
-//             << CI{"RPUSH", CO::JOURNALED, 1, 1}.SetHandler(CmdRPush)
-//             << CI{"LPOP", CO::JOURNALED, 1, 1}.SetHandler(CmdLPop)
-//             << CI{"RPOP", CO::JOURNALED, 1, 1}.SetHandler(CmdRPop)
-//             << CI{"LLEN", CO::READONLY, 1, 1}.SetHandler(CmdLLen)
-//             << CI{"LINDEX", CO::READONLY, 1, 1}.SetHandler(CmdLIndex)
-//             << CI{"LSET", CO::JOURNALED, 1, 1}.SetHandler(CmdLSet)
-//             << CI{"LRANGE", CO::READONLY, 1, 1}.SetHandler(CmdLRange)
-//             << CI{"LREM", CO::JOURNALED, 1, 1}.SetHandler(CmdLRem)
-//             << CI{"LINSERT", CO::JOURNALED, 1, 1}.SetHandler(CmdLInsert);
-// }
-
-// }  // namespace dfly
+#include "list_family.hpp"
+
+#include "cmd_arg_parser.hpp"
+#include "cmd_support.hpp"
+#include "command_registry.hpp"
+#include "detail/conn_context.hpp"
+#include "redis/redis_aux.hpp"
+#include "sharding/DashTable/compact_obj.hpp"
+#include "sharding/shard.hpp"
+#include "sharding/op_status.hpp"
+#include "transaction_layer/transaction.hpp"
+
+namespace dfly {
+
+using cmd::CoroTask;
+
+namespace {
+
+using Slice = Transaction::Slice;
+
+ListObject* GetOrCreateList(Transaction* tx, Shard* shard,
+                            std::string_view key) {
+  auto& storage = shard->GetShardStorage();
+  const DbContext cntx = tx->GetDbContext();
+  ListObject* list = nullptr;
+  storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+    if (pv->IsEmpty()) {
+      *pv = CompactValue::MakeList();
+    } else if (pv->ObjType() != OBJ_LIST) {
+      return;  // 类型不符 → list 保持 nullptr → WRONG_TYPE
+    }
+    list = pv->GetList();
+  });
+  return list;
+}
+
+// LPUSH 命令：向列表头部插入一个或多个元素
+CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto values = args.subspan(2);
+
+  auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    ListObject* list = GetOrCreateList(tx, shard, key);
+    if (!list) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    // LPUSH 按参数顺序依次头部插入（最后的参数在最终列表的最前面）
+    for (const auto& value : values) {
+      list->PushFront(std::string(value));
+    }
+    return list->Length();
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// RPUSH 命令：向列表尾部追加一个或多个元素
+CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto values = args.subspan(2);
+
+  auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    ListObject* list = GetOrCreateList(tx, shard, key);
+    if (!list) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    for (const auto& value : values) {
+      list->PushBack(std::string(value));
+    }
+    return list->Length();
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LPOP 命令：移除并返回列表头部元素
+CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+
+  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<std::string> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return OpStatus::KEY_NOTFOUND;
+    }
+    if (f->obj_type() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    std::string popped;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      ListObject* list = pv->GetList();
+      if (list->Empty()) {
+        return;  // 空列表 → 空串
+      }
+      popped = list->PopFront();
+    });
+    if (!up) return util::make_unexpected(up.error());
+    return popped;
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    if (result.value().empty()) {
+      rb->BuildNullBulkString();
+    } else {
+      rb->BuildBulkString(result.value());
+    }
+  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+    rb->BuildNullBulkString();
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// RPOP 命令：移除并返回列表尾部元素
+CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+
+  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<std::string> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return OpStatus::KEY_NOTFOUND;
+    }
+    if (f->obj_type() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    std::string popped;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      ListObject* list = pv->GetList();
+      if (list->Empty()) {
+        return;  // 空列表 → 空串
+      }
+      popped = list->PopBack();
+    });
+    if (!up) return util::make_unexpected(up.error());
+    return popped;
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    if (result.value().empty()) {
+      rb->BuildNullBulkString();
+    } else {
+      rb->BuildBulkString(result.value());
+    }
+  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+    rb->BuildNullBulkString();
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LLEN 命令：返回列表的长度
+CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+
+  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return 0ULL;  // 不存在 → 0
+    }
+
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    const ListObject* list = pv->GetList();
+    return list->Length();
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LINDEX 命令：返回列表中指定索引处的元素
+CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  int64_t index = 0;
+  if (!absl::SimpleAtoi(std::string(args[2]), &index)) {
+    cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
+    co_return;
+  }
+
+  auto cb = [key, index](Transaction* tx,
+                         Shard* shard) -> OpResult<std::string> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return OpStatus::KEY_NOTFOUND;
+    }
+
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    const ListObject* list = pv->GetList();
+    int64_t len = static_cast<int64_t>(list->Length());
+    if (index < 0) {
+      index = len + index;
+    }
+    if (index < 0 || index >= len) {
+      return OpStatus::KEY_NOTFOUND;  // 越界 → nil
+    }
+    return list->GetElement(index);
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildBulkString(result.value());
+  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+    rb->BuildNullBulkString();
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LRANGE 命令：返回列表中指定区间内的元素
+CoroTask ListFamily::LRange(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  int64_t start = 0, stop = 0;
+  if (!absl::SimpleAtoi(std::string(args[2]), &start) ||
+      !absl::SimpleAtoi(std::string(args[3]), &stop)) {
+    cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
+    co_return;
+  }
+
+  auto cb = [key, start, stop](Transaction* tx,
+                               Shard* shard) -> OpResult<std::vector<std::string>> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto res = storage.Find(cntx, key);
+    if (!res) {
+      return {};  // 不存在 → 空数组
+    }
+
+    const PrimeValue* pv = res->value;
+    if (pv->ObjType() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    const ListObject* list = pv->GetList();
+    // GetRange 内部处理负索引与越界
+    return list->GetRange(start, stop);
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildArray(std::move(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LSET 命令：设置列表中指定索引处的元素
+CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  int64_t index = 0;
+  auto value = args[3];
+  if (!absl::SimpleAtoi(std::string(args[2]), &index)) {
+    cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
+    co_return;
+  }
+
+  auto cb = [key, index, value](Transaction* tx,
+                                Shard* shard) -> OpResult<void> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return OpStatus::NO_KEY;
+    }
+    if (f->obj_type() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    bool ok = false;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      ListObject* list = pv->GetList();
+      int64_t len = static_cast<int64_t>(list->Length());
+      if (index < 0) {
+        index = len + index;
+      }
+      if (index < 0 || index >= len) {
+        return;  // 越界
+      }
+      ok = list->SetElement(index, std::string(value));
+    });
+    if (!up) return util::make_unexpected(up.error());
+    if (!ok) {
+      return OpStatus::OUT_OF_RANGE;
+    }
+    return {};
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildSimpleString("OK");
+  } else if (result.status() == OpStatus::NO_KEY) {
+    rb->BuildError("ERR no such key");
+  } else if (result.status() == OpStatus::OUT_OF_RANGE) {
+    rb->BuildError("ERR index out of range");
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LREM 命令：从列表中移除指定数量的匹配元素
+CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  int64_t count = 0;
+  auto value = args[3];
+  if (!absl::SimpleAtoi(std::string(args[2]), &count)) {
+    cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
+    co_return;
+  }
+
+  auto cb = [key, count, value](Transaction* tx,
+                                Shard* shard) -> OpResult<size_t> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return 0ULL;  // 不存在 → 0
+    }
+    if (f->obj_type() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    size_t removed = 0;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      ListObject* list = pv->GetList();
+      removed = list->Remove(count, std::string(value));
+    });
+    if (!up) return util::make_unexpected(up.error());
+    return removed;
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// LINSERT 命令：在列表中 pivot 元素之前/之后插入新元素
+CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
+  auto key = args[1];
+  auto pos = args[2];
+  auto pivot = args[3];
+  auto value = args[4];
+
+  auto cb = [key, pos, pivot, value](Transaction* tx,
+                                     Shard* shard) -> OpResult<int> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = storage.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return 0;  // 不存在 → 0
+    }
+    if (f->obj_type() != OBJ_LIST) {
+      return OpStatus::WRONG_TYPE;
+    }
+
+    OpStatus err = OpStatus::OK;
+    int len = -1;
+    auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
+      ListObject* list = pv->GetList();
+      if (pos == "BEFORE") {
+        if (list->InsertBefore(std::string(pivot), std::string(value))) {
+          len = static_cast<int>(list->Length());
+        }
+      } else if (pos == "AFTER") {
+        if (list->InsertAfter(std::string(pivot), std::string(value))) {
+          len = static_cast<int>(list->Length());
+        }
+      } else {
+        err = OpStatus::SYNTAX_ERROR;
+      }
+    });
+    if (err != OpStatus::OK) return util::make_unexpected(err);
+    if (!up) return util::make_unexpected(up.error());
+    return len;
+  };
+
+  auto result = co_await cmd::SingleHopT(cb);
+  auto* rb = cmd_cntx->rb();
+
+  if (result.status() == OpStatus::OK) {
+    rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.status() == OpStatus::SYNTAX_ERROR) {
+    rb->BuildError("ERR syntax error");
+  } else {
+    rb->BuildError(
+        "WRONGTYPE Operation against a key holding the wrong kind of value");
+  }
+
+  co_return;
+}
+
+// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+constexpr CommandSpec kCommands[] = {
+    {"LPUSH", CO::JOURNALED, 1, 1, CmdLPush},
+    {"RPUSH", CO::JOURNALED, 1, 1, CmdRPush},
+    {"LPOP", CO::JOURNALED, 1, 1, CmdLPop},
+    {"RPOP", CO::JOURNALED, 1, 1, CmdRPop},
+    {"LLEN", CO::READONLY, 1, 1, CmdLLen},
+    {"LINDEX", CO::READONLY, 1, 1, CmdLIndex},
+    {"LRANGE", CO::READONLY, 1, 1, CmdLRange},
+    {"LSET", CO::JOURNALED, 1, 1, CmdLSet},
+    {"LREM", CO::JOURNALED, 1, 1, CmdLRem},
+    {"LINSERT", CO::JOURNALED, 1, 1, CmdLInsert},
+};
+static_assert(CheckUniqueNames(kCommands), "list family: duplicate names");
+
+}  // namespace
+
+void RegisterListFamily(CommandRegistry* registry) {
+  registry->Register(kCommands);
+}
+
+}  // namespace dfly

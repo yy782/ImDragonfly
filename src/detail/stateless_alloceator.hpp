@@ -1,16 +1,15 @@
 #pragma once
 
 #include <cassert>
-
-#include "pmr/memory_resource.h"
+#include <memory_resource>
 
 namespace dfly {
 
 namespace detail {
-inline thread_local PMR_NS::memory_resource* tl_mr = nullptr;
+inline thread_local std::pmr::memory_resource* tl_mr = nullptr;
 }
 
-inline void InitTLStatelessAllocMR(PMR_NS::memory_resource* mr) {
+inline void InitTLStatelessAllocMR(std::pmr::memory_resource* mr) {
   detail::tl_mr = mr;
 }
 

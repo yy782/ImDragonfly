@@ -1,16 +1,17 @@
 // ============================================================================
-// engine_shard.cpp —— 分片线程调度实现（独立设计）
+// shard.cpp —— 分片线程调度实现（独立设计）
 //
 // DriveQueue（队首引理 + 投递事务的乱序执行）与 MaybeDriveUnblocked（轻量
 // SCA）共同构成论文的调度推进机制：
 //   - 队首引理：每分片只需检查队首——队首已放行（armed）即执行并出队，
 //     反复推进直到队首未放行（被其它分片调度时序卡住）；
-//   - 乱序执行：投递的本分片事务若锁无竞争（kUncontended），即使不在队首
-//     也可直接执行（此时已持有锁，且队列中无更早序者会与其冲突）；
+//   - 乱序执行：投递的本分片事务若已持锁（kUncontended，拿锁成功即无竞争），
+//     即使不在队首也可直接执行（此时已持有锁，且队列中无更早序者会与其
+//     冲突）；
 //   - SCA：队首被卡且队列堆积到高水位时，用写集/读集位数组扫描队内事务，
 //     找出已全分区就绪且与已扫描者无锁冲突的事务提前执行。
 // ============================================================================
-#include "sharding/engine_shard.hpp"
+#include "sharding/shard.hpp"
 
 #include <glog/logging.h>
 
@@ -18,28 +19,26 @@
 #include <memory>
 
 #include "detail/stateless_alloceator.hpp"
-#include "sharding/db_slice.hpp"
 #include "transaction_layer/transaction.hpp"
 
 namespace dfly {
 
 thread_local mi_heap_t* data_heap = nullptr;
-thread_local EngineShard* EngineShard::shard_ = nullptr;
+thread_local Shard* Shard::shard_ = nullptr;
 
-void EngineShard::InitThreadLocal(base::UringProactor* pb) {
+void Shard::InitThreadLocal(base::UringProactor* pb) {
   DCHECK_EQ(data_heap, nullptr);
   data_heap = mi_heap_new();
-  void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(EngineShard),
-                                     alignof(EngineShard));
-  shard_ = new (ptr) EngineShard(pb, data_heap);
+  void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(Shard),
+                                     alignof(Shard));
+  shard_ = new (ptr) Shard(pb, data_heap);
   InitTLStatelessAllocMR(shard_->memory_resource());
 }
 
-void EngineShard::DestroyThreadLocal() {
+void Shard::DestroyThreadLocal() {
   if (!shard_) return;
   mi_heap_t* tlh = shard_->mi_resource_.heap();
-  shard_->Shutdown();
-  shard_->~EngineShard();
+  shard_->~Shard();
   CleanupStatelessAllocMR();
   mi_free(shard_);
   shard_ = nullptr;
@@ -47,19 +46,18 @@ void EngineShard::DestroyThreadLocal() {
   data_heap = nullptr;
 }
 
-EngineShard::EngineShard(base::UringProactor* pb, mi_heap_t* heap)
+Shard::Shard(base::UringProactor* pb, mi_heap_t* heap)
     : proactor_(pb), shard_id_(pb->GetPoolIndex()), mi_resource_(heap),
-      txq_(&mi_resource_) {}
+      storage_(shard_id_, this), txq_(&mi_resource_) {}
 
-void EngineShard::DriveQueue(util::intrusive_ptr<Transaction> tx) {
+void Shard::DriveQueue(util::intrusive_ptr<Transaction> tx) {
   const ShardId sid = shard_id_;
 
-  // 1) 投递事务的放行：仅当锁无竞争（kUncontended）时允许在第 3 步跳过
-  //    队首提前执行（乱序执行）；若本分片尚未放行（其它分片未调度完），
-  //    直接返回，由后续驱动（Distribute 投递 / 队首链）接手。
-  uint16_t got = 0;
-  const bool tx_allowed = tx && tx->AllowOnIf(sid, kUncontended, &got);
-  if (tx && !tx_allowed && (got & kAllowed) == 0) return;
+  // 1) 投递事务的放行：本分片尚未放行（其它分片未调度完）直接返回，由后续
+  //    驱动（Distribute 投递 / 队首链）接手；已放行且已持锁（kUncontended，即
+  //    锁无竞争）者允许在第 3 步无视队首提前执行（乱序执行）。
+  if (tx && !tx->IsAllowedOn(sid)) return;
+  const bool tx_allowed = tx && tx->AllowOnIf(sid, Transaction::kUncontended);
 
   // 2) 队首引理（论文 §2.1）：队首已放行即执行，直到队首未放行。
   //    注意：无条件放行适用于任何队首（无论竞争与否）——"已入队且已放行
@@ -82,7 +80,7 @@ void EngineShard::DriveQueue(util::intrusive_ptr<Transaction> tx) {
   MaybeDriveUnblocked();
 }
 
-void EngineShard::MaybeDriveUnblocked() {
+void Shard::MaybeDriveUnblocked() {
   // 仅队列堆积到高水位以上才付出扫描代价（SCA 的"选择性"）
   if (txq_.Size() <= kQueueHighWater) return;
 

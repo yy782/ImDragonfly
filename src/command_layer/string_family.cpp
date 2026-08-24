@@ -8,30 +8,99 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
-#include <variant>
 
-#include "cmd_arg_parser.hpp"
+#include "string_family.hpp"
+
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
 #include "detail/conn_context.hpp"
-#include "sharding/db_slice.hpp"
-#include "sharding/engine_shard.hpp"
-#include "sharding/op_status.hpp"
+#include "detail/op_status.hpp"
+#include "detail/tx_base.hpp"
+#include "sharding/shard.hpp"
 #include "transaction_layer/transaction.hpp"
 namespace dfly {
+
+using cmd::CoroTask;
 
 namespace {
 
 constexpr uint32_t kMaxStrLen [[maybe_unused]] = 1 << 28;
 
-using ::cmd::CmdArgParser;
-using cmd::CoroTask;
-using Slice = Transaction::Slice;
+// ---- 极简参数解析 -----------------------------------------------------------
+// 从 args[off] 起顺序取参数：std::string_view 直接取，int64_t 用 from_chars 解析。
+// 任一参数缺失或解析失败即返回 false。
+
+bool ParseOne(std::string_view s, std::string_view& out) {
+  out = s;
+  return true;
+}
+
+bool ParseOne(std::string_view s, int64_t& out) {
+  auto res = std::from_chars(s.data(), s.data() + s.size(), out);
+  return res.ec == std::errc() && res.ptr == s.data() + s.size();
+}
+
+template <typename... Ts>
+bool GetArgs(CmdArgList args, size_t off, Ts&... out) {
+  if (args.size() < off + sizeof...(Ts)) return false;
+  size_t i = off;
+  return (ParseOne(args[i++], out) && ...);
+}
+
+// ASCII 忽略大小写比较（选项均为大写字母）
+bool EqNoCase(std::string_view a, std::string_view b) {
+  return a.size() == b.size() &&
+         std::equal(a.begin(), a.end(), b.begin(),
+                    [](char x, char y) { return (x | 0x20) == (y | 0x20); });
+}
+
+// ---- SET --------------------------------------------------------------------
+
+// SET 可选参数解析结果
+struct SetOpts {
+  bool nx = false, xx = false, keepttl = false;
+  int64_t expire_ms = 0;  // 0 = 不设置过期
+};
+
+// 解析 SET 的 EX/PX/KEEPTTL/NX/XX 选项；语法错误返回 nullopt。
+std::optional<SetOpts> ParseSetOpts(CmdArgList args, size_t off) {
+  SetOpts o;
+  bool has_ex = false, has_px = false;
+  for (size_t i = off; i < args.size(); ++i) {
+    if (EqNoCase(args[i], "EX")) {
+      if (has_px || o.keepttl || i + 1 >= args.size()) return std::nullopt;
+      int64_t sec;
+      if (!ParseOne(args[++i], sec) || sec < 0 ||
+          uint64_t(sec) > UINT64_MAX / 1000)
+        return std::nullopt;
+      o.expire_ms = sec * 1000;
+      has_ex = true;
+    } else if (EqNoCase(args[i], "PX")) {
+      if (has_ex || o.keepttl || i + 1 >= args.size()) return std::nullopt;
+      int64_t ms;
+      if (!ParseOne(args[++i], ms) || ms < 0) return std::nullopt;
+      o.expire_ms = ms;
+      has_px = true;
+    } else if (EqNoCase(args[i], "KEEPTTL")) {
+      if (has_ex || has_px) return std::nullopt;
+      o.keepttl = true;
+    } else if (EqNoCase(args[i], "NX")) {
+      if (o.xx) return std::nullopt;
+      o.nx = true;
+    } else if (EqNoCase(args[i], "XX")) {
+      if (o.nx) return std::nullopt;
+      o.xx = true;
+    } else {
+      return std::nullopt;
+    }
+  }
+  return o;
+}
 
 // 用零拷贝 view 就地编码成完整 RESP bulk string 帧 "$<len>\r\n<value>\r\n"。
 // 值内容只拷贝这一次（直接进最终回复 buffer），避免 ToString() 临时 string
@@ -49,200 +118,60 @@ std::string EncodeBulkString(std::string_view v) {
   return out;
 }
 
-class SetCmd {  // SET 命令处理器
- public:
-  explicit SetCmd(const Slice& slice) : slice_(slice) {}
-
-  // 条件设置失败（NX 命中已有 key / XX 未命中）时返回 NOT_SET，
-  // 调用方应回复 null。
-  enum class SetResult { OK, NOT_SET };
-
-  enum SetFlags {
-    SET_ALWAYS = 0,
-    SET_KEEP_EXPIRE = 1 << 2,     /* KEEPTTL: Set and keep the ttl */
-    SET_EXPIRE_AFTER_MS = 1 << 4, /* EX,PX: Expire after ms. */
-    SET_NX = 1 << 5,              /* NX: only set if key does not exist */
-    SET_XX = 1 << 6,              /* XX: only set if key already exists */
-  };
-
-  struct SetParams {
-    uint16_t flags_ = SET_ALWAYS;
-    uint64_t expire_after_ms_ = 0;
-
-    constexpr bool IsConditionalSet() const {
-      return flags_ & (SET_NX | SET_XX);
-    }
-  };
-
-  facade::OpResult<SetResult> Set(const SetParams& params, std::string_view key,
-                                  std::string_view value);
-
- private:
-  facade::OpResult<void> SetExisting(const SetParams& params,
-                                     std::string_view value,
-                                     DbSlice::ItAndUpdater* it_upd);
-
-  void AddNew(const SetParams& params, const DbSlice::Iterator& it,
-              std::string_view key, std::string_view value);
-
-  Slice slice_;
-};
-
-facade::OpResult<SetCmd::SetResult> SetCmd::Set(const SetParams& params,
-                                                std::string_view key,
-                                                std::string_view value) {
-  DbSlice& db_slice = slice_.GetDbSlice();
-  auto op_res = db_slice.AddOrFind(slice_.GetDbContext(), key, std::nullopt);
-  if (!op_res) {
-    return op_res.status();
-  }
-
-  if (!op_res->is_new) {
-    if (params.flags_ & SET_NX) {
-      return SetCmd::SetResult::NOT_SET;  // 已存在且要求 NX
-    }
-    auto st = SetExisting(params, value, &(*op_res));
-    if (!st) {
-      return st.status();
-    }
-    return SetCmd::SetResult::OK;
-  } else {
-    if (params.flags_ & SET_XX) {
-      // AddOrFind 已创建空 key，需要回滚，避免 XX 未命中时留下空 key
-      slice_.GetDbSlice().DelMutable(slice_.GetDbContext(), std::move(*op_res));
-      return SetCmd::SetResult::NOT_SET;
-    }
-    AddNew(params, op_res->it, key, value);
-    return SetCmd::SetResult::OK;
-  }
-}
-
-facade::OpResult<void> SetCmd::SetExisting(const SetParams& params,
-                                           std::string_view value,
-                                           DbSlice::ItAndUpdater* it_upd) {
-  PrimeValue& prime_value = it_upd->it->second;
-
-  auto& db_slice = slice_.GetDbSlice();
-  uint64_t at_ms =
-      params.expire_after_ms_
-          ? params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs()
-          : 0;
-
-  if (!(params.flags_ & SET_KEEP_EXPIRE)) {
-    if (at_ms) {
-      db_slice.AddExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it, at_ms);
-    } else {
-      db_slice.RemoveExpire(slice_.GetDbContext().GetDbIndex(), it_upd->it);
-    }
-  }
-  prime_value.SetString(value);
-  return OpStatus::OK;
-}
-
-void SetCmd::AddNew(const SetParams& params, const DbSlice::Iterator& it,
-                    std::string_view key, std::string_view value) {
-  (void)key;
-
-  auto& db_slice = slice_.GetDbSlice();
-
-  it->second = PrimeValue{value};
-
-  if (params.expire_after_ms_) {
-    db_slice.AddExpire(
-        slice_.GetDbContext().GetDbIndex(), it,
-        params.expire_after_ms_ + slice_.GetDbContext().GetTimeNowMs());
-  }
-}
-
-struct ErrorReply {};
-std::variant<SetCmd::SetParams, ErrorReply> ParseSetParams(
-    CmdArgParser parser) {
-  SetCmd::SetParams sparams;
-  bool has_ex = false, has_px = false;
-  while (parser.HasNext()) {
-    if (parser.Check("EX")) {
-      if (has_px) return ErrorReply{};  // EX 与 PX 互斥
-      if (sparams.flags_ & SetCmd::SET_KEEP_EXPIRE)
-        return ErrorReply{};  // 与 KEEPTTL 互斥
-      if (!parser.HasNext()) return ErrorReply{};
-      int64_t sec = parser.Next<int64_t>();
-      if (parser.HasError() || sec < 0) return ErrorReply{};
-      if (uint64_t(sec) > UINT64_MAX / 1000) return ErrorReply{};
-      sparams.flags_ |= SetCmd::SET_EXPIRE_AFTER_MS;
-      sparams.expire_after_ms_ = uint64_t(sec) * 1000;
-      has_ex = true;
-    } else if (parser.Check("PX")) {
-      if (has_ex) return ErrorReply{};  // EX 与 PX 互斥
-      if (sparams.flags_ & SetCmd::SET_KEEP_EXPIRE)
-        return ErrorReply{};  // 与 KEEPTTL 互斥
-      if (!parser.HasNext()) return ErrorReply{};
-      int64_t ms = parser.Next<int64_t>();
-      if (parser.HasError() || ms < 0) return ErrorReply{};
-      sparams.flags_ |= SetCmd::SET_EXPIRE_AFTER_MS;
-      sparams.expire_after_ms_ = uint64_t(ms);
-      has_px = true;
-    } else if (parser.Check("KEEPTTL")) {
-      if (sparams.flags_ & SetCmd::SET_EXPIRE_AFTER_MS)
-        return ErrorReply{};  // 与 EX/PX 互斥
-      sparams.flags_ |= SetCmd::SET_KEEP_EXPIRE;
-    } else if (parser.Check("NX")) {
-      sparams.flags_ |= SetCmd::SET_NX;
-    } else if (parser.Check("XX")) {
-      sparams.flags_ |= SetCmd::SET_XX;
-    } else {
-      return ErrorReply{};
-    }
-  }
-  if ((sparams.flags_ & SetCmd::SET_NX) && (sparams.flags_ & SetCmd::SET_XX)) {
-    return ErrorReply{};  // NX 与 XX 互斥
-  }
-  return sparams;
-}
-
-CoroTask CmdSet(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-
-  CmdArgParser parser{args};
-
-  auto [key, value] = parser.Next<std::string_view, std::string_view>();
-  auto params_result = ParseSetParams(parser);
-  if (std::holds_alternative<ErrorReply>(params_result)) {
+CoroTask StringFamily::Set(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key, value;
+  if (!GetArgs(args, 1, key, value)) {
     cmd_cntx->rb()->BuildError("syntax error");
     co_return;
   }
-  auto& sparams = std::get<SetCmd::SetParams>(params_result);
-
-  auto cb = [key, value, sparams](
-                Transaction* t,
-                EngineShard* shard) -> OpResult<SetCmd::SetResult> {
-    DCHECK_EQ(EngineShard::tlocal()->shard_id(), shard->shard_id());
-    return SetCmd(t->GetSlice(shard->shard_id())).Set(sparams, key, value);
-  };
-
-  auto result = co_await cmd::SingleHopT(cb);
-
-  auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK &&
-      result.value() == SetCmd::SetResult::OK) {
-    rb->BuildOk();
-  } else {
-    rb->BuildNullBulkString();  // NX/XX 条件未命中，回复 null
+  auto opts = ParseSetOpts(args, 3);
+  if (!opts) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
   }
 
+  auto cb = [key, value, opts](Transaction* tx, Shard* shard)
+      -> OpResult<bool> {
+    auto& storage = shard->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+    const SetOpts& o = *opts;
+
+    // ttl_at 为绝对毫秒（0 = 无 TTL，同时清除已有 TTL）
+    uint64_t at_ms =
+        o.expire_ms ? uint64_t(o.expire_ms) + cntx.GetTimeNowMs() : 0;
+
+    if (o.nx || o.xx || o.keepttl) {
+      bool exists = storage.Exists(cntx, key);
+      if (o.xx && !exists) return false;  // XX 未命中：不写
+      if (o.nx && exists) return false;   // NX 命中已有 key：不写
+      if (o.keepttl) {
+        // 保留旧 TTL（0 = 无 TTL）；新键不带 TTL
+        at_ms = exists ? storage.ExpireTime(cntx, key).value_or(0) : 0;
+      }
+    }
+
+    auto up = storage.Upsert(cntx, key, PrimeValue{value}, at_ms);
+    if (!up) return util::make_unexpected(up.error());
+    return up.value();  // true=新建，false=覆盖
+  };
+  auto result = co_await cmd::SingleHopT(cb);
+
+  if (result.has_value() && result.value()) {
+    cmd_cntx->rb()->BuildOk();
+  } else {
+    cmd_cntx->rb()->BuildNullBulkString();  // NX/XX 条件未命中或底层错误 → null
+  }
   co_return;
 }
 
-CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
-  auto cb = [&args](Transaction* tx, EngineShard* es) -> OpResult<void> {
-    auto& slice = tx->GetSlice(es->shard_id());
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    for (const auto& [key, keyId] : slice) {
+CoroTask StringFamily::MSet(CommandContext* cmd_cntx, CmdArgList args) {
+  auto cb = [&args](Transaction* tx, Shard* es) -> OpResult<void> {
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+    for (const auto& [key, keyId] : tx->GetSlice(es->shard_id())) {
       auto& value = args[keyId + 1];
-      auto it_res =
-          db_slice.AddOrUpdate(tx->GetDbContext(), key, PrimeValue{value}, 0);
-      if (it_res.status() != facade::OpStatus::OK) {
-        // TODO
-      }
+      auto res = shard.Upsert(cntx, key, PrimeValue{value}, 0);
+      if (!res) return util::make_unexpected(res.error());
     }
     return {};
   };
@@ -253,17 +182,17 @@ CoroTask CmdMSet(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
+CoroTask StringFamily::MGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   std::vector<std::string> vec(cmd_cntx->tx()->GetKeyNum());
-  auto cb = [&vec](Transaction* tx, EngineShard* es) -> OpResult<void> {
-    auto& slice = tx->GetSlice(es->shard_id());
-    for (auto& [key, keyId] : slice) {
-      auto it_res =
-          tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
-      if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
-        vec[keyId - 1] = "";  // args第一个参数是MGET,与vec不同，要减一
+  auto cb = [&vec](Transaction* tx, Shard* es) -> OpResult<void> {
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+    for (const auto& [key, keyId] : tx->GetSlice(es->shard_id())) {
+      auto res = shard.Find(cntx, key);
+      if (res) {
+        vec[keyId - 1] = res.value().value->ToString();
       } else {
-        vec[keyId - 1] = it_res.GetInnerIt()->second.ToString();
+        vec[keyId - 1] = "";  // args第一个参数是MGET,与vec不同，要减一
       }
     }
     return {};
@@ -275,27 +204,26 @@ CoroTask CmdMGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   co_return;
 }
 
-CoroTask CmdGet(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask StringFamily::Get(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key = args[1]](Transaction* tx,
                             EngineShard* es) -> OpResult<std::string> {
-    DCHECK_EQ(EngineShard::tlocal()->shard_id(), es->shard_id());
-    auto it_res =
-        tx->GetDbSlice(es->shard_id()).FindReadOnly(tx->GetDbContext(), key);
+    DCHECK_EQ(Shard::tlocal()->shard_id(), es->shard_id());
+    auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
 
-    if (it_res.GetInnerIt().owner() == nullptr) {  // 没找到
-      return OpStatus::KEY_NOTFOUND;
+    if (!res) {  // 没找到
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
     // 这里在 shard 线程内，值在 dict 中稳定，用 GetSlice 拿零拷贝 view 就地
     // 编码成 RESP 帧；co_await 后协程在同一 shard 线程恢复，直接 SendRaw 发送。
     std::string scratch;
-    std::string_view v = it_res.GetInnerIt()->second.GetSlice(&scratch);
-    return {EncodeBulkString(v)};
+    std::string_view v = res.value().value->GetSlice(&scratch);
+    return EncodeBulkString(v);
   };
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
-    rb->SendRaw(*std::move(result));  // rb 不再加工，直接发送
+  if (result.has_value()) {
+    rb->SendRaw(std::move(result.value()));  // rb 不再加工，直接发送
   } else {
     rb->BuildNullBulkString();
   }
@@ -319,81 +247,94 @@ CoroTask IncrByImpl(CommandContext* cmd_cntx, std::string_view key,
                     int64_t delta) {
   auto cb = [key, delta](Transaction* tx,
                          EngineShard* es) -> OpResult<int64_t> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.AddOrFind(tx->GetDbContext(), key, std::nullopt);
-    if (!it_res) {
-      return it_res.status();
-    }
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-    auto& pv = it_res->it->second;
-    int64_t cur = 0;
-    if (!it_res->is_new) {
-      if (pv.IsRobj()) {
-        return OpStatus::WRONG_TYPE;
-      }
-      if (!TryGetInt64(pv, &cur)) {
-        return OpStatus::INVALID_VALUE;
-      }
-    }
-
-    int64_t next;
-    if (__builtin_add_overflow(cur, delta, &next)) {
-      return OpStatus::OUT_OF_RANGE;  // 溢出
-    }
-    pv.SetInt(next);
+    int64_t next = 0;
+    OpStatus err = OpStatus::OK;
+    auto up = shard.Mutate(
+        cntx, key,
+        [&](PrimeValue* pv) {
+          if (pv->IsEmpty()) {  // 新建键：cur = 0
+            next = delta;
+            pv->SetInt(next);
+            return;
+          }
+          if (pv->IsRobj()) {
+            err = OpStatus::WRONG_TYPE;
+            return;
+          }
+          int64_t cur = 0;
+          if (pv->IsInt()) {
+            cur = pv->AsInt();
+          } else if (!TryGetInt64(*pv, &cur)) {
+            err = OpStatus::INVALID_VALUE;
+            return;
+          }
+          if (__builtin_add_overflow(cur, delta, &next)) {
+            err = OpStatus::OUT_OF_RANGE;  // 溢出
+            return;
+          }
+          pv->SetInt(next);
+        });
+    if (err != OpStatus::OK) return util::make_unexpected(err);
+    if (!up) return util::make_unexpected(up.error());
     return next;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  switch (result.status()) {
-    case OpStatus::OK:
-      rb->BuildInteger(result.value());
-      break;
-    case OpStatus::INVALID_VALUE:
-      rb->BuildError("value is not an integer or out of range");
-      break;
-    case OpStatus::OUT_OF_RANGE:
-      rb->BuildError("increment or decrement would overflow");
-      break;
-    default:
-      rb->BuildError(
-          "WRONG_TYPE Operation against a key holding the wrong "
-          "kind of value");
+  if (result.has_value()) {
+    rb->BuildInteger(result.value());
+  } else {
+    switch (result.error()) {
+      case OpStatus::INVALID_VALUE:
+        rb->BuildError("value is not an integer or out of range");
+        break;
+      case OpStatus::OUT_OF_RANGE:
+        rb->BuildError("increment or decrement would overflow");
+        break;
+      default:
+        rb->BuildError(
+            "WRONG_TYPE Operation against a key holding the wrong "
+            "kind of value");
+    }
   }
   co_return;
 }
 
-CoroTask Incr(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  std::string_view key = parser.Next<std::string_view>();
+CoroTask StringFamily::Incr(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  if (!GetArgs(args, 1, key)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    return CoroTask{};
+  }
   return IncrByImpl(cmd_cntx, key, 1);
 }
 
-CoroTask Decr(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  std::string_view key = parser.Next<std::string_view>();
+CoroTask StringFamily::Decr(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  if (!GetArgs(args, 1, key)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    return CoroTask{};
+  }
   return IncrByImpl(cmd_cntx, key, -1);
 }
 
-CoroTask IncrBy(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, delta] = parser.Next<std::string_view, int64_t>();
-  if (parser.HasError()) {
+CoroTask StringFamily::IncrBy(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  int64_t delta;
+  if (!GetArgs(args, 1, key, delta)) {
     cmd_cntx->rb()->BuildError("syntax error");
     return CoroTask{};
   }
   return IncrByImpl(cmd_cntx, key, delta);
 }
 
-CoroTask DecrBy(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, delta] = parser.Next<std::string_view, int64_t>();
-  if (parser.HasError()) {
+CoroTask StringFamily::DecrBy(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  int64_t delta;
+  if (!GetArgs(args, 1, key, delta)) {
     cmd_cntx->rb()->BuildError("syntax error");
     return CoroTask{};
   }
@@ -405,39 +346,44 @@ CoroTask DecrBy(CommandContext* cmd_cntx, CmdArgList args) {
   return IncrByImpl(cmd_cntx, key, ndelta);
 }
 
-CoroTask CmdAppend(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, val] = parser.Next<std::string_view, std::string_view>();
+CoroTask StringFamily::Append(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key, val;
+  if (!GetArgs(args, 1, key, val)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
+  }
 
-  auto cb = [key, val](Transaction* tx, EngineShard* es) -> OpResult<size_t> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.AddOrFind(tx->GetDbContext(), key, std::nullopt);
-    if (!it_res) {
-      return it_res.status();
-    }
+  auto cb = [key, val](Transaction* tx, Shard* es) -> OpResult<size_t> {
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-    auto& pv = it_res->it->second;
-    if (!it_res->is_new && pv.IsRobj()) {
-      return OpStatus::WRONG_TYPE;
-    }
-
-    size_t new_len;
-    if (it_res->is_new) {
-      pv.SetString(val);
-      new_len = val.size();
-    } else {
-      std::string cur = pv.ToString();
-      cur.append(val);
-      new_len = cur.size();
-      pv.SetString(std::move(cur));
-    }
+    size_t new_len = 0;
+    OpStatus err = OpStatus::OK;
+    auto up = shard.Mutate(
+        cntx, key,
+        [&](PrimeValue* pv) {
+          if (pv->IsEmpty()) {  // 新建键
+            pv->SetString(val);
+            new_len = val.size();
+            return;
+          }
+          if (pv->IsRobj()) {
+            err = OpStatus::WRONG_TYPE;
+            return;
+          }
+          std::string cur = pv->ToString();
+          cur.append(val);
+          new_len = cur.size();
+          pv->SetString(std::move(cur));
+        });
+    if (err != OpStatus::OK) return util::make_unexpected(err);
+    if (!up) return util::make_unexpected(up.error());
     return new_len;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(result.value());
   } else {
     rb->BuildError(
@@ -447,18 +393,19 @@ CoroTask CmdAppend(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdStrlen(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  std::string_view key = parser.Next<std::string_view>();
+CoroTask StringFamily::Strlen(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  if (!GetArgs(args, 1, key)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
+  }
 
-  auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<size_t> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
-    if (it_res.GetInnerIt().owner() == nullptr) {
+  auto cb = [key](Transaction* tx, Shard* es) -> OpResult<size_t> {
+    auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
+    if (!res) {
       return size_t{0};  // 不存在 → 长度 0
     }
-    return it_res.GetInnerIt()->second.ToString().size();
+    return res.value().value->ToString().size();
   };
 
   auto result = co_await cmd::SingleHopT(cb);
@@ -467,26 +414,26 @@ CoroTask CmdStrlen(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 CoroTask CmdSetnx(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, value] = parser.Next<std::string_view, std::string_view>();
+  std::string_view key, value;
+  if (!GetArgs(args, 1, key, value)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
+  }
 
-  auto cb = [key, value](Transaction* tx, EngineShard* es) -> OpResult<int> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.AddOrFind(tx->GetDbContext(), key, std::nullopt);
-    if (!it_res) {
-      return it_res.status();
-    }
-    if (!it_res->is_new) {
+  auto cb = [key, value](Transaction* tx, Shard* es) -> OpResult<int> {
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+    if (shard.Exists(cntx, key)) {
       return 0;  // key 已存在，设置失败
     }
-    it_res->it->second.SetString(value);
+    auto up = shard.Upsert(cntx, key, PrimeValue{value}, 0);
+    if (!up) return util::make_unexpected(up.error());
     return 1;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(result.value());
   } else {
     rb->BuildError(
@@ -496,42 +443,44 @@ CoroTask CmdSetnx(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdGetset(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, value] = parser.Next<std::string_view, std::string_view>();
+CoroTask StringFamily::Getset(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key, value;
+  if (!GetArgs(args, 1, key, value)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
+  }
 
   auto cb = [key, value](Transaction* tx,
                          EngineShard* es) -> OpResult<std::string> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.AddOrFind(tx->GetDbContext(), key, std::nullopt);
-    if (!it_res) {
-      return it_res.status();
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = shard.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      // 旧值不存在：直接写入，返回 null
+      auto up = shard.Upsert(cntx, key, PrimeValue{value}, 0);
+      if (!up) return util::make_unexpected(up.error());
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
-    auto& pv = it_res->it->second;
-    if (!it_res->is_new && pv.IsRobj()) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value().value->IsRobj()) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
-    if (it_res->is_new) {
-      pv.SetString(value);
-      return OpStatus::KEY_NOTFOUND;  // 旧值不存在 → null
-    }
-
-    // GETSET 会清除已有 key 的 TTL（Redis 语义）
-    db_slice.RemoveExpire(tx->GetDbContext().GetDbIndex(), it_res->it);
-
-    std::string old = pv.ToString();
-    pv.SetString(value);
+    std::string old = f.value().value->ToString();
+    // GETSET 会清除已有 key 的 TTL（Redis 语义）→ Upsert 传 ttl_at=0
+    auto up = shard.Upsert(cntx, key, PrimeValue{value}, 0);
+    if (!up) return util::make_unexpected(up.error());
     return old;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildBulkString(result.value());
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -541,24 +490,22 @@ CoroTask CmdGetset(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdGetrange(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, start, end] = parser.Next<std::string_view, int64_t, int64_t>();
-  if (parser.HasError()) {
+CoroTask StringFamily::Getrange(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  int64_t start, end;
+  if (!GetArgs(args, 1, key, start, end)) {
     cmd_cntx->rb()->BuildError("syntax error");
     co_return;
   }
 
   auto cb = [key, start, end](Transaction* tx,
                               EngineShard* es) -> OpResult<std::string> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.FindReadOnly(tx->GetDbContext(), key);
-    if (it_res.GetInnerIt().owner() == nullptr) {
+    auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
+    if (!res) {
       return std::string{};  // 不存在 → 空串
     }
 
-    std::string s = it_res.GetInnerIt()->second.ToString();
+    std::string s = res.value().value->ToString();
     int64_t len = (int64_t)s.size();
     int64_t st = start < 0 ? len + start : start;
     int64_t en = end < 0 ? len + end : end;
@@ -575,12 +522,10 @@ CoroTask CmdGetrange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdSetrange(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  auto [key, offset, value] =
-      parser.Next<std::string_view, int64_t, std::string_view>();
-  if (parser.HasError()) {
+CoroTask StringFamily::Setrange(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key, value;
+  int64_t offset;
+  if (!GetArgs(args, 1, key, offset, value)) {
     cmd_cntx->rb()->BuildError("syntax error");
     co_return;
   }
@@ -592,38 +537,39 @@ CoroTask CmdSetrange(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key, offset, value](Transaction* tx,
                                  EngineShard* es) -> OpResult<size_t> {
     if ((size_t)offset > kMaxStrLen) {
-      return OpStatus::OUT_OF_RANGE;
+      return util::make_unexpected(OpStatus::OUT_OF_RANGE);
     }
 
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.AddOrFind(tx->GetDbContext(), key, std::nullopt);
-    if (!it_res) {
-      return it_res.status();
-    }
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
 
-    auto& pv = it_res->it->second;
-    if (!it_res->is_new && pv.IsRobj()) {
-      return OpStatus::WRONG_TYPE;
-    }
-
-    std::string cur = it_res->is_new ? std::string{} : pv.ToString();
-    if ((size_t)offset + value.size() > kMaxStrLen) {
-      return OpStatus::OUT_OF_RANGE;  // 超出最大字符串长度
-    }
-    if (cur.size() < (size_t)offset) {
-      cur.resize((size_t)offset, '\0');  // 中间空洞用 \0 填充
-    }
-    cur.replace((size_t)offset, value.size(), value);
-    size_t new_len = cur.size();
-    pv.SetString(std::move(cur));  // 必须先取长度，move 后源字符串 size 未定义
+    size_t new_len = 0;
+    OpStatus err = OpStatus::OK;
+    auto up = shard.Mutate(
+        cntx, key,
+        [&](PrimeValue* pv) {
+          std::string cur = pv->IsEmpty() ? std::string{} : pv->ToString();
+          if ((size_t)offset + value.size() > kMaxStrLen) {
+            err = OpStatus::OUT_OF_RANGE;  // 超出最大字符串长度
+            return;
+          }
+          if (cur.size() < (size_t)offset) {
+            cur.resize((size_t)offset, '\0');  // 中间空洞用 \0 填充
+          }
+          cur.replace((size_t)offset, value.size(), value);
+          new_len = cur.size();
+          pv->SetString(std::move(cur));  // 必须先取长度，move 后源字符串 size 未定义
+        });
+    if (err != OpStatus::OK) return util::make_unexpected(err);
+    if (!up) return util::make_unexpected(up.error());
     return new_len;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(result.value());
-  } else if (result.status() == OpStatus::OUT_OF_RANGE) {
+  } else if (result.error() == OpStatus::OUT_OF_RANGE) {
     rb->BuildError("string exceeds maximum allowed size");
   } else {
     rb->BuildError(
@@ -633,25 +579,32 @@ CoroTask CmdSetrange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-CoroTask CmdGetdel(CommandContext* cmd_cntx, CmdArgList args) {
-  args = args.subspan(1);
-  CmdArgParser parser{args};
-  std::string_view key = parser.Next<std::string_view>();
+CoroTask StringFamily::Getdel(CommandContext* cmd_cntx, CmdArgList args) {
+  std::string_view key;
+  if (!GetArgs(args, 1, key)) {
+    cmd_cntx->rb()->BuildError("syntax error");
+    co_return;
+  }
 
-  auto cb = [key](Transaction* tx, EngineShard* es) -> OpResult<std::string> {
-    auto& db_slice = tx->GetDbSlice(es->shard_id());
-    auto it_res = db_slice.FindMutable(tx->GetDbContext(), key);
-    if (it_res.it.GetInnerIt().owner() == nullptr) {
-      return OpStatus::KEY_NOTFOUND;  // 不存在 → null
+  auto cb = [key](Transaction* tx, Shard* es) -> OpResult<std::string> {
+    auto& shard = es->GetShardStorage();
+    const DbContext cntx = tx->GetDbContext();
+
+    auto f = shard.Find(cntx, key);
+    if (!f) {
+      if (f.error() != OpStatus::KEY_NOTFOUND)
+        return util::make_unexpected(f.error());
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);  // 不存在 → null
     }
-    std::string old = it_res.it->second.ToString();
-    db_slice.DelMutable(tx->GetDbContext(), std::move(it_res));
+    std::string old = f.value().value->ToString();
+    auto del = shard.Delete(cntx, key);
+    if (!del) return util::make_unexpected(del.error());
     return old;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildBulkString(result.value());
   } else {
     rb->BuildNullBulkString();
@@ -661,27 +614,32 @@ CoroTask CmdGetdel(CommandContext* cmd_cntx, CmdArgList args) {
 
 // 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
 constexpr CommandSpec kCommands[] = {
-    {"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, CmdSet},
-    {"GET", CO::READONLY, 1, 1, CmdGet},
-    {"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1, CmdMGet},
-    {"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1, CmdMSet,
-     2},
+    {"SET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     &StringFamily::Set},
+    {"GET", CO::READONLY, 1, 1, &StringFamily::Get},
+    {"MGET", CO::READONLY | CO::IDEMPOTENT, 1, -1, &StringFamily::MGet},
+    {"MSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, -1,
+     &StringFamily::MSet, 2},
     {"APPEND", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
-     CmdAppend},
-    {"STRLEN", CO::READONLY, 1, 1, CmdStrlen},
-    {"INCR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, Incr},
-    {"INCRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, IncrBy},
-    {"DECR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, Decr},
-    {"DECRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1, DecrBy},
+     &StringFamily::Append},
+    {"STRLEN", CO::READONLY, 1, 1, &StringFamily::Strlen},
+    {"INCR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     &StringFamily::Incr},
+    {"INCRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     &StringFamily::IncrBy},
+    {"DECR", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     &StringFamily::Decr},
+    {"DECRBY", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
+     &StringFamily::DecrBy},
     {"SETNX", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
-     CmdSetnx},
+     &StringFamily::Setnx},
     {"GETSET", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
-     CmdGetset},
-    {"GETRANGE", CO::READONLY, 1, 1, CmdGetrange},
+     &StringFamily::Getset},
+    {"GETRANGE", CO::READONLY, 1, 1, &StringFamily::Getrange},
     {"SETRANGE", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
-     CmdSetrange},
+     &StringFamily::Setrange},
     {"GETDEL", CO::JOURNALED | CO::DENYOOM | CO::NO_AUTOJOURNAL, 1, 1,
-     CmdGetdel},
+     &StringFamily::Getdel},
 };
 static_assert(CheckUniqueNames(kCommands), "string family: duplicate names");
 

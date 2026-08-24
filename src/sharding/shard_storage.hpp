@@ -35,13 +35,14 @@
 
 #include "DashTable/compact_obj.hpp"
 #include "db_table.hpp"
+#include "detail/op_status.hpp"
 #include "detail/tx_base.hpp"
-#include "op_status.hpp"
+#include "util/expected.hpp"
 
 namespace dfly {
 
-using facade::OpResult;
-using facade::OpStatus;
+// OpResult = expected<T, OpStatus>：成功携带值 / 失败携带状态码。
+template <typename T> using OpResult = util::expected<T, OpStatus>;
 
 class EngineShard;
 
@@ -72,37 +73,37 @@ class ShardStorage {
 
   // 查找键（自动惰性过期：已过期键被删除并计入版本）。
   // 不存在 / 已过期 -> KEY_NOTFOUND。
-  OpResult<ValueView> Find(const Context& cntx, Key key) const;
+  OpResult<ValueView> Find(const DbContext& cntx, Key key) const;
 
-  bool Exists(const Context& cntx, Key key) const;
+  bool Exists(const DbContext& cntx, Key key) const;
 
   // ---------- 写（值 + TTL 一体提交） ----------
 
   // 插入或整体覆盖。true = 新建键，false = 覆盖既有键。
   // ttl_at == 0 表示无 TTL（同时清除已有 TTL）。
   // 一次调用完成：值写入 + TTL 同步 + 版本自增 + WATCH 脏检测。
-  OpResult<bool> Upsert(const Context& cntx, Key key, PrimeValue value,
+  OpResult<bool> Upsert(const DbContext& cntx, Key key, PrimeValue value,
                         TimeMs ttl_at);
 
   // 原地修改（INCR 等读-改-写场景，避免大值整体拷贝）。
   // mutate 在键值上执行；new_ttl 为空表示 TTL 保持不变。
   // 键不存在时自动新建（值初始为默认构造，交给 mutate 填充）。
   // true = 新建键。
-  OpResult<bool> Mutate(const Context& cntx, Key key,
+  OpResult<bool> Mutate(const DbContext& cntx, Key key,
                         std::function<void(PrimeValue*)> mutate,
                         std::optional<TimeMs> new_ttl = std::nullopt);
 
   // 删除。true = 删除了存在的键（过期键不计入，与 DEL 语义一致）。
-  OpResult<bool> Delete(const Context& cntx, Key key);
+  OpResult<bool> Delete(const DbContext& cntx, Key key);
 
   // ---------- TTL（绝对毫秒） ----------
 
   // 设置（>0）/ 清除（0）到期时刻。键不存在 -> KEY_NOTFOUND。
   // 仅 TTL 变更不触发 WATCH（与 Redis 一致）。
-  OpResult<void> SetTtl(const Context& cntx, Key key, TimeMs ttl_at);
+  OpResult<void> SetTtl(const DbContext& cntx, Key key, TimeMs ttl_at);
 
   // 剩余到期时刻；0 = 无 TTL；键不存在 -> KEY_NOTFOUND。
-  OpResult<TimeMs> ExpireTime(const Context& cntx, Key key) const;
+  OpResult<TimeMs> ExpireTime(const DbContext& cntx, Key key) const;
 
   // ---------- 过期清理（后台任务 / 命令触发） ----------
 
@@ -134,7 +135,7 @@ class ShardStorage {
   // ---------- WATCH（自动脏检测） ----------
 
   // 登记：键被修改 / 删除 / 过期删除时通知 sink。until_ms=0 永不过期。
-  void Watch(const Context& cntx, Key key, WatchedKeySink* sink,
+  void Watch(const DbContext& cntx, Key key, WatchedKeySink* sink,
              TimeMs until_ms = 0);
   void Unwatch(WatchedKeySink* sink, Key key);
   void UnwatchAll(WatchedKeySink* sink);
@@ -148,7 +149,7 @@ class ShardStorage {
 
  private:
   // 读路径查找：自动惰性过期（到期键删除并通知 WATCH 后视为不存在）。
-  OpResult<PrimeIterator> Locate(const Context& cntx, Key key) const;
+  OpResult<PrimeIterator> Locate(const DbContext& cntx, Key key) const;
 
   // 惰性过期：到期则删除（版本自增 + WATCH 通知），返回是否删除。
   bool LazyExpire(DbTable& db, const PrimeIterator& it, Key key, TimeMs now_ms);
