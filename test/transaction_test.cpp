@@ -31,7 +31,7 @@ cppcoro::AsyncTask RunCommand(dfly::CommandId* cid, CommandContext* cntx,
 }
 }  // namespace
 
-const int shardNum = 5;
+const int shardNum = 4;
 
 class TransactionTest : public ::testing::Test {
  protected:
