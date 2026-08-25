@@ -21,7 +21,7 @@ if ss -tlnp | grep -q ":${PORT} "; then
 fi
 
 # ── 自动检测 CPU 核心数 ────────────────────────────────────
-THREADS=8
+THREADS=4
 echo "Detected CPU cores: $THREADS"
 
 # ── 检查二进制是否存在 ────────────────────────────────────
