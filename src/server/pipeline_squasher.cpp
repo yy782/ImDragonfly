@@ -77,8 +77,7 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
       if (sid == Shard::tlocal()->shard_id()) {
         has_local = true;
       } else {
-        shard_pool->PostShard(sid, Shard::tlocal()->shard_id(),
-                              make_cb(sd));
+        shard_pool->PostShard(sid, Shard::tlocal()->shard_id(), make_cb(sd));
       }
     }
   }

@@ -45,11 +45,9 @@ class UringProactorPool {
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i]->join();
     }
-
   }
 
   size_t size() const { return proactors_.size(); }
-
 
   template <typename Func>
   void DispatchBriefFromMain(Func&& f) {

@@ -6,12 +6,12 @@
 #include <cstdint>
 
 #include "detail/intent_lock.hpp"
+#include "detail/task_queue.hpp"
 #include "detail/tx_queue.hpp"
 #include "io/uring_proactor.hpp"
 #include "sharding/shard_storage.hpp"
 #include "util/intrusive_ptr.hpp"
 #include "util/mi_memory_resource.hpp"
-#include "detail/task_queue.hpp"
 
 namespace dfly {
 

@@ -64,8 +64,8 @@ class Thread {
     int ret =
         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
     if (ret != 0) {
-      LOG(FATAL) << "Failed to set CPU affinity for thread " << pthread_self() << " error " <<ret 
-                ;
+      LOG(FATAL) << "Failed to set CPU affinity for thread " << pthread_self()
+                 << " error " << ret;
       return false;
     }
     return true;

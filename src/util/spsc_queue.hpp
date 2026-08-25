@@ -16,9 +16,8 @@ class spsc_queue {
   using value_type = T;
 
   // capacity 必须是 >= 2 的 2 的幂
-  explicit spsc_queue(size_t capacity,
-                      std::pmr::memory_resource* mr =
-                          std::pmr::get_default_resource())
+  explicit spsc_queue(size_t capacity, std::pmr::memory_resource* mr =
+                                           std::pmr::get_default_resource())
       : buffer_(nullptr),
         capacity_(capacity),
         buffer_mask_(capacity - 1),

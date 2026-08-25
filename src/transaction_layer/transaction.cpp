@@ -214,8 +214,8 @@ cppcoro::AsyncTask Transaction::Run(Callback cb,
       if constexpr (dfly::kUseMpmcTaskQueue) {
         shard_pool->Post(involved_.single.sid, hop);
       } else {
-        shard_pool->PostShard(involved_.single.sid,
-                              Shard::tlocal()->shard_id(), hop);
+        shard_pool->PostShard(involved_.single.sid, Shard::tlocal()->shard_id(),
+                              hop);
       }
     }
     co_await barrier_->Wait();

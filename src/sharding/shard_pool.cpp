@@ -7,15 +7,14 @@
 #include <memory>
 
 #include "detail/common_types.hpp"
-#include "util/maths.hpp"
 #include "detail/task_queue.hpp"
+#include "util/maths.hpp"
 
 namespace dfly {
 
 ShardPool* shard_pool = nullptr;
 
 void ShardPool::Init(uint32_t sz) {
-
   if constexpr (!dfly::kUseMpmcTaskQueue) {
     if (sz == 0 || (sz & (sz - 1)) != 0) {
       LOG(ERROR) << "shards 必须是 2 的幂（SPSC 分片段队列要求），当前: " << sz;
@@ -26,14 +25,12 @@ void ShardPool::Init(uint32_t sz) {
   shards_.reset(new Shard*[sz]);
   size_ = sz;
 
-  // 段式分片段队列必须先分配段内存（segs_）才能接收投递：
-  if constexpr (!dfly::kUseMpmcTaskQueue) {
-    for (uint32_t i = 0; i < sz; ++i) {
-      pp_->at(i)->GetTaskQueue().InitShardQueue(i, sz);
-    }
+  for (uint32_t i = 0; i < sz; ++i) {
+    dfly::InitShardQueueIfSpsc(pp_->at(i)->GetTaskQueue(), i, sz);
   }
 
-  pp_->AwaitOnAllFromMain([this](base::UringProactor* pb) { InitThreadLocal(pb); });
+  pp_->AwaitOnAllFromMain(
+      [this](base::UringProactor* pb) { InitThreadLocal(pb); });
 
   LOG(INFO) << "ShardPool initialized with " << sz << " shards";
 }

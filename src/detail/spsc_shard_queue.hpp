@@ -1,5 +1,5 @@
 #pragma once
-
+// SPSC 分片段队列
 #include <cassert>
 #include <cstddef>
 #include <memory>
@@ -36,18 +36,12 @@ template <typename T>
 class spsc_shard_queue {
  public:
   // 每段单轮最大消费数：限制单段消费量，轮流遍历各段防止饿死其他生产者
-  //（md 要求 1：设置一次消费一个分片任务队列的上限，达到上限后遍历别的段）。
   static constexpr size_t kMaxPerSegment = 64;
 
-  // 默认构造：空队列，需 Init() 之后才能使用。TaskQueue 以栈成员持有本
-  // 队列，容量 / 分片数在 ShardPool::Init 时才确定，故延迟初始化。
   spsc_shard_queue() = default;
 
-  // capacity: 环形缓冲总容量（2 的幂）；owner_id: 属主分片 id；
-  // shard_num: 段数（= 分片数 h，2 的幂）。只允许在空状态调用一次。
   void Init(size_t capacity, ShardId owner_id, size_t shard_num,
-            std::pmr::memory_resource* mr =
-                std::pmr::get_default_resource()) {
+            std::pmr::memory_resource* mr = std::pmr::get_default_resource()) {
     assert(buffer_ == nullptr && "spsc_shard_queue: Init called twice");
     assert(capacity >= 2 && (capacity & (capacity - 1)) == 0 &&
            "spsc_shard_queue: capacity must be a power of two");
@@ -62,9 +56,8 @@ class spsc_shard_queue {
     assert(seg_cap_ >= 2 && "spsc_shard_queue: per-segment capacity too small");
     buffer_ = static_cast<Slot*>(
         mr->allocate(capacity * sizeof(Slot), alignof(Slot)));
-    segs_ = static_cast<SegmentCounters*>(
-        mr->allocate(shard_num * sizeof(SegmentCounters),
-                     alignof(SegmentCounters)));
+    segs_ = static_cast<SegmentCounters*>(mr->allocate(
+        shard_num * sizeof(SegmentCounters), alignof(SegmentCounters)));
     for (size_t i = 0; i < shard_num; ++i) {
       ::new (static_cast<void*>(&segs_[i])) SegmentCounters();
     }
@@ -93,7 +86,6 @@ class spsc_shard_queue {
     segs_ = nullptr;
   }
 
-
   template <typename U>
   bool TryAdd(ShardId producer, U&& data) {
     assert(producer < shard_num_ && "spsc_shard_queue: producer out of range");
@@ -101,7 +93,6 @@ class spsc_shard_queue {
            "spsc_shard_queue: 分片不能投递给自己（段 owner_id 是 main 的段）");
     return Enqueue(producer, std::forward<U>(data));
   }
-
 
   template <typename U>
   bool TryAddFromMain(U&& data) {
@@ -118,13 +109,13 @@ class spsc_shard_queue {
         size_t cnt = 0;
         while (cnt < kMaxPerSegment) {
           size_t tail = seg.tail.load(std::memory_order_relaxed);
-          if (tail >= seg.head.load(std::memory_order_acquire)) break;  
+          if (tail >= seg.head.load(std::memory_order_acquire)) break;
           Slot& slot = buffer_[i * seg_cap_ + (tail & (seg_cap_ - 1))];
           T* p = std::launder(reinterpret_cast<T*>(&slot.storage));
           T item = std::move(*p);
           p->~T();
           seg.tail.store(tail + 1, std::memory_order_release);
-          item();  
+          item();
           ++cnt;
         }
         if (cnt != 0) {
@@ -152,8 +143,8 @@ class spsc_shard_queue {
   };
 
   struct alignas(64) SegmentCounters {
-    std::atomic<size_t> head{0}; 
-    std::atomic<size_t> tail{0}; 
+    std::atomic<size_t> head{0};
+    std::atomic<size_t> tail{0};
   };
 
   template <typename U>
@@ -163,7 +154,7 @@ class spsc_shard_queue {
     SegmentCounters& seg = segs_[seg_id];
     size_t head = seg.head.load(std::memory_order_relaxed);
     if (head - seg.tail.load(std::memory_order_acquire) >= seg_cap_) {
-      return false; 
+      return false;
     }
     size_t slot = seg_id * seg_cap_ + (head & (seg_cap_ - 1));
     ::new (static_cast<void*>(&buffer_[slot].storage)) T(std::forward<U>(data));

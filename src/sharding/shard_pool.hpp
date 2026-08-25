@@ -20,7 +20,7 @@ class ShardPool {
   void Shutdown();
 
   template <typename F>
-  void Post(ShardId sid, F&& f) {// 只能在mpmc模式调用
+  void Post(ShardId sid, F&& f) {  // 只能在mpmc模式调用
     DCHECK_LT(sid, size_);
     bool success = shards_[sid]->GetQueue()->TryAdd(std::forward<F>(f));
     if (!success) {
@@ -28,12 +28,16 @@ class ShardPool {
     }
   }
 
-
   template <typename F>
-  void PostShard(ShardId consumer, ShardId producer, F&& f) {// 只能在spsc模式调用
+  void PostShard(ShardId consumer, ShardId producer,
+                 F&& f) {  // 只能在spsc模式调用
     DCHECK_LT(consumer, size_);
-    bool success = shards_[consumer]->GetQueue()->TryAdd(producer,
-                                                         std::forward<F>(f));
+    if (consumer == producer) {
+      f();  // 这种支持并不友好，会耽误调度
+      return;
+    }
+    bool success =
+        shards_[consumer]->GetQueue()->TryAdd(producer, std::forward<F>(f));
     if (!success) {
       LOG(FATAL) << "Shard " << producer << " -> " << consumer
                  << " task queue overflow, TryAdd failed";
@@ -41,10 +45,10 @@ class ShardPool {
   }
 
   template <typename F>
-  void PostFromMain(ShardId consumer, F&& f) { // 只能在spsc模式调用
+  void PostFromMain(ShardId consumer, F&& f) {  // 只能在spsc模式调用
     DCHECK_LT(consumer, size_);
-    bool success = shards_[consumer]->GetQueue()->TryAddFromMain(
-        std::forward<F>(f));
+    bool success =
+        shards_[consumer]->GetQueue()->TryAddFromMain(std::forward<F>(f));
     if (!success) {
       LOG(FATAL) << "main -> " << consumer
                  << " task queue overflow, TryAdd failed";

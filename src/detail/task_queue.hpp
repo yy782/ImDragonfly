@@ -1,16 +1,16 @@
 #pragma once
 #include <glog/logging.h>
 
-#include <cassert>
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 
 #include "cppcoro/async_task.hpp"
 #include "detail/common_types.hpp"
+#include "detail/spsc_shard_queue.hpp"
 #include "util/function.hpp"
 #include "util/mi_memory_resource.hpp"
 #include "util/mpmc_queue.hpp"
-#include "detail/spsc_shard_queue.hpp"
 #include "util/synchronization.hpp"
 
 namespace dfly {
@@ -19,7 +19,6 @@ inline constexpr bool kUseMpmcTaskQueue = true;
 
 template <bool UseMpmc>
 class TaskQueueImpl;
-
 
 template <>
 class TaskQueueImpl<true> {
@@ -30,8 +29,6 @@ class TaskQueueImpl<true> {
       unsigned queue_size = 128,
       std::pmr::memory_resource* mr = std::pmr::get_default_resource())
       : queue_(queue_size, mr) {}
-
-
 
   template <typename F>
   bool TryAdd(F&& f) {
@@ -59,7 +56,7 @@ class TaskQueueImpl<true> {
   bool TryDrain() {
     CbFunc func;
     while (queue_.try_dequeue(func)) {
-      func(); 
+      func();
     }
     return true;
   }
@@ -91,8 +88,6 @@ class TaskQueueImpl<false> {
     shard_queue_.Init(queue_size_, owner_id, shard_num, mr_);
   }
 
-
-
   template <typename F>
   bool TryAdd(F&&) {
     static_assert(sizeof(F) == 0,
@@ -100,7 +95,6 @@ class TaskQueueImpl<false> {
                   "(main 语境) or TryAdd(ShardId, F&&)/PostShard (分片语境)");
     return false;
   }
-
 
   template <typename F>
   bool TryAdd(ShardId producer, F&& f) {
@@ -126,6 +120,13 @@ class TaskQueueImpl<false> {
   std::pmr::memory_resource* mr_ = nullptr;
   std::atomic<bool> is_closed_{false};
 };
+
+template <typename Q>
+void InitShardQueueIfSpsc(Q& queue, ShardId owner_id, size_t shard_num) {
+  if constexpr (!kUseMpmcTaskQueue) {
+    queue.InitShardQueue(owner_id, shard_num);
+  }
+}
 
 using TaskQueue = TaskQueueImpl<kUseMpmcTaskQueue>;
 

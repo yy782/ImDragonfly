@@ -226,14 +226,8 @@ class RedisServer {
     shard_pool = new ShardPool(&pool_);
     shard_pool->Init(pool_.size());
 
-    // main_proactor_ 独立于分片池（不在 pool_ 中），是 main 线程专用 proactor：
-    // 段式队列同样必须先分配段内存才能投递。它只接收 main 线程的任务
-    //（listen 协程），无需分片间投递，单段即可（shard_num=1, owner=0）。
-    if constexpr (!dfly::kUseMpmcTaskQueue) {
-      main_proactor_->GetTaskQueue().InitShardQueue(0, 1);
-    }
+    dfly::InitShardQueueIfSpsc(main_proactor_->GetTaskQueue(), 0, 1);
 
-    // Start 在 main 线程执行（main_proactor 非分片队列）
     main_proactor_->DispatchBriefFromMain([this] {
       LOG(INFO) << "Starting ListenSocket...";
       listen();
