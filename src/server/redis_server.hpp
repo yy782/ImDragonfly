@@ -2,15 +2,12 @@
 #include <glog/logging.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 #include <atomic>
-#include <cerrno>
 #include <condition_variable>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -18,21 +15,19 @@
 #include <thread>
 #include <vector>
 
-#include "command_layer/command_families.hpp"
 #include "command_layer/command_registry.hpp"
 #include "command_layer/generic_family.hpp"
 #include "command_layer/multi_family.hpp"
 #include "detail/conn_context.hpp"
-#include "net/fd_wrapper.hpp"
-#include "net/uring_proactor.hpp"
-#include "net/uring_proactor_pool.hpp"
-#include "net/uring_socket.hpp"
-#include "network/pipeline_squasher.hpp"
-#include "persistence/rdb_serializer.hpp"
+#include "io/fd_wrapper.hpp"
+#include "io/uring_proactor.hpp"
+#include "io/uring_proactor_pool.hpp"
+#include "io/uring_socket.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "sharding/engine_shard_set.hpp"
-#include "sharding/namespaces.hpp"
+#include "server/pipeline_squasher.hpp"
+#include "server/write_batcher.hpp"
+#include "sharding/shard_pool.hpp"
 #include "sharding/synchronization.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
@@ -41,17 +36,17 @@ namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
 
-class RedisServer;
-inline RedisServer* ser = nullptr;
-
 class RedisSession : public std::enable_shared_from_this<RedisSession> {
  public:
-  RedisSession(int fd, base::UringProactorPtr p) : socket_(p, fd) {}
+  // proactor 由 UringProactorPool 管理生命周期，传裸指针即可。
+  RedisSession(int fd, base::UringProactor* p)
+      : socket_(p, fd),
+        write_batcher_(&socket_, p->GetLoopThreadId()),
+        pId_(p->GetLoopThreadId()) {}
 
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
-  base::UringProactorPtr GetProactor() { return socket_.Proactor(); }
-  util::intrusive_ptr<Transaction> GetTransaction() { return transaction_; }
+  base::UringProactor* GetProactor() { return socket_.Proactor(); }
 
   void init() {
     auto self = shared_from_this();
@@ -65,17 +60,21 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         self->SendBatchImp(std::move(batch));
       });
     };
-    context_ = ConnectionContext(self, &namespaces->GetDefaultNamespace(), 0);
+    context_ = ConnectionContext(self, 0);
+    // context_ 是 RedisSession 的成员，这里又把 self（指向自己）塞进
+    // context_.owner_， 形成 RedisSession → context_ → owner_ → RedisSession
+    // 的循环引用。
+    // 为什么不用哈希表管理所有连接？我又不需要"当前有多少连接"这种信息，
+    // 上个哈希表还要配 erase 路径，erase 漏了一样泄漏——和循环引用 reset
+    // 漏了等价。 循环引用的代价是 DoRead 退出时必须手动调 NotifyClose
+    // 断环，否则 RedisSession 不析构。 项目已禁用异常，DoRead 的 break
+    // 路径都在函数末尾统一走 NotifyClose，没有跳过风险。
 
-    squasher_.Init(context_.GetNamespace(), context_.GetDbIndex(), send_cb_,
-                   socket_.Proactor().get());
+    squasher_.Init(context_.GetDbIndex(), send_cb_, socket_.Proactor());
   }
-  // ，MUTLI,EXEC等实现以后完成
-  // 目前DashTable,事务调度，协程，SIMD，以及各种第三方boost,function_base都够吃一壶的了
-  // 一个人开发难度大，AI还看不懂代码
+
   cppcoro::AsyncTask DoRead() {
     socket_.RegisterRecvBuf();
-    pId_ = socket_.Proactor()->GetLoopThreadId();
     int fd = socket_.fd();
     size_t recv_offset = 0;
     std::vector<QCmd> queue;
@@ -91,12 +90,11 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
       auto res = co_await socket_.AsyncRead(recv_offset);
       assert(util::Thread::current_tid() == pId_);
       if (res.bytes > 0) {
-        recv_count++;
         size_t total = recv_offset + res.bytes;
         auto pr = parser_.ParseAll(res.data, total);
 
         for (auto& cmd_args : pr.cmds) {
-          ::cmn::CmdArgList args(cmd_args);
+          ::dfly::CmdArgList args(cmd_args);
           std::string upper_cmd = util::ToUpperIfNeeded(args[0]);
           std::string_view cmd = upper_cmd.empty() ? args[0] : upper_cmd;
           const CommandId* ci = CIs->Find(cmd);
@@ -125,8 +123,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
         break;
       }
     }
-    socket_.Close();
-    context_.owner().reset();
+    context_.NotifyClose();
     co_return;
   }
 
@@ -134,121 +131,37 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
 
   friend class ConnectionContext;
 
- private:
-  // 批量投递：整批回复一次性 push 进 write_queue_，只触发一次 DoWrite，
-  // 避免每条回复都走一次 DispatchBrief 入队与 write_in_progress_ 判断。
   void SendBatchImp(std::vector<std::string>&& batch) {
-    for (auto& s : batch) write_queue_.push_back(std::move(s));
-    if (write_in_progress_) {
-      return;
-    }
-    write_in_progress_ = true;
-    DoWrite();
+    write_batcher_.EnqueueBatch(std::move(batch));
   }
 
-  void SendImp(std::string&& s) {
-    VLOG(2) << "[SEND] fd:" << fd() << " size:" << s.size()
-            << " head:" << s.substr(0, s.find('\r'));
-    write_queue_.push_back(std::move(s));
-    if (write_in_progress_) {
-      return;
-    }
-    write_in_progress_ = true;
-    DoWrite();
-  }
-
-  cppcoro::AsyncTask DoWrite() {
-    assert(util::Thread::current_tid() == pId_);
-    // 一次 sendmsg 合并的回复条数上限：调大以减少 sendmsg/syscall 次数。
-    // 超过 UIO_FASTIOV(8) 时内核会 kmalloc iovec 数组，但减少 syscall 的
-    // 收益通常远大于 iovec 分配代价（loopback 下 syscall 更贵）。
-    constexpr size_t kMaxWriteBatch = 64;
-    // batch/rem 提到循环外复用：clear() 保留 capacity，避免每批反复
-    // malloc/free。
-    std::vector<std::string> batch;
-    std::vector<struct iovec> rem;
-    batch.reserve(kMaxWriteBatch);
-    rem.reserve(kMaxWriteBatch);
-    while (true) {
-      if (write_queue_.empty()) {
-        write_in_progress_ = false;
-        break;
-      }
-      size_t n = std::min(write_queue_.size(), kMaxWriteBatch);
-      batch.clear();
-      for (size_t i = 0; i < n; ++i) {
-        batch.push_back(std::move(write_queue_.front()));
-        write_queue_.pop_front();
-      }
-      size_t total = 0;
-      for (auto& s : batch) {
-        total += s.size();
-      }
-
-      size_t sent = 0;
-      while (sent < total) {
-        rem.clear();
-        size_t skip = sent;
-        for (auto& s : batch) {
-          if (skip >= s.size()) {
-            skip -= s.size();
-            continue;
-          }
-          rem.push_back({s.data() + skip, s.size() - skip});
-          skip = 0;
-        }
-        if (rem.empty()) break;
-        struct msghdr msg = {};
-        msg.msg_iov = rem.data();
-        msg.msg_iovlen = rem.size();
-        auto wr = co_await socket_.AsyncWriteV(&msg);
-        if (wr <= 0) {
-          LOG(WARNING) << "Write error on fd: " << fd() << ", error: " << wr;
-          write_queue_.clear();
-          write_in_progress_ = false;
-          co_return;
-        }
-        sent += static_cast<size_t>(wr);
-      }
-      send_count++;
-    }
-    co_return;
-  }
+  void SendImp(std::string&& s) { write_batcher_.Enqueue(std::move(s)); }
 
   base::UringSocket socket_;
   ConnectionContext context_;
-  util::intrusive_ptr<Transaction> transaction_;
   ReplyBuilder::SendCallback send_cb_;
   ParseRESP parser_;
   PipelineSquasher squasher_;
-  std::deque<std::string> write_queue_;
-  bool write_in_progress_ = false;
+  WriteBatcher write_batcher_;
   pthread_t pId_;
-
-  int recv_count = 0;
-  int send_count = 0;
 };
 
 class RedisServer {
  public:
-  RedisServer(int listenFd, uint32_t size, bool enable_rdb = true,
+  RedisServer(int listenFd, uint32_t size,
               const util::JsonConfig* config = nullptr)
-      : main_proactor_(std::make_shared<base::UringProactor>(
-            CreateOptimizedRedisConfig(config))),
+      : main_proactor_(
+            new base::UringProactor(CreateOptimizedRedisConfig(config))),
         pool_(size, CreateOptimizedRedisConfig(config)),
-        ListenSocket_(main_proactor_, listenFd),
-        enable_rdb_(config ? config->GetBool("enable_rdb", enable_rdb)
-                           : enable_rdb),
-        data_dir_(config ? config->GetString("data_dir", "./.rdb") : "./.rdb") {
+        ListenSocket_(main_proactor_, listenFd) {
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
     // RegisterMulti(CIs);
-    // RegisterListFamily(CIs);
-    // RegisterHashFamily(CIs);
-    // RegisterSetFamily(CIs);
-    // RegisterZSetFamily(CIs);
-    ser = this;
+    RegisterListFamily(CIs);
+    RegisterHashFamily(CIs);
+    RegisterSetFamily(CIs);
+    RegisterZSetFamily(CIs);
   }
 
   // 有配置文件则从文件读取，否则使用内置默认值。
@@ -299,10 +212,13 @@ class RedisServer {
     delete CIs;
     CIs = nullptr;
 
-    if (shard_set) {
-      delete shard_set;
-      shard_set = nullptr;
+    if (shard_pool) {
+      delete shard_pool;
+      shard_pool = nullptr;
     }
+
+    delete main_proactor_;
+    main_proactor_ = nullptr;
   }
 
   void Start() {
@@ -310,17 +226,8 @@ class RedisServer {
     isRuning = true;
     pool_.AsyncLoop();
     sleep(1);
-    shard_set = new EngineShardSet(&pool_);
-    shard_set->Init(pool_.size());
-
-    if (enable_rdb_) {
-      if (mkdir(data_dir_.c_str(), 0755) != 0 && errno != EEXIST) {
-        LOG(ERROR) << "Failed to create rdb dir " << data_dir_ << ": "
-                   << strerror(errno);
-      }
-      LoadPersistentData();
-      StartPeriodicSnapshot();
-    }
+    shard_pool = new ShardPool(&pool_);
+    shard_pool->Init(pool_.size());
 
     main_proactor_->DispatchBrief([this] {
       LOG(INFO) << "Starting ListenSocket...";
@@ -330,66 +237,31 @@ class RedisServer {
   }
 
   void Stop() {
-    if (shard_set) {
-      shard_set->Shutdown();
+    if (shard_pool) {
+      shard_pool->Shutdown();
     }
     pool_.stop();
     main_proactor_->Shutdown();
     isRuning = false;
   }
 
-  void SaveAndStop() {
-    if (enable_rdb_ && isRuning && shard_set) {
-      std::string dir = data_dir_;
-      shard_set->RunBlockingInParallel([&dir](EngineShard* es) {
-        RdbSerializer::SaveShard(es->shard_id(), dir);
-      });
+  size_t ShardCount() const { return pool_.size(); }
+
+  base::UringProactor* MainProactor() { return main_proactor_; }
+
+  static RedisServer* Init(int listen_fd, uint32_t size,
+                           const util::JsonConfig* config = nullptr) {
+    if (!instance_) {
+      instance_ = new RedisServer(listen_fd, size, config);
     }
-    Stop();
+    return instance_;
   }
 
-  std::string_view data_dir() const { return data_dir_; }
+  static RedisServer& Instance() { return *instance_; }
 
-  base::UringProactorPtr MainProactor() { return main_proactor_; }
-
- private:
-  void LoadPersistentData() {
-    std::atomic_bool rdb_ok{true};
-    std::string dir = data_dir_;
-    shard_set->RunBlockingInParallel([&rdb_ok, &dir](EngineShard* es) {
-      if (!RdbSerializer::LoadShard(es->shard_id(), dir)) {
-        rdb_ok.store(false);
-      }
-    });
-    if (!rdb_ok.load()) {
-      LOG(ERROR)
-          << "RDB load failed: refusing to load, starting with empty data";
-    }
-  }
-
-  void StartPeriodicSnapshot() {
-    // 在 shard 0 线程上运行定时快照，保证 Transaction 的 BlockingCounter 协程
-    // 控制器在创建协程的分片线程上挂起/恢复，避免跨线程恢复。
-    shard_set->Add(0, [] {
-      auto snapshot_task = []() -> cppcoro::AsyncTask {
-        auto* cid = CIs->Find("SAVE");
-        ReplyBuilder rb;
-        rb.SetSendCallback([](std::vector<std::string>&&) {});
-        auto proactor = shard_set->pool()->at(0);
-        while (true) {
-          co_await proactor->ArmPeriodicTimer(kSnapshotIntervalMs);
-          util::intrusive_ptr<Transaction> txn{new Transaction(cid)};
-          std::vector<std::string_view> save_args = {"SAVE"};
-          txn->InitByArgs(&namespaces->GetDefaultNamespace(), 0,
-                          ::cmn::CmdArgList(save_args));
-          CommandContext cmd_cntx(txn, cid, &rb);
-          co_await cid->Invoke(&cmd_cntx, ::cmn::CmdArgList(save_args));
-          rb.Flush();
-        }
-        co_return;
-      };
-      snapshot_task();
-    });
+  static void Destroy() {
+    delete instance_;
+    instance_ = nullptr;
   }
 
  private:
@@ -422,20 +294,18 @@ class RedisServer {
     co_return;
   }
 
-  auto NextProactor() -> base::UringProactorPtr {
+  auto NextProactor() -> base::UringProactor* {
     NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
     return pool_[NextProIndex_];
   }
 
   ssize_t NextProIndex_ = 0;
-  base::UringProactorPtr main_proactor_;
+  base::UringProactor* main_proactor_ = nullptr;
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
   bool isRuning = false;
 
-  bool enable_rdb_{true};
-  std::string data_dir_{"./.rdb"};
-  static constexpr uint64_t kSnapshotIntervalMs = 3'000;
+  inline static RedisServer* instance_ = nullptr;
 };
 
 }  // namespace dfly

@@ -1,5 +1,3 @@
-
-
 #pragma once
 
 #include <glog/logging.h>
@@ -14,9 +12,9 @@
 #include "cppcoro/task.hpp"
 #include "detail/common_types.hpp"
 #include "detail/conn_context.hpp"
-#include "net/uring_proactor.hpp"
+#include "io/uring_proactor.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "sharding/engine_shard_set.hpp"
+#include "sharding/shard_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 
 namespace dfly {
@@ -30,15 +28,13 @@ class PipelineSquasher {
  public:
   using SendCallback = ReplyBuilder::SendCallback;
 
-  PipelineSquasher() : ns_(nullptr), db_(0), proactor_(nullptr) {}
+  PipelineSquasher() : db_(0), proactor_(nullptr) {}
 
-  void Init(const Namespace* ns, DbIndex db, SendCallback send_cb,
-            base::UringProactor* proactor) {
-    ns_ = ns;
+  void Init(DbIndex db, SendCallback send_cb, base::UringProactor* proactor) {
     db_ = db;
     proactor_ = proactor;
-    DCHECK(shard_set);
-    dispatched_.resize(shard_set->size());
+    DCHECK(shard_pool);
+    dispatched_.resize(shard_pool->size());
     send_rb_.SetSendCallback(std::move(send_cb));
   }
 
@@ -48,11 +44,9 @@ class PipelineSquasher {
   struct ShardDispatch {
     struct Entry {
       const CommandId* cid;
-      ::cmn::CmdArgList args;  // 指向接收缓冲区
-      KeyIndex key_index;  // TrySquash 预计算，复用给 local_tx->InitByArgs
+      ::dfly::CmdArgList args;  // 指向接收缓冲区
       std::vector<std::string> replies;
-      Entry(const CommandId* c, ::cmn::CmdArgList a, KeyIndex ki)
-          : cid(c), args(a), key_index(ki) {}
+      Entry(const CommandId* c, ::dfly::CmdArgList a) : cid(c), args(a) {}
       Entry(const Entry&) = default;
       Entry& operator=(const Entry&) = default;
       Entry(Entry&&) = default;
@@ -76,7 +70,6 @@ class PipelineSquasher {
   cppcoro::task<void> ExecuteStandalone(const QCmd& q);
   cppcoro::task<void> SwitchToLoop();
 
-  const Namespace* ns_;
   DbIndex db_;
   ReplyBuilder send_rb_;
   base::UringProactor* proactor_;

@@ -47,8 +47,6 @@ uint64_t SmallString::HashCode() const {
 }
 
 void SmallString::swap(SmallString& o) noexcept {
-  // 对象为平凡布局（仅 size_t 与 union，无 vptr、无自引用），
-  // 直接交换整个字节表示即可，内联与堆外指针均被正确转移。
   char tmp[sizeof(SmallString)];
   memcpy(tmp, this, sizeof(SmallString));
   memcpy(this, &o, sizeof(SmallString));
@@ -65,17 +63,14 @@ void SmallString::Reset() {
 
 void SmallString::MoveFrom(SmallString&& o) noexcept {
   if (o.is_inline()) {
-    // 内联：连同尾随 NUL 一并拷贝。
     size_ = o.size_;
     memcpy(u_.inline_, o.u_.inline_, o.size_ + 1);
   } else {
-    // 堆外：直接转移指针与容量，O(1)。
     size_ = o.size_;
     u_.heap_.ptr_ = o.u_.heap_.ptr_;
     u_.heap_.cap_ = o.u_.heap_.cap_;
   }
 
-  // 源对象归零为空内联状态，析构时不释放已转移的内存。
   o.size_ = 0;
   o.u_.inline_[0] = '\0';
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -16,7 +18,8 @@ class TxQueue {
   using Iterator = uint32_t;
   enum { kEnd = Iterator(-1) };
 
-  explicit TxQueue(PMR_NS::memory_resource* mr = PMR_NS::get_default_resource())
+  explicit TxQueue(
+      std::pmr::memory_resource* mr = std::pmr::get_default_resource())
       : vec_(mr) {}
   ~TxQueue();
 
@@ -31,22 +34,20 @@ class TxQueue {
   size_t Size() const;
   bool Empty() const { return head_ == kEnd; }
 
-  // 队首节点迭代器；空队列返回 kEnd。SCA 扫描用：从队首沿 next 遍历，
-  // 队列按 txid 有序，遍历顺序即串行化顺序。
   Iterator Head() const { return head_; }
-  // 迭代器指向的事务节点（调用方保证 it != kEnd）。
-  util::intrusive_ptr<Transaction> At(Iterator it) const {
+
+  const util::intrusive_ptr<Transaction>& At(Iterator it) const {
     DCHECK(it != kEnd) << "At: kEnd is not a valid node";
     return vec_[it].trans;
   }
-  // 迭代器的后继节点；已到队尾返回 kEnd。
+
   Iterator Next(Iterator it) const {
     DCHECK(it != kEnd) << "Next: kEnd has no successor";
     return vec_[it].next;
   }
   bool IsInFreeList(Iterator it) const;
   bool IsInUsedList(Iterator it) const;
-  // friend std::ostream& operator<<(std::ostream& os, const TxQueue& queue);
+
   std::string PrintTxLock() const;
   std::string PrintFreeList() const;
   std::string PrintUsedList() const;
@@ -62,7 +63,7 @@ class TxQueue {
     ~Node();
   };
 
-  std::vector<Node, PMR_NS::polymorphic_allocator<Node>> vec_;
+  std::vector<Node, std::pmr::polymorphic_allocator<Node>> vec_;
   uint32_t tail_ = kEnd;
   uint32_t head_ = kEnd;
   uint32_t free_head_ = kEnd;

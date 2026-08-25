@@ -16,9 +16,6 @@
 
 namespace dfly {
 
-// 每个 shard 线程独立的 mimalloc heap（定义见 sharding/engine_shard.cpp）。
-// 用于 CompactObj 等数据对象的专用分配；非 shard 线程下为 nullptr，
-// mi_heap_malloc 会自动回退到默认 heap，行为等价于 mi_malloc。
 extern thread_local mi_heap_t* data_heap;
 
 using CompactObjType = unsigned;
@@ -183,11 +180,10 @@ class CompactObj {
         return {};
     }
   }
-  std::string_view GetSlice(std::string* scratch) const {
+  // 仅返回字符串形态。整数请走 IsInt()/AsInt()，不走这里（避免临时 string）。
+  std::string_view GetSlice() const {
+    DCHECK_NE(tag_, INT_TAG);
     switch (tag_) {
-      case INT_TAG:
-        *scratch = std::to_string(u_.ival_);
-        return *scratch;
       case STR_TAG:
         return u_.str_.view();
       case TTL_STR_TAG:

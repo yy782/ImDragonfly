@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "detail/memory_resource.hpp"
+#include "util/mi_memory_resource.hpp"
 
 namespace util {
 
@@ -20,8 +20,8 @@ class mpmc_queue {
   using value_type = T;
 
   // capacity 必须是 >= 2 的 2 的幂
-  explicit mpmc_queue(size_t capacity, PMR_NS::memory_resource* mr =
-                                           PMR_NS::get_default_resource())
+  explicit mpmc_queue(size_t capacity, std::pmr::memory_resource* mr =
+                                           std::pmr::get_default_resource())
       : buffer_(nullptr),
         capacity_(capacity),
         buffer_mask_(capacity - 1),
@@ -121,7 +121,7 @@ class mpmc_queue {
     unsigned char pad[64];
   };
 
-  static cell_t* AllocCells(size_t n, PMR_NS::memory_resource* mr) {
+  static cell_t* AllocCells(size_t n, std::pmr::memory_resource* mr) {
     void* p = mr->allocate(n * sizeof(cell_t), alignof(cell_t));
     return static_cast<cell_t*>(p);
   }
@@ -135,7 +135,7 @@ class mpmc_queue {
   cacheline_pad pad2_;
   std::atomic<size_t> dequeue_pos_{0};
   cacheline_pad pad3_;
-  PMR_NS::memory_resource* mr_ = nullptr;
+  std::pmr::memory_resource* mr_ = nullptr;
 };
 
 }  // namespace util

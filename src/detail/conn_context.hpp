@@ -5,17 +5,14 @@
 #include <memory>
 
 #include "cppcoro/task.hpp"
-#include "detail/common.hpp"
-#include "net/uring_proactor.hpp"
+#include "detail/common_types.hpp"
+#include "io/uring_proactor.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "sharding/db_slice.hpp"
-#include "sharding/engine_shard_set.hpp"
 #include "util/intrusive_ptr.hpp"
 namespace dfly {
 
 class Connection;
 class Transaction;
-class EngineShard;
 class PipelineSquasher;
 
 class ConnectionContext {
@@ -23,7 +20,6 @@ class ConnectionContext {
   ConnectionContext() = default;
   ConnectionContext& operator=(const ConnectionContext& o) {
     owner_ = o.owner_;
-    ns_ = o.ns_;
     index_ = o.index_;
     return *this;
   }
@@ -34,15 +30,15 @@ class ConnectionContext {
   template <typename Cb>
   void AddWatchKey(std::string_view key, Cb&& cb);
 
-  const Namespace* GetNamespace() const { return ns_; }
   DbIndex GetDbIndex() const { return index_; }
+
+  void NotifyClose() { owner_.reset(); }
 
  private:
   friend class RedisSession;
-  ConnectionContext(RedisSessionPtr owner, Namespace* ns, DbIndex index)
-      : owner_(owner), ns_(ns), index_(index) {}
+  ConnectionContext(RedisSessionPtr owner, DbIndex index)
+      : owner_(owner), index_(index) {}
   RedisSessionPtr owner_;
-  Namespace* ns_;
   DbIndex index_;
 };
 

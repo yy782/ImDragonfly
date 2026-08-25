@@ -1,16 +1,3 @@
-// ============================================================================
-// shard.cpp —— 分片线程调度实现（独立设计）
-//
-// DriveQueue（队首引理 + 投递事务的乱序执行）与 MaybeDriveUnblocked（轻量
-// SCA）共同构成论文的调度推进机制：
-//   - 队首引理：每分片只需检查队首——队首已放行（armed）即执行并出队，
-//     反复推进直到队首未放行（被其它分片调度时序卡住）；
-//   - 乱序执行：投递的本分片事务若已持锁（kUncontended，拿锁成功即无竞争），
-//     即使不在队首也可直接执行（此时已持有锁，且队列中无更早序者会与其
-//     冲突）；
-//   - SCA：队首被卡且队列堆积到高水位时，用写集/读集位数组扫描队内事务，
-//     找出已全分区就绪且与已扫描者无锁冲突的事务提前执行。
-// ============================================================================
 #include "sharding/shard.hpp"
 
 #include <glog/logging.h>
@@ -29,8 +16,7 @@ thread_local Shard* Shard::shard_ = nullptr;
 void Shard::InitThreadLocal(base::UringProactor* pb) {
   DCHECK_EQ(data_heap, nullptr);
   data_heap = mi_heap_new();
-  void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(Shard),
-                                     alignof(Shard));
+  void* ptr = mi_heap_malloc_aligned(data_heap, sizeof(Shard), alignof(Shard));
   shard_ = new (ptr) Shard(pb, data_heap);
   InitTLStatelessAllocMR(shard_->memory_resource());
 }
@@ -47,41 +33,37 @@ void Shard::DestroyThreadLocal() {
 }
 
 Shard::Shard(base::UringProactor* pb, mi_heap_t* heap)
-    : proactor_(pb), shard_id_(pb->GetPoolIndex()), mi_resource_(heap),
-      storage_(shard_id_, this), txq_(&mi_resource_) {}
+    : proactor_(pb),
+      shard_id_(pb->GetPoolIndex()),
+      mi_resource_(heap),
+      storage_(shard_id_, this),
+      txq_(&mi_resource_) {}
 
 void Shard::DriveQueue(util::intrusive_ptr<Transaction> tx) {
   const ShardId sid = shard_id_;
 
-  // 1) 投递事务的放行：本分片尚未放行（其它分片未调度完）直接返回，由后续
-  //    驱动（Distribute 投递 / 队首链）接手；已放行且已持锁（kUncontended，即
-  //    锁无竞争）者允许在第 3 步无视队首提前执行（乱序执行）。
-  if (tx && !tx->IsAllowedOn(sid)) return;
-  const bool tx_allowed = tx && tx->AllowOnIf(sid, Transaction::kUncontended);
+  const bool tx_ready = tx && tx->AllowOnIf(sid, Transaction::kUncontended);
 
-  // 2) 队首引理（论文 §2.1）：队首已放行即执行，直到队首未放行。
-  //    注意：无条件放行适用于任何队首（无论竞争与否）——"已入队且已放行
-  //    的队首"必然可以安全执行（它是队列中最老者，锁的授予按序进行）。
   while (!txq_.Empty()) {
     util::intrusive_ptr<Transaction> head = txq_.Front();
-    if (!head->AllowOn(sid)) break;
-    if (head == tx) tx = nullptr;  // 投递事务已在队首链中执行
-    committed_txid_ = std::max(committed_txid_, head->txid());
+    const bool should_run = (head == tx && tx_ready) || head->AllowOn(sid);
+    if (!should_run) break;
+    if (head == tx) tx = nullptr;
+    committed_txid_ = head->txid();
     head->ExecuteOnShard(*this);
   }
 
-  // 3) 投递事务已放行（无竞争）且未在队首循环中执行 → 乱序执行
-  if (tx && tx_allowed) {
-    committed_txid_ = std::max(committed_txid_, tx->txid());
+  if (tx && tx_ready) {
+    // committed_txid_ = tx->txid();
+    //  由于tx是乱序执行的，所以txid会比队头大，所以commited_txid_会更大，加上committed_txid_
+    //  = tx->txid();的判断的话 committed_txid_要加上std::max比较的逻辑
     tx->ExecuteOnShard(*this);
   }
 
-  // 4) 队列堆积时尝试 SCA
   MaybeDriveUnblocked();
 }
 
 void Shard::MaybeDriveUnblocked() {
-  // 仅队列堆积到高水位以上才付出扫描代价（SCA 的"选择性"）
   if (txq_.Size() <= kQueueHighWater) return;
 
   std::fill(scg_dx_.begin(), scg_dx_.end(), 0);
@@ -102,7 +84,8 @@ void Shard::MaybeDriveUnblocked() {
       if (is_read) {
         if (scg_dx_[word] & mask) conflict = true;  // 更早者写我读的
       } else {
-        if ((scg_dx_[word] | scg_ds_[word]) & mask) conflict = true;  // 更早者读/写我写的
+        if ((scg_dx_[word] | scg_ds_[word]) & mask)
+          conflict = true;  // 更早者读/写我写的
       }
     }
     for (LockFp fp : largs.fps) {
@@ -128,7 +111,7 @@ void Shard::MaybeDriveUnblocked() {
     if (!tx || tx->IsGlobal()) continue;  // 全局事务走分片锁，不在此判定
 
     if (!tx->IsAllowedOn(shard_id_)) {
-      scan_mark(tx);  // 未就绪：不能执行，但仍计入（保守，防止越过它）
+      scan_mark(tx);  // 未就绪：不能执行，但仍计入
       continue;
     }
     if (!scan_mark(tx)) continue;  // 与更早者冲突，保持阻塞

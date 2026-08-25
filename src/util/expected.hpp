@@ -51,7 +51,7 @@ class expected {
 
   template <typename U>
   expected(U&& u) : has_value_(true) {
-    new (&storage_.value) T(u);
+    new (&storage_.value) T(std::forward<U>(u));
   }
 
   expected(const unexpected<E>& u) : has_value_(false) {

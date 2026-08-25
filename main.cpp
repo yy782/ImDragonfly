@@ -11,11 +11,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <new>
 #include <string>
 #include <thread>
 
-#include "net/fd_wrapper.hpp"
-#include "src/network/redis_server.hpp"
+#include "io/fd_wrapper.hpp"
+#include "src/server/redis_server.hpp"
 #include "src/util/json_config.hpp"
 
 using namespace dfly;
@@ -23,6 +24,12 @@ using namespace dfly;
 // ASAN对协程有误报，注意一下
 
 int main(int argc, char* argv[]) {
+  std::set_new_handler([]() noexcept {
+    std::fputs("out of memory: operator new failed\n", stderr);
+    std::fflush(stderr);
+    std::abort();
+  });
+
   // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
   // <gflags/gflags.h>，所以不可用
 
@@ -46,16 +53,13 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "ImDragonfly server starting...";
   int num = 4;
   uint16_t port = 6379;
-  bool enable_rdb = true;
   std::string config_path;
   util::JsonConfig config;
 
-  // 命令行参数：./imdragonfly [shards] [port] [--no-rdb] [--config <path>]
+  // 命令行参数：./imdragonfly [shards] [port] [--config <path>]
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--no-rdb" || arg == "--no-snapshot") {
-      enable_rdb = false;
-    } else if (arg == "--config") {
+    if (arg == "--config") {
       if (i + 1 < argc) {
         config_path = argv[++i];
       } else {
@@ -81,7 +85,6 @@ int main(int argc, char* argv[]) {
     }
     num = static_cast<int>(config.GetInt("shards", num));
     port = static_cast<uint16_t>(config.GetInt("port", port));
-    enable_rdb = config.GetBool("enable_rdb", enable_rdb);
     cfg = &config;
     LOG(INFO) << "已加载配置文件: " << config_path;
   }
@@ -93,10 +96,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  RedisServer server(listenFd, num, enable_rdb, cfg);
-  LOG(INFO) << "RedisServer initialized with " << num << " shards"
-            << ", rdb=" << (enable_rdb ? "on" : "off");
-  server.Start();
+  RedisServer::Init(listenFd, num, cfg);
+  LOG(INFO) << "RedisServer initialized with " << num << " shards";
+  RedisServer::Instance().Start();
+  RedisServer::Destroy();
 
   LOG(INFO) << "ImDragonfly server shutting down...";
   google::ShutdownGoogleLogging();

@@ -4,8 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "command_layer/cmd_support.hpp"
-#include "command_layer/cmn_types.hpp"
+#include "detail/common_types.hpp"
 
 namespace dfly {
 
@@ -24,18 +23,15 @@ enum CommandOpt : uint32_t {
 }  // namespace CO
 
 class CommandContext;
-struct CommandSpec;  // 命令目录条目（数据行），定义于 command_registry.hpp
+struct CommandSpec;
 
-// 命令描述符：元数据 + 键遍历 + 执行入口，单类内聚。
 class CommandId {
  public:
-  using CmdArgList = ::cmn::CmdArgList;
-  using Arg = ::cmn::Arg;
+  using CmdArgList = ::dfly::CmdArgList;
+  using Arg = ::dfly::Arg;
 
-  // handler 为静态成员 / 自由函数指针，返回命令协程（由调用方 co_await）。
   using Handler = cmd::CoroTask (*)(CommandContext*, CmdArgList);
 
-  // 从命令目录数据行构造（表驱动注册的唯一入口）。
   explicit CommandId(const CommandSpec& spec);
 
   CommandId(CommandId&& o) = default;
@@ -48,34 +44,28 @@ class CommandId {
   uint32_t opt_mask() const { return opt_mask_; }
   int8_t first_key_pos() const { return first_key_; }
   int8_t last_key_pos() const { return last_key_; }
-  unsigned key_step() const { return key_step_; }  // 键步长（0=默认 1）
+  unsigned key_step() const { return unsigned(key_step_); }
 
-  // 键遍历元素：键值 + 在 full_args 中的原始下标。
-  // 键步长是命令级属性（key_step()），对所有键恒定，不随元素携带：
   //   for (const auto& kv : cid->Keys(args)) { kv.key, kv.pos }
-  struct KeyValue {
+  struct KeyPos {
     Arg key;
-    unsigned pos;  // 键在 full_args 中的下标（事务层建 IndexSlice 段用）
+    unsigned pos;  // 键在 full_args 中的下标
   };
 
-  // 键迭代器：按命令的 first/last/step 规则步进遍历参数中的键
-  // （如 MSET 键位于 1, 3, 5...，step 步进即可跳过值位）。
-  // 仅需键遍历：值由命令自身按约定解析，不属于键元数据。
   class KeyIterator {
    public:
     using iterator_category = std::forward_iterator_tag;
-    using value_type = KeyValue;
+    using value_type = KeyPos;
     using difference_type = std::ptrdiff_t;
-    using pointer = const KeyValue*;
-    using reference = KeyValue;
+    using pointer = const KeyPos*;
+    using reference = KeyPos;
 
     reference operator*() const { return {args_[pos_], pos_}; }
     Arg key() const { return args_[pos_]; }
 
     KeyIterator& operator++() {
       pos_ += step_;
-      if (pos_ >= end_)
-        pos_ = end_;
+      if (pos_ >= end_) pos_ = end_;
       return *this;
     }
     KeyIterator operator++(int) {
@@ -84,22 +74,22 @@ class CommandId {
       return tmp;
     }
     bool operator==(const KeyIterator& o) const {
-      return args_.data() == o.args_.data() && pos_ == o.pos_;
+      return pos_ == o.pos_;  // for遍历直接pos对比就可以了，比较data多余
     }
     bool operator!=(const KeyIterator& o) const { return !(*this == o); }
 
    private:
     friend class CommandId;
-    KeyIterator(cmn::CmdArgList args, unsigned pos, unsigned end, unsigned step)
+    KeyIterator(::dfly::CmdArgList args, unsigned pos, unsigned end,
+                unsigned step)
         : args_(args), pos_(pos), end_(end), step_(step) {}
 
-    cmn::CmdArgList args_;
+    ::dfly::CmdArgList args_;
     unsigned pos_;
     unsigned end_;
     unsigned step_;
   };
 
-  // Keys() 返回的范围，支持 range-for 与显式迭代器访问。
   class KeyRange {
    public:
     KeyIterator begin() const { return begin_; }
@@ -113,19 +103,16 @@ class CommandId {
 
   // 遍历参数中的键（含原始下标与步长）：
   //   for (const auto& kv : cid->Keys(args)) { ... }
-  KeyRange Keys(cmn::CmdArgList args) const;
+  KeyRange Keys(::dfly::CmdArgList args) const;
 
-  // 执行命令：返回命令协程，由调用方 co_await。
-  cmd::CoroTask Invoke(CommandContext* cmd_cntx, CmdArgList args) const {
-    return handler_(cmd_cntx, args);
-  }
+  cmd::CoroTask Invoke(CommandContext* cmd_cntx, CmdArgList args) const;
 
  private:
   std::string name_;
   uint32_t opt_mask_;
   int8_t first_key_;
   int8_t last_key_;
-  int8_t key_step_{1};  // 键在参数中的步长（如 MSET 为 2），0 表示默认 1
+  int8_t key_step_{1};
   Handler handler_{nullptr};
 };
 

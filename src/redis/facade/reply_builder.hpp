@@ -3,6 +3,7 @@
 #include <glog/logging.h>
 
 #include <charconv>
+#include <cstdio>
 #include <exception>
 #include <string>
 #include <vector>
@@ -12,8 +13,6 @@ namespace dfly {
 
 class ReplyBuilder {
  public:
-  // 回调契约：接收一批已编码回复（而非单条）。ReplyBuilder 只缓冲，
-  // 何时把一批交给上层（发送/收集）由调用方通过 Flush() 决定。
   using SendCallback = util::function<void(std::vector<std::string>&&)>;
 
   ReplyBuilder() = default;
@@ -25,7 +24,6 @@ class ReplyBuilder {
   void SetSendCallback(SendCallback cb) { send_cb_ = std::move(cb); }
   ~ReplyBuilder() { DCHECK_EQ(std::uncaught_exceptions(), 0); }
 
-  // 提交一条已构建好的原始 RESP 字符串（回放用）。仅缓冲，Flush 时才交给回调。
   void SendRaw(std::string s) { pending_.push_back(std::move(s)); }
 
   void BuildSimpleString(std::string_view s) {
@@ -59,7 +57,6 @@ class ReplyBuilder {
 
   void BuildBulkString(std::string_view s) {
     std::string r;
-    // 预留 "$" + len + "\r\n" + data + "\r\n" 的空间，避免 append 中途扩容。
     r.reserve(s.size() + 32);
     AppendBulkStringRaw(r, s);
     pending_.push_back(std::move(r));
@@ -67,8 +64,26 @@ class ReplyBuilder {
 
   void BuildNullBulkString() { pending_.emplace_back("$-1\r\n"); }
 
-  // 直接产出完整 "+OK\r\n" 常量回复（SSO 内联，无堆分配、无逐字节拼装），
-  // 用于 SET 等高频成功路径。
+  void BuildDouble(double d) {
+    char buf[64];
+    int len = std::snprintf(buf, sizeof(buf), "%.17g", d);
+    std::string r;
+    r.append("$");
+    AppendInt(r, static_cast<size_t>(len));
+    r.append("\r\n");
+    r.append(buf, static_cast<size_t>(len));
+    r.append("\r\n");
+    pending_.push_back(std::move(r));
+  }
+
+  void StartArray(size_t n) {
+    std::string r;
+    r.append("*");
+    AppendInt(r, n);
+    r.append("\r\n");
+    pending_.push_back(std::move(r));
+  }
+
   void BuildOk() { pending_.emplace_back("+OK\r\n"); }
 
   void BuildArray(const std::vector<std::string>& items) {
@@ -82,7 +97,6 @@ class ReplyBuilder {
     pending_.push_back(std::move(r));
   }
 
-  // 把当前缓冲的一批回复一次性交给回调。空批不回调。
   void Flush() {
     if (pending_.empty()) return;
     if (send_cb_) send_cb_(std::move(pending_));
@@ -92,7 +106,6 @@ class ReplyBuilder {
   bool empty() const { return pending_.empty(); }
 
  private:
-  // 将整数写进 dst，避免 std::to_string 产生临时 string 分配。
   static void AppendInt(std::string& dst, size_t n) {
     char buf[24];
     auto res = std::to_chars(buf, buf + sizeof(buf), n);

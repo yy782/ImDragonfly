@@ -31,12 +31,9 @@ if [ ! -x "$IMDRAGONFLY_BIN" ]; then
 fi
 
 # ── 启动 ImDragonfly ──────────────────────────────────────
-# 一般集成测试（test_all/test_pipeline 等）连接本服务器，不应加载 RDB 快照，
-# 避免磁盘上遗留的 dump 文件污染测试数据，故加 --no-rdb。
-# 注意 --no-rdb 必须放在位置参数（shards/port）之后，见 main.cpp 的解析逻辑。
 mkdir -p "$LOG_DIR"
-echo "Starting ImDragonfly ($IMDRAGONFLY_BIN $THREADS $PORT --no-rdb)..."
-"$IMDRAGONFLY_BIN" "$THREADS" "$PORT" --no-rdb &
+echo "Starting ImDragonfly ($IMDRAGONFLY_BIN $THREADS $PORT)..."
+"$IMDRAGONFLY_BIN" "$THREADS" "$PORT" &
 IMDRAGONFLY_PID=$!
 
 cleanup() {

@@ -7,8 +7,6 @@
 #include <coroutine>
 #include <type_traits>
 
-#include "detail/on_scope_exit.hpp"
-
 namespace cppcoro {
 class async_scope {
  public:

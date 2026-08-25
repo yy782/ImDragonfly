@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include "sharding/shard.hpp"
 #include "transaction_layer/transaction.hpp"
 namespace dfly {
 
@@ -193,7 +194,7 @@ bool TxQueue::IsInUsedList(Iterator it) const {
 
 std::string TxQueue::PrintTxLock() const {
   std::string str;
-  auto* e = EngineShard::tlocal();
+  auto* e = Shard::tlocal();
   auto sid = e->shard_id();
   str += "\n====== TxQueue ======\n";
   str += "shard_id: " + std::to_string(sid) + "\n";

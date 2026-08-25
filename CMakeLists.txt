@@ -33,8 +33,8 @@ endif()
 include(cmake/third_party.cmake)
 option(USE_ASAN "Enable AddressSanitizer" OFF)
 if(USE_ASAN)
-    set(ASAN_FLAGS 
-        -fsanitize=address 
+    set(ASAN_FLAGS
+        -fsanitize=address
         -fno-omit-frame-pointer
     )
     set(ASAN_LDFLAGS -fsanitize=address)
@@ -46,6 +46,12 @@ else()
     set(ASAN_LDFLAGS "")
     message(STATUS "AddressSanitizer is DISABLED")
 endif()
+
+# 全局禁用异常：项目设计原则是 noexcept-only，所有代码不得依赖异常机制。
+# -fno-exceptions 会让 throw 语句编译为 std::terminate 调用，避免误用。
+# 单元测试 target（gtest 依赖 EXPECT_THROW 等宏）在 test/CMakeLists.txt
+# 中用 -fexceptions 单独覆盖。
+add_compile_options(-fno-exceptions)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CXX_WARNING_OPTIONS
@@ -71,11 +77,11 @@ else()
         -Wextra
         -Wno-error              # 警告不升级为错误
         -Wno-shadow
-        -Wno-conversion   
+        -Wno-conversion
     )
-endif()    
+endif()
 
-add_subdirectory(src/net)
+add_subdirectory(src/io)
 
 add_subdirectory(src)
 
@@ -93,6 +99,6 @@ target_compile_options(imdragonfly PRIVATE ${CXX_WARNING_OPTIONS})
 
 target_link_libraries(imdragonfly PRIVATE
     imdragonfly_lib
-    net
+    io
     third_party_deps
 )

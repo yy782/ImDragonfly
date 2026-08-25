@@ -1,7 +1,3 @@
-// Copyright 2026, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
-
 #pragma once
 
 #include <glog/logging.h>
@@ -10,23 +6,22 @@
 #include <coroutine>
 #include <variant>
 
-#include "command_layer/cmn_types.hpp"
 #include "cppcoro/task.hpp"
+#include "detail/common_types.hpp"
 #include "detail/conn_context.hpp"
-#include "net/uring_proactor.hpp"
-#include "sharding/engine_shard.hpp"
-#include "sharding/op_status.hpp"
+#include "detail/op_status.hpp"
+#include "io/uring_proactor.hpp"
+#include "sharding/shard.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/function.hpp"
 #include "util/thread.hpp"
 
 namespace dfly::cmd {
-using ::cmn::CmdArgList;
+using ::dfly::CmdArgList;
 template <typename RT>
-using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, EngineShard*)>;
+using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, Shard*)>;
 
-auto SingleHopT(const auto& f)
-    -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {
+auto SingleHopT(auto& f) -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {
   return f;
 }
 
@@ -55,7 +50,7 @@ struct CoroTask {
     }
   }
 
-  bool await_ready() const noexcept { return false; }  // modify
+  bool await_ready() const noexcept { return false; }
   void await_suspend(std::coroutine_handle<> h) noexcept;
   void await_resume() const noexcept {}
 
@@ -87,7 +82,7 @@ class Coro {
       if (!cont) {
         LOG(FATAL) << " cont is null";
       }
-      return cont;  // 交给压缩器来将协程投放到正确的线程上
+      return cont;
     }
     void await_resume() const noexcept {}
   };
@@ -106,11 +101,11 @@ class Coro {
     bool await_ready() const noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<Coro> coro) noexcept {
-      cmd_cntx_->tx()->SingleHopAsync(*this, coro);
+      cmd_cntx_->tx()->Run(*this, coro);
       return true;
     }
 
-    void operator()(Transaction* tx, EngineShard* es) const {
+    void operator()(Transaction* tx, Shard* es) const {
       result_ = callback_(tx, es);
       return;
     }

@@ -1,28 +1,36 @@
+#include "detail/intent_lock.hpp"
+
 #include <gtest/gtest.h>
 
-#include "src/sharding/db_slice.hpp"
-#include "src/sharding/engine_shard.hpp"
+#include <memory>
+
+#include "detail/common_types.hpp"
+#include "sharding/shard.hpp"
+#include "sharding/shard_storage.hpp"
 
 using namespace dfly;
 
 class IntentLockTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    EngineShard::InitThreadLocal(&loop_);
-    slice_ = std::make_unique<DbSlice>(0, false, EngineShard::tlocal());
+    Shard::InitThreadLocal(&loop_);
+    store_ = std::make_unique<ShardStorage>(0, Shard::tlocal());
   }
 
-  void TearDown() override { EngineShard::DestroyThreadLocal(); }
+  void TearDown() override {
+    store_.reset();
+    Shard::DestroyThreadLocal();
+  }
 
   bool Acquire(IntentLock::Mode mode, const KeyLockArgs& args) {
-    if (!slice_->Acquire(mode, args)) {
-      slice_->Release(mode, args);
+    if (!store_->Acquire(mode, args)) {
+      store_->Release(mode, args);
       return false;
     }
     return true;
   }
   base::UringProactor loop_;
-  std::unique_ptr<DbSlice> slice_;
+  std::unique_ptr<ShardStorage> store_;
 };
 
 // 测试1: 多 fp 锁获取 → 释放 → 再加锁 (读写锁都需要测试)
@@ -43,17 +51,17 @@ TEST_F(IntentLockTest, AcquireReleaseReacquire) {
   // 共享锁 — 2/3/4 个 fp 各测一轮
   for (auto* args : {&args_ab, &args_abc, &args_abcd}) {
     EXPECT_TRUE(Acquire(IntentLock::SHARED, *args));
-    slice_->Release(IntentLock::SHARED, *args);
+    store_->Release(IntentLock::SHARED, *args);
     EXPECT_TRUE(Acquire(IntentLock::SHARED, *args));
-    slice_->Release(IntentLock::SHARED, *args);
+    store_->Release(IntentLock::SHARED, *args);
   }
 
   // 排他锁 — 2/3/4 个 fp 各测一轮
   for (auto* args : {&args_ab, &args_abc, &args_abcd}) {
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, *args));
-    slice_->Release(IntentLock::EXCLUSIVE, *args);
+    store_->Release(IntentLock::EXCLUSIVE, *args);
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, *args));
-    slice_->Release(IntentLock::EXCLUSIVE, *args);
+    store_->Release(IntentLock::EXCLUSIVE, *args);
   }
 }
 
@@ -64,11 +72,11 @@ TEST_F(IntentLockTest, SharedExclusiveMutualExclusion) {
     KeyLockArgs args = {0, {10, 20}};
     EXPECT_TRUE(Acquire(IntentLock::SHARED, args));
     EXPECT_FALSE(Acquire(IntentLock::EXCLUSIVE, args));
-    slice_->Release(IntentLock::SHARED, args);
+    store_->Release(IntentLock::SHARED, args);
 
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, args));
     EXPECT_FALSE(Acquire(IntentLock::SHARED, args));
-    slice_->Release(IntentLock::EXCLUSIVE, args);
+    store_->Release(IntentLock::EXCLUSIVE, args);
   }
 
   // 3 个 fp
@@ -76,11 +84,11 @@ TEST_F(IntentLockTest, SharedExclusiveMutualExclusion) {
     KeyLockArgs args = {0, {100, 200, 300}};
     EXPECT_TRUE(Acquire(IntentLock::SHARED, args));
     EXPECT_FALSE(Acquire(IntentLock::EXCLUSIVE, args));
-    slice_->Release(IntentLock::SHARED, args);
+    store_->Release(IntentLock::SHARED, args);
 
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, args));
     EXPECT_FALSE(Acquire(IntentLock::SHARED, args));
-    slice_->Release(IntentLock::EXCLUSIVE, args);
+    store_->Release(IntentLock::EXCLUSIVE, args);
   }
 
   // 4 个 fp
@@ -88,11 +96,11 @@ TEST_F(IntentLockTest, SharedExclusiveMutualExclusion) {
     KeyLockArgs args = {0, {1000, 2000, 3000, 4000}};
     EXPECT_TRUE(Acquire(IntentLock::SHARED, args));
     EXPECT_FALSE(Acquire(IntentLock::EXCLUSIVE, args));
-    slice_->Release(IntentLock::SHARED, args);
+    store_->Release(IntentLock::SHARED, args);
 
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, args));
     EXPECT_FALSE(Acquire(IntentLock::SHARED, args));
-    slice_->Release(IntentLock::EXCLUSIVE, args);
+    store_->Release(IntentLock::EXCLUSIVE, args);
   }
 }
 
@@ -115,10 +123,10 @@ TEST_F(IntentLockTest, PartialLockConflict) {
       KeyLockArgs test = {0, {fp}};
       EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, test))
           << "fp=" << fp << " should be free after rollback";
-      slice_->Release(IntentLock::EXCLUSIVE, test);
+      store_->Release(IntentLock::EXCLUSIVE, test);
     }
 
-    slice_->Release(IntentLock::EXCLUSIVE, A_args);
+    store_->Release(IntentLock::EXCLUSIVE, A_args);
   }
 
   // --- 场景2: SHARED 持有者阻挡 EXCLUSIVE, 冲突在 i=2 ---
@@ -136,10 +144,10 @@ TEST_F(IntentLockTest, PartialLockConflict) {
       KeyLockArgs test = {0, {fp}};
       EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, test))
           << "fp=" << fp << " should be free after rollback";
-      slice_->Release(IntentLock::EXCLUSIVE, test);
+      store_->Release(IntentLock::EXCLUSIVE, test);
     }
 
-    slice_->Release(IntentLock::SHARED, A_args);
+    store_->Release(IntentLock::SHARED, A_args);
   }
 
   // --- 场景3: 完全不重叠, B 应成功 (无冲突路径) ---
@@ -150,8 +158,8 @@ TEST_F(IntentLockTest, PartialLockConflict) {
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, A_args));
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, B_args));
 
-    slice_->Release(IntentLock::EXCLUSIVE, B_args);
-    slice_->Release(IntentLock::EXCLUSIVE, A_args);
+    store_->Release(IntentLock::EXCLUSIVE, B_args);
+    store_->Release(IntentLock::EXCLUSIVE, A_args);
   }
 
   // --- 场景4: 共享锁重叠, 双方都成功 ---
@@ -162,8 +170,8 @@ TEST_F(IntentLockTest, PartialLockConflict) {
     EXPECT_TRUE(Acquire(IntentLock::SHARED, A_args));
     EXPECT_TRUE(Acquire(IntentLock::SHARED, B_args));
 
-    slice_->Release(IntentLock::SHARED, B_args);
-    slice_->Release(IntentLock::SHARED, A_args);
+    store_->Release(IntentLock::SHARED, B_args);
+    store_->Release(IntentLock::SHARED, A_args);
   }
 
   // --- 场景5: EXCLUSIVE 冲突在 i=3, 回滚后释放 A, B 重试成功 ---
@@ -181,13 +189,13 @@ TEST_F(IntentLockTest, PartialLockConflict) {
       KeyLockArgs test = {0, {fp}};
       EXPECT_TRUE(Acquire(IntentLock::SHARED, test))
           << "fp=" << fp << " should be free after rollback";
-      slice_->Release(IntentLock::SHARED, test);
+      store_->Release(IntentLock::SHARED, test);
     }
 
     // A 释放后, B 重试应成功
-    slice_->Release(IntentLock::EXCLUSIVE, A_args);
+    store_->Release(IntentLock::EXCLUSIVE, A_args);
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, B_args));
-    slice_->Release(IntentLock::EXCLUSIVE, B_args);
+    store_->Release(IntentLock::EXCLUSIVE, B_args);
   }
 
   // --- 场景6: 冲突在 i=0, 验证冲突 fp 计数不膨胀 ---
@@ -205,16 +213,16 @@ TEST_F(IntentLockTest, PartialLockConflict) {
       KeyLockArgs test = {0, {fp}};
       EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, test))
           << "fp=" << fp << " should be free";
-      slice_->Release(IntentLock::EXCLUSIVE, test);
+      store_->Release(IntentLock::EXCLUSIVE, test);
     }
 
     // fp=201 的共享计数不应膨胀: 释放一次共享后即可获取排他锁
-    slice_->Release(IntentLock::SHARED, A_args);
+    store_->Release(IntentLock::SHARED, A_args);
 
     KeyLockArgs test_201 = {0, {201}};
     EXPECT_TRUE(Acquire(IntentLock::EXCLUSIVE, test_201))
         << "fp=201 exclusive should succeed after single shared release";
-    slice_->Release(IntentLock::EXCLUSIVE, test_201);
+    store_->Release(IntentLock::EXCLUSIVE, test_201);
   }
 }
 
@@ -229,9 +237,9 @@ TEST_F(IntentLockTest, MultipleSharedLocks) {
   // 共享锁仍在持有，排他锁应失败
   EXPECT_FALSE(Acquire(IntentLock::EXCLUSIVE, args));
 
-  slice_->Release(IntentLock::SHARED, args);
-  slice_->Release(IntentLock::SHARED, args);
-  slice_->Release(IntentLock::SHARED, args);
+  store_->Release(IntentLock::SHARED, args);
+  store_->Release(IntentLock::SHARED, args);
+  store_->Release(IntentLock::SHARED, args);
 }
 
 // 附加: 不同 fp 集合的锁互不干扰
@@ -247,7 +255,7 @@ TEST_F(IntentLockTest, DifferentFpIsolation) {
   // fp={42,43} 仍被排他锁持有, 其共享锁应失败
   EXPECT_FALSE(Acquire(IntentLock::SHARED, args_a));
 
-  slice_->Release(IntentLock::SHARED, args_b);
-  slice_->Release(IntentLock::SHARED, args_b);
-  slice_->Release(IntentLock::EXCLUSIVE, args_a);
+  store_->Release(IntentLock::SHARED, args_b);
+  store_->Release(IntentLock::SHARED, args_b);
+  store_->Release(IntentLock::EXCLUSIVE, args_a);
 }

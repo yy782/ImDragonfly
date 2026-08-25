@@ -2,8 +2,7 @@
 
 #include <glog/logging.h>
 
-#include <ostream>
-
+#include <string>
 namespace dfly {
 
 class IntentLock {
@@ -17,35 +16,28 @@ class IntentLock {
     return m == SHARED || cnt_[EXCLUSIVE] == 1;
   }
 
-  // bool Check(Mode m) const {
-  //   unsigned s = cnt_[EXCLUSIVE];
-  //   if (s) return false;
+  bool Check(Mode m) const {
+    unsigned s = cnt_[EXCLUSIVE];
+    if (s) return false;
 
-  //   return (m == SHARED) ? true : cnt_[SHARED] == 0;
-  // }
-
-  // bool IsContended() const {
-  //   return (cnt_[EXCLUSIVE] > 1) || (cnt_[EXCLUSIVE] == 1 && cnt_[SHARED] > 0);
-  // }
-
-  // unsigned ContentionScore() const {
-  //   return cnt_[EXCLUSIVE] * 256 + cnt_[SHARED];
-  // }
+    return (m == SHARED) ? true : cnt_[SHARED] == 0;
+  }
 
   void Release(Mode m, unsigned val = 1) {
     DCHECK_GE(cnt_[m], val);
     cnt_[m] -= val;
   }
-
-  bool IsFree() const { return (cnt_[0] | cnt_[1]) == 0; }
+  bool IsFree() const noexcept {
+    return cnt_[SHARED] == 0 && cnt_[EXCLUSIVE] == 0;
+  }
 
   static const char* ModeName(Mode m) {
     return m == SHARED ? "SHARED" : "EXCLUSIVE";
   }
 
-  friend std::ostream& operator<<(std::ostream& o, const IntentLock& lock) {
-    return o << "{SHARED: " << lock.cnt_[0] << ", EXCLUSIVE: " << lock.cnt_[1]
-             << "}";
+  std::string Print() const {
+    return std::string("{SHARED: ") + std::to_string(cnt_[0]) +
+           ", EXCLUSIVE: " + std::to_string(cnt_[1]) + "}";
   }
 
  private:

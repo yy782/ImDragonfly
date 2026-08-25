@@ -1,5 +1,3 @@
-
-
 #pragma once
 
 #include <glog/logging.h>
@@ -13,8 +11,7 @@ class UringSocket {
  public:
   UringSocket() = default;
 
-  UringSocket(std::shared_ptr<UringProactor> p, int fd) noexcept
-      : proactor_(p), fd_(fd) {}
+  UringSocket(UringProactor* p, int fd) noexcept : proactor_(p), fd_(fd) {}
   void RegisterRecvBuf() { recv_buf_idx_ = proactor_->AcquireRegBuf(); }
 
   ~UringSocket() {
@@ -25,7 +22,7 @@ class UringSocket {
   }
 
   int fd() const noexcept { return fd_; }
-  UringProactorPtr Proactor() const noexcept { return proactor_; }
+  UringProactor* Proactor() const noexcept { return proactor_; }
 
   RecvAwaitable AsyncRead(size_t offset = 0) {
     return proactor_->AsyncRecvFixed(fd_, recv_buf_idx_, offset);
@@ -47,7 +44,7 @@ class UringSocket {
   }
 
  private:
-  std::shared_ptr<UringProactor> proactor_ = nullptr;
+  UringProactor* proactor_ = nullptr;
   int fd_ = -1;
   int recv_buf_idx_ = -1;
 };

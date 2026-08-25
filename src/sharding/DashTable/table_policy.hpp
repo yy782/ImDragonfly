@@ -1,17 +1,4 @@
 #pragma once
-
-// ============================================================================
-// table_policy.hpp — PrimeTablePolicy：DashTable 的键/值策略（重写版）
-//
-// 配合重写后的 dash_table.hpp 使用。契约变更点：
-//   * 新增 kStashNum（段尾溢出桶数，缺省 4）；
-//   * Equal 同时支持 (Key, Key) 与 (Key, string_view)；
-//   * 新增恢复策略所需的序列化方法：
-//     WriteKey/WriteValue/ReadKey/ReadValue —— 按 tag 保留类型
-//     （INT / STR / TTL_STR / EMPTY）；ROBJ（list/hash/set/zset 等）
-//     无法通用序列化，返回 false 提示上层改用专用序列化。
-// ============================================================================
-
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -28,7 +15,8 @@ using PrimeKey = CompactKey;
 using PrimeValue = CompactValue;
 
 struct PrimeTablePolicy {
-  enum : uint8_t { kSlotNum = 14, kBucketNum = 56, kStashNum = 4 };
+  // 布局参数必须为 2 的幂
+  enum : uint8_t { kSlotNum = 16, kBucketNum = 64, kStashNum = 4 };
 
   static uint64_t HashFn(const PrimeKey& s) { return s.HashCode(); }
 

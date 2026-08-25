@@ -7,7 +7,7 @@ using namespace dfly;
 class DbTableTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    table_ = std::make_unique<DbTable>(PMR_NS::get_default_resource(), 0);
+    table_ = std::make_unique<DbTable>(std::pmr::get_default_resource());
   }
 
   void TearDown() override { table_.reset(); }
@@ -32,40 +32,22 @@ TEST_F(DbTableTest, FindNonExistent) {
 
 TEST_F(DbTableTest, Erase) {
   auto insert_it = table_->prime().InsertNew("key1", PrimeValue{});
-  EXPECT_EQ(table_->prime().size(), 1);
+  EXPECT_EQ(table_->prime().Size(), 1);
 
   table_->prime().Erase(insert_it);
-  EXPECT_EQ(table_->prime().size(), 0);
+  EXPECT_EQ(table_->prime().Size(), 0);
 
   auto it = table_->prime().Find("key1");
   EXPECT_TRUE(it.is_done());
 }
 
-TEST_F(DbTableTest, Clear) {
-  for (int i = 0; i < 100; ++i) {
-    table_->prime().InsertNew("key" + std::to_string(i), PrimeValue{});
-  }
-  EXPECT_EQ(table_->prime().size(), 100);
-
-  table_->prime().Clear();
-  EXPECT_EQ(table_->prime().size(), 0);
-  EXPECT_TRUE(table_->prime().Empty());
-}
-
 TEST_F(DbTableTest, SizeGrowth) {
-  EXPECT_EQ(table_->prime().size(), 0);
+  EXPECT_EQ(table_->prime().Size(), 0);
 
   for (int i = 0; i < 1000; ++i) {
     table_->prime().InsertNew("key" + std::to_string(i), PrimeValue{});
   }
-  EXPECT_EQ(table_->prime().size(), 1000);
-}
-
-TEST_F(DbTableTest, IndexAccess) {
-  EXPECT_EQ(table_->index(), 0);
-
-  DbTable table2(PMR_NS::get_default_resource(), 5);
-  EXPECT_EQ(table2.index(), 5);
+  EXPECT_EQ(table_->prime().Size(), 1000);
 }
 
 TEST_F(DbTableTest, EmptyCheck) {
@@ -79,7 +61,7 @@ TEST_F(DbTableTest, LargeInsert) {
   for (int i = 0; i < kNumElements; ++i) {
     table_->prime().InsertNew("key" + std::to_string(i), PrimeValue{});
   }
-  EXPECT_EQ(table_->prime().size(), kNumElements);
+  EXPECT_EQ(table_->prime().Size(), kNumElements);
 
   for (int i = 0; i < kNumElements; ++i) {
     auto it = table_->prime().Find("key" + std::to_string(i));
@@ -100,7 +82,7 @@ TEST_F(DbTableTest, MultipleOperations) {
   for (auto& it : iterators) {
     table_->prime().Erase(it);
   }
-  EXPECT_EQ(table_->prime().size(), 50);
+  EXPECT_EQ(table_->prime().Size(), 50);
 
   for (int i = 1; i < 100; i += 2) {
     auto it = table_->prime().Find("key" + std::to_string(i));

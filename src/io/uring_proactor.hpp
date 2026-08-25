@@ -86,15 +86,9 @@ class UringProactor {
   AcceptAwaitable AsyncAccept(int listen_fd);
   RecvAwaitable AsyncRecvFixed(int fd, int buf_idx, size_t offset = 0);
   IoAwaitable AsyncSend(int fd, const void* buf, size_t len);
-  // 批量发送：一次 sendmsg 写多个不连续缓冲（零拷贝聚散写）。
-  // msg 由调用方持有并保证存活到 CQE 完成（io_uring 异步读取 msghdr/iovec/
-  // 数据），典型场景为调用方协程帧内的局部变量（挂起期间帧保活）。
+
   IoAwaitable AsyncSendV(int fd, const struct msghdr* msg);
 
-  // 协程式一次性超时：co_await 返回的 IoAwaitable 时注册一次 IORING_TIMEOUT，
-  // CQE 到点走通用 slot 恢复路线（generation 校验 + resume 协程）。每次
-  // co_await 注册一次，周期性由调用方循环实现。必须在本 proactor 的事件
-  // 循环线程上调用（SINGLE_ISSUER 语义），协程被 CQE resume 后自然满足。
   IoAwaitable ArmPeriodicTimer(uint64_t interval_ms);
 
   int PollOnce(unsigned min_cqe = 1, unsigned timeout_ms = 0);
@@ -122,7 +116,7 @@ class UringProactor {
 
   uint32_t AllocSlot();
   void FreeSlot(uint32_t slot_idx);
-  IoCompletionSlot& GetSlot(uint32_t idx) { return pending_slots_[idx]; }
+  IoCompletionSlot& GetSlot(uint32_t idx) { return pending_slots_[idx].slot; }
   void ResumeSlot(uint32_t slot_idx, int32_t result, int32_t extra = 0);
 
   struct io_uring_sqe* GetSqeOrFlush();
@@ -136,12 +130,12 @@ class UringProactor {
   struct io_uring ring_;
   UringConfig config_;
   int pool_index_ = -1;
-  size_t MaxPendingSlots_;
-  std::vector<IoCompletionSlot> pending_slots_;
-  // 空闲 slot 池：slot 只通过"CQE 完成 → ResumeSlot → FreeSlot"归还，
-  // 绝不循环覆盖在途操作，因此同一 slot 上不可能有多个未完成操作，
-  // 幽灵 CQE（slot 复用后迟到的旧 CQE）在结构上不可能出现。
-  std::vector<uint32_t> free_slots_;
+  struct IoCompletionNode {
+    IoCompletionSlot slot;
+    uint32_t next = -1;
+  };
+  std::vector<IoCompletionNode> pending_slots_;
+  int32_t next_free_IoCompletionNode_ = 0;
   struct RegBufSlot {
     char* memory;
     int next = -1;
@@ -149,13 +143,10 @@ class UringProactor {
   std::vector<RegBufSlot> reg_bufs_;
   int next_buf_ = 0;
   util::TaskQueue task_queue_;
-  pthread_t loop_thread_id_;
+  pthread_t
+      loop_thread_id_;  // TODO 多余，应该用分片ID检查检查状态而不是线程ID检查
   bool shutdown_{false};
   uint32_t pending_sqes_{0};
-  uint32_t SqeBatchSize_;
-  uint32_t reg_buf_count_;
 };
-
-using UringProactorPtr = std::shared_ptr<UringProactor>;
 
 }  // namespace base

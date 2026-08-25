@@ -12,14 +12,13 @@
 #include <vector>
 
 #include "cppcoro/async_task.hpp"
-#include "network/redis_server.hpp"
 #include "redis/facade/reply_builder.hpp"
-#include "sharding/namespaces.hpp"
+#include "server/redis_server.hpp"
+#include "sharding/shard.hpp"
+#include "sharding/shard_pool.hpp"
 #include "test_util/RESP2Parser.hpp"
 
 using namespace dfly;
-using namespace dfly::cmn;
-using namespace ::cmn;
 
 // Invoke 返回惰性 CoroTask，必须 co_await 才会启动命令协程。
 // 用立即启动的 AsyncTask 包裹，让测试丢弃返回值时命令也能真正执行。
@@ -39,21 +38,19 @@ class TransactionTest : public ::testing::Test {
   void SetUp() override {
     pool_.AsyncLoop();
     sleep(1);
-    shard_set = new EngineShardSet(&pool_);
-    shard_set->Init(pool_.size());  // Init 内部已创建全局 namespaces
+    shard_pool = new ShardPool(&pool_);
+    shard_pool->Init(pool_.size());
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     // 之前namespaces 单独new 了，内存泄漏了
   }
 
   void TearDown() override {
-    shard_set->Shutdown();
+    shard_pool->Shutdown();
     pool_.stop();
     sleep(1);
-    delete namespaces;
-    namespaces = nullptr;
-    delete shard_set;
-    shard_set = nullptr;
+    delete shard_pool;
+    shard_pool = nullptr;
     delete CIs;
     CIs = nullptr;
   }
@@ -66,7 +63,6 @@ class TransactionTest : public ::testing::Test {
 // ============================================================================
 
 TEST_F(TransactionTest, SetGetMsetMget) {
-  auto* Namespace = &namespaces->GetDefaultNamespace();
   auto db_index = 0;
 
   // ── Step 1: SET a single key via shard determined by key ──
@@ -90,9 +86,9 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   set_tx->id = 1;
   CommandContext set_cntx(set_tx, set_cid, &set_rb);
 
-  auto key_sid = Shard(set_key, shard_set->size());
-  shard_set->Add(key_sid, [&]() {
-    set_tx->InitByArgs(Namespace, db_index, set_args);
+  auto key_sid = ShardIndex(set_key, shard_pool->size());
+  shard_pool->Post(key_sid, [&]() {
+    set_tx->Init(db_index, set_args);
     RunCommand(set_cid, &set_cntx, set_args);
   });
 
@@ -123,8 +119,8 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   get_tx->id = 2;
   CommandContext get_cntx(get_tx, get_cid, &get_rb);
 
-  shard_set->Add(key_sid, [&]() {
-    get_tx->InitByArgs(Namespace, db_index, get_args);
+  shard_pool->Post(key_sid, [&]() {
+    get_tx->Init(db_index, get_args);
     RunCommand(get_cid, &get_cntx, get_args);
   });
 
@@ -157,7 +153,7 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 
   int mset_tx_count = 0;
   for (const auto& key : mset_keys) {
-    auto sid = Shard(key, shard_set->size());
+    auto sid = ShardIndex(key, shard_pool->size());
     mset_tx_count = std::max(mset_tx_count, static_cast<int>(sid) + 1);
   }
 
@@ -171,8 +167,8 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
   // MSET with multi-shard dispatch
-  shard_set->Add(0, [&]() {
-    mset_tx->InitByArgs(Namespace, db_index, mset_args);
+  shard_pool->Post(0, [&]() {
+    mset_tx->Init(db_index, mset_args);
     RunCommand(mset_cid, &mset_cntx, mset_args);
   });
 
@@ -205,8 +201,8 @@ TEST_F(TransactionTest, SetGetMsetMget) {
   mget_tx->id = 4;
   CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
-  shard_set->Add(0, [&]() {
-    mget_tx->InitByArgs(Namespace, db_index, mget_args);
+  shard_pool->Post(0, [&]() {
+    mget_tx->Init(db_index, mget_args);
     RunCommand(mget_cid, &mget_cntx, mget_args);
   });
 
@@ -231,7 +227,6 @@ TEST_F(TransactionTest, SetGetMsetMget) {
 // ============================================================================
 
 TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
-  auto* Namespace = &namespaces->GetDefaultNamespace();
   auto db_index = 0;
 
   const int kKeyCount = 10;  // different keys, spread across shards
@@ -259,7 +254,7 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     // Verify keys map to different shards
     std::set<ShardId> used_shards;
     for (const auto& key : round_keys) {
-      used_shards.insert(Shard(key, shard_set->size()));
+      used_shards.insert(ShardIndex(key, shard_pool->size()));
     }
     EXPECT_GT(used_shards.size(), 1u)
         << "Keys should span multiple shards for meaningful test";
@@ -273,8 +268,8 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     mset_tx->id = 100 + round;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
-    shard_set->Add(0, [&]() {
-      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+    shard_pool->Post(0, [&]() {
+      mset_tx->Init(db_index, mset_args);
       RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
@@ -308,8 +303,8 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
     mget_tx->id = 200 + round;
     CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
-    shard_set->Add(0, [&]() {
-      mget_tx->InitByArgs(Namespace, db_index, mget_args);
+    shard_pool->Post(0, [&]() {
+      mget_tx->Init(db_index, mget_args);
       RunCommand(mget_cid, &mget_cntx, mget_args);
     });
 
@@ -340,7 +335,6 @@ TEST_F(TransactionTest, MsetDifferentKeysThenMget) {
 //   第二组: 只持有一个分片的锁 → 投放 MSET，预期事务成功。
 // ============================================================================
 TEST_F(TransactionTest, VLLLock) {
-  auto* Namespace = &namespaces->GetDefaultNamespace();
   auto db_index = 0;
 
   // ── 准备 MSET 参数，确保至少涉及 2 个分片 ──
@@ -360,8 +354,8 @@ TEST_F(TransactionTest, VLLLock) {
   for (auto& s : mset_strings) mset_views.push_back(s);
   CmdArgList mset_args{mset_views};
 
-  int start = mset_cid->first_key_pos();    // MSET: 1
-  int step = mset_cid->interleaved_step();  // MSET: 2
+  int start = mset_cid->first_key_pos();  // MSET: 1
+  int step = mset_cid->key_step();        // MSET: 2
   int end = static_cast<int>(mset_args.size());
   ASSERT_GT(start, 0);
   ASSERT_GT(step, 0);
@@ -371,9 +365,9 @@ TEST_F(TransactionTest, VLLLock) {
   std::set<ShardId> involved_shards;
   for (int i = start; i < end; i += step) {
     std::string_view key = mset_args[i];
-    ShardId sid = Shard(key, shard_set->size());
+    ShardId sid = ShardIndex(key, shard_pool->size());
     involved_shards.insert(sid);
-    fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
+    fps_by_shard[sid].push_back(KeyFingerprint(key));
   }
 
   ASSERT_GE(involved_shards.size(), 2u) << "Keys must span at least 2 shards";
@@ -388,8 +382,8 @@ TEST_F(TransactionTest, VLLLock) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, s = sid, f = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(s);
+      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = shard_pool->At(s)->GetShardStorage();
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
         lock_args.fps = f;
@@ -416,8 +410,8 @@ TEST_F(TransactionTest, VLLLock) {
     mset_tx->id = 2001;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
-    shard_set->Add(*involved_shards.begin(), [&]() {
-      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+    shard_pool->Post(*involved_shards.begin(), [&]() {
+      mset_tx->Init(db_index, mset_args);
       RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
@@ -435,8 +429,8 @@ TEST_F(TransactionTest, VLLLock) {
       std::atomic<int> release_done{0};
       const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_set->Add(sid, [&, s = sid, f = fps]() {
-          auto& db_slice = Namespace->GetDbSlice(s);
+        shard_pool->Post(sid, [&, s = sid, f = fps]() {
+          auto& db_slice = shard_pool->At(s)->GetShardStorage();
           KeyLockArgs lock_args;
           lock_args.db_index = db_index;
           lock_args.fps = f;
@@ -463,8 +457,8 @@ TEST_F(TransactionTest, VLLLock) {
 
     std::atomic<int> finished{0};
 
-    shard_set->Add(locked_sid, [&, fps = locked_fps]() {
-      auto& db_slice = Namespace->GetDbSlice(locked_sid);
+    shard_pool->Post(locked_sid, [&, fps = locked_fps]() {
+      auto& db_slice = shard_pool->At(locked_sid)->GetShardStorage();
       KeyLockArgs lock_args;
       lock_args.db_index = db_index;
       lock_args.fps = fps;
@@ -490,8 +484,8 @@ TEST_F(TransactionTest, VLLLock) {
     mset_tx->id = 2002;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
-    shard_set->Add(*involved_shards.begin(), [&]() {
-      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+    shard_pool->Post(*involved_shards.begin(), [&]() {
+      mset_tx->Init(db_index, mset_args);
       RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
@@ -512,7 +506,6 @@ TEST_F(TransactionTest, VLLLock) {
 //   第二组: 持有所有分片的锁，但仅一个分片设置 committed_txid → 投放 MSET。
 // ============================================================================
 TEST_F(TransactionTest, VLLLockRetry) {
-  auto* Namespace = &namespaces->GetDefaultNamespace();
   auto db_index = 0;
 
   // ── 准备 MSET 参数，确保至少涉及 2 个分片 ──
@@ -531,7 +524,7 @@ TEST_F(TransactionTest, VLLLockRetry) {
   CmdArgList mset_args{mset_views};
 
   int start = mset_cid->first_key_pos();
-  int step = mset_cid->interleaved_step();
+  int step = mset_cid->key_step();
   int end = static_cast<int>(mset_args.size());
   ASSERT_GT(start, 0);
   ASSERT_GT(step, 0);
@@ -540,9 +533,9 @@ TEST_F(TransactionTest, VLLLockRetry) {
   std::set<ShardId> involved_shards;
   for (int i = start; i < end; i += step) {
     std::string_view key = mset_args[i];
-    ShardId sid = Shard(key, shard_set->size());
+    ShardId sid = ShardIndex(key, shard_pool->size());
     involved_shards.insert(sid);
-    fps_by_shard[sid].push_back(LockTag(key).Fingerprint());
+    fps_by_shard[sid].push_back(KeyFingerprint(key));
   }
 
   ASSERT_GE(involved_shards.size(), 2u) << "Keys must span at least 2 shards";
@@ -555,13 +548,13 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, s = sid, f = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(s);
+      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = shard_pool->At(s)->GetShardStorage();
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
         lock_args.fps = f;
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
-        EngineShard::tlocal()->committed_txid() = 5;
+        Shard::tlocal()->set_committed_txid(5);
         finished.fetch_add(1, std::memory_order_release);
       });
     }
@@ -582,8 +575,8 @@ TEST_F(TransactionTest, VLLLockRetry) {
     mset_tx->id = 3001;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
-    shard_set->Add(*involved_shards.begin(), [&]() {
-      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+    shard_pool->Post(*involved_shards.begin(), [&]() {
+      mset_tx->Init(db_index, mset_args);
       RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
@@ -598,13 +591,13 @@ TEST_F(TransactionTest, VLLLockRetry) {
       std::atomic<int> release_done{0};
       const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_set->Add(sid, [&, s = sid, f = fps]() {
-          auto& db_slice = Namespace->GetDbSlice(s);
+        shard_pool->Post(sid, [&, s = sid, f = fps]() {
+          auto& db_slice = shard_pool->At(s)->GetShardStorage();
           KeyLockArgs lock_args;
           lock_args.db_index = db_index;
           lock_args.fps = f;
           db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
-          EngineShard::tlocal()->committed_txid() = 0;
+          Shard::tlocal()->set_committed_txid(0);
           release_done.fetch_add(1, std::memory_order_release);
         });
       }
@@ -626,14 +619,14 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_set->Add(sid, [&, s = sid, f = fps]() {
-        auto& db_slice = Namespace->GetDbSlice(s);
+      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+        auto& db_slice = shard_pool->At(s)->GetShardStorage();
         KeyLockArgs lock_args;
         lock_args.db_index = db_index;
         lock_args.fps = f;
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         if (s == committed_sid) {
-          EngineShard::tlocal()->committed_txid() = 5;
+          Shard::tlocal()->set_committed_txid(5);
         }
         finished.fetch_add(1, std::memory_order_release);
       });
@@ -655,8 +648,8 @@ TEST_F(TransactionTest, VLLLockRetry) {
     mset_tx->id = 3002;
     CommandContext mset_cntx(mset_tx, mset_cid, &mset_rb);
 
-    shard_set->Add(*involved_shards.begin(), [&]() {
-      mset_tx->InitByArgs(Namespace, db_index, mset_args);
+    shard_pool->Post(*involved_shards.begin(), [&]() {
+      mset_tx->Init(db_index, mset_args);
       RunCommand(mset_cid, &mset_cntx, mset_args);
     });
 
@@ -674,7 +667,6 @@ TEST_F(TransactionTest, VLLLockRetry) {
 //   投放大量 MGET 事务，验证所有事务在规定时间内完成。
 // ============================================================================
 TEST_F(TransactionTest, MultiConcurrentMGET) {
-  auto* Namespace = &namespaces->GetDefaultNamespace();
   auto db_index = 0;
 
   const int base = 10;
@@ -728,10 +720,10 @@ TEST_F(TransactionTest, MultiConcurrentMGET) {
 
   // ── 按分片投放 MGET 事务 ──
   for (int s = 0; s < shardNum; ++s) {
-    shard_set->Add(s, [&, s]() {
+    shard_pool->Post(s, [&, s]() {
       for (int start = s * P; start < (s + 1) * P; ++start) {
         auto& tx = txs[start];
-        tx->InitByArgs(Namespace, db_index, args[start]);
+        tx->Init(db_index, args[start]);
         RunCommand(cid, &cmd_cntxs[start], args[start]);
       }
     });
@@ -824,14 +816,13 @@ TEST_F(TransactionTest, MultiConcurrent) {
       cmd_cntxs.emplace_back(tx, cid, &rbs[j]);
     }
 
-    auto* Namespace = &namespaces->GetDefaultNamespace();
     auto db_index = 0;
 
     for (int s = 0; s < shardNum; ++s) {
-      shard_set->Add(s, [&, s]() {
+      shard_pool->Post(s, [&, s]() {
         for (int start = s * P; start < (s + 1) * P; ++start) {
           auto& tx = txs[start];
-          tx->InitByArgs(Namespace, db_index, args[start]);
+          tx->Init(db_index, args[start]);
           RunCommand(cid, &cmd_cntxs[start], args[start]);
         }
       });
@@ -886,8 +877,8 @@ TEST_F(TransactionTest, MultiConcurrent) {
 
       CommandContext mget_cntx(mget_tx, mget_cid, &mget_rb);
 
-      shard_set->Add(0, [&]() {
-        mget_tx->InitByArgs(Namespace, db_index, mget_args);
+      shard_pool->Post(0, [&]() {
+        mget_tx->Init(db_index, mget_args);
         RunCommand(mget_cid, &mget_cntx, mget_args);
       });
 

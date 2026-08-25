@@ -9,8 +9,6 @@
 #include <iostream>
 namespace base {
 
-// port: 监听端口，默认 6379，可由命令行参数覆盖（./imdragonfly <shards>
-// <port>）。
 inline int ListenFd(uint16_t port = 6379) {
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd == -1) {
@@ -25,11 +23,10 @@ inline int ListenFd(uint16_t port = 6379) {
     close(listen_fd);
     return -1;
   }
-  // 减小 TIME_WAIT 状态下端口占用时间
+
   if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) ==
       -1) {
     perror("setsockopt SO_REUSEPORT");
-    // 非致命错误，继续
   }
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));

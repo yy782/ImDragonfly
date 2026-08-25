@@ -1,14 +1,14 @@
 #include "list_family.hpp"
 
-#include "cmd_arg_parser.hpp"
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
 #include "detail/conn_context.hpp"
+#include "detail/op_status.hpp"
 #include "redis/redis_aux.hpp"
 #include "sharding/DashTable/compact_obj.hpp"
 #include "sharding/shard.hpp"
-#include "sharding/op_status.hpp"
 #include "transaction_layer/transaction.hpp"
+#include "util/arg_parse.hpp"
 
 namespace dfly {
 
@@ -17,6 +17,8 @@ using cmd::CoroTask;
 namespace {
 
 using Slice = Transaction::Slice;
+
+using util::ParseInt;
 
 ListObject* GetOrCreateList(Transaction* tx, Shard* shard,
                             std::string_view key) {
@@ -27,14 +29,15 @@ ListObject* GetOrCreateList(Transaction* tx, Shard* shard,
     if (pv->IsEmpty()) {
       *pv = CompactValue::MakeList();
     } else if (pv->ObjType() != OBJ_LIST) {
-      return;  // 类型不符 → list 保持 nullptr → WRONG_TYPE
+      return;
     }
     list = pv->GetList();
   });
   return list;
 }
 
-// LPUSH 命令：向列表头部插入一个或多个元素
+}  // namespace
+
 CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto values = args.subspan(2);
@@ -42,10 +45,9 @@ CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
     ListObject* list = GetOrCreateList(tx, shard, key);
     if (!list) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
-    // LPUSH 按参数顺序依次头部插入（最后的参数在最终列表的最前面）
     for (const auto& value : values) {
       list->PushFront(std::string(value));
     }
@@ -55,7 +57,7 @@ CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -65,7 +67,6 @@ CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// RPUSH 命令：向列表尾部追加一个或多个元素
 CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto values = args.subspan(2);
@@ -73,7 +74,7 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
     ListObject* list = GetOrCreateList(tx, shard, key);
     if (!list) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     for (const auto& value : values) {
@@ -85,7 +86,7 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -95,7 +96,6 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LPOP 命令：移除并返回列表头部元素
 CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
@@ -107,17 +107,17 @@ CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
-    if (f->obj_type() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_LIST) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     std::string popped;
     auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
       ListObject* list = pv->GetList();
       if (list->Empty()) {
-        return;  // 空列表 → 空串
+        return;
       }
       popped = list->PopFront();
     });
@@ -128,13 +128,13 @@ CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     if (result.value().empty()) {
       rb->BuildNullBulkString();
     } else {
       rb->BuildBulkString(result.value());
     }
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -144,7 +144,6 @@ CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// RPOP 命令：移除并返回列表尾部元素
 CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
@@ -156,17 +155,17 @@ CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
-    if (f->obj_type() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_LIST) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     std::string popped;
     auto up = storage.Mutate(cntx, key, [&](PrimeValue* pv) {
       ListObject* list = pv->GetList();
       if (list->Empty()) {
-        return;  // 空列表 → 空串
+        return;
       }
       popped = list->PopBack();
     });
@@ -177,13 +176,13 @@ CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     if (result.value().empty()) {
       rb->BuildNullBulkString();
     } else {
       rb->BuildBulkString(result.value());
     }
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -193,7 +192,6 @@ CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LLEN 命令：返回列表的长度
 CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
@@ -203,12 +201,12 @@ CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return 0ULL;  // 不存在 → 0
+      return 0ULL;
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ListObject* list = pv->GetList();
@@ -218,7 +216,7 @@ CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -228,28 +226,27 @@ CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LINDEX 命令：返回列表中指定索引处的元素
 CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t index = 0;
-  if (!absl::SimpleAtoi(std::string(args[2]), &index)) {
+  if (!ParseInt(args[2], index)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
 
   auto cb = [key, index](Transaction* tx,
-                         Shard* shard) -> OpResult<std::string> {
+                         Shard* shard) mutable -> OpResult<std::string> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ListObject* list = pv->GetList();
@@ -258,7 +255,7 @@ CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
       index = len + index;
     }
     if (index < 0 || index >= len) {
-      return OpStatus::KEY_NOTFOUND;  // 越界 → nil
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
     return list->GetElement(index);
   };
@@ -266,9 +263,9 @@ CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildBulkString(result.value());
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -278,40 +275,38 @@ CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LRANGE 命令：返回列表中指定区间内的元素
 CoroTask ListFamily::LRange(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t start = 0, stop = 0;
-  if (!absl::SimpleAtoi(std::string(args[2]), &start) ||
-      !absl::SimpleAtoi(std::string(args[3]), &stop)) {
+  if (!ParseInt(args[2], start) || !ParseInt(args[3], stop)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
 
-  auto cb = [key, start, stop](Transaction* tx,
-                               Shard* shard) -> OpResult<std::vector<std::string>> {
+  auto cb = [key, start, stop](
+                Transaction* tx,
+                Shard* shard) -> OpResult<std::vector<std::string>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return {};  // 不存在 → 空数组
+      return {};
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ListObject* list = pv->GetList();
-    // GetRange 内部处理负索引与越界
     return list->GetRange(start, stop);
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildArray(std::move(result.value()));
   } else {
     rb->BuildError(
@@ -321,18 +316,17 @@ CoroTask ListFamily::LRange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LSET 命令：设置列表中指定索引处的元素
 CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t index = 0;
   auto value = args[3];
-  if (!absl::SimpleAtoi(std::string(args[2]), &index)) {
+  if (!ParseInt(args[2], index)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
 
   auto cb = [key, index, value](Transaction* tx,
-                                Shard* shard) -> OpResult<void> {
+                                Shard* shard) mutable -> OpResult<void> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -340,10 +334,10 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return OpStatus::NO_KEY;
+      return util::make_unexpected(OpStatus::NO_KEY);
     }
-    if (f->obj_type() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_LIST) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     bool ok = false;
@@ -354,13 +348,13 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
         index = len + index;
       }
       if (index < 0 || index >= len) {
-        return;  // 越界
+        return;
       }
       ok = list->SetElement(index, std::string(value));
     });
     if (!up) return util::make_unexpected(up.error());
     if (!ok) {
-      return OpStatus::OUT_OF_RANGE;
+      return util::make_unexpected(OpStatus::OUT_OF_RANGE);
     }
     return {};
   };
@@ -368,11 +362,11 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildSimpleString("OK");
-  } else if (result.status() == OpStatus::NO_KEY) {
+  } else if (result.error() == OpStatus::NO_KEY) {
     rb->BuildError("ERR no such key");
-  } else if (result.status() == OpStatus::OUT_OF_RANGE) {
+  } else if (result.error() == OpStatus::OUT_OF_RANGE) {
     rb->BuildError("ERR index out of range");
   } else {
     rb->BuildError(
@@ -382,12 +376,11 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LREM 命令：从列表中移除指定数量的匹配元素
 CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t count = 0;
   auto value = args[3];
-  if (!absl::SimpleAtoi(std::string(args[2]), &count)) {
+  if (!ParseInt(args[2], count)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
@@ -401,10 +394,10 @@ CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return 0ULL;  // 不存在 → 0
+      return 0ULL;
     }
-    if (f->obj_type() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_LIST) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     size_t removed = 0;
@@ -419,7 +412,7 @@ CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -429,7 +422,6 @@ CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// LINSERT 命令：在列表中 pivot 元素之前/之后插入新元素
 CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto pos = args[2];
@@ -445,10 +437,10 @@ CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return 0;  // 不存在 → 0
+      return 0;
     }
-    if (f->obj_type() != OBJ_LIST) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_LIST) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     OpStatus err = OpStatus::OK;
@@ -475,9 +467,9 @@ CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
-  } else if (result.status() == OpStatus::SYNTAX_ERROR) {
+  } else if (result.error() == OpStatus::SYNTAX_ERROR) {
     rb->BuildError("ERR syntax error");
   } else {
     rb->BuildError(
@@ -487,18 +479,18 @@ CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+namespace {
 constexpr CommandSpec kCommands[] = {
-    {"LPUSH", CO::JOURNALED, 1, 1, CmdLPush},
-    {"RPUSH", CO::JOURNALED, 1, 1, CmdRPush},
-    {"LPOP", CO::JOURNALED, 1, 1, CmdLPop},
-    {"RPOP", CO::JOURNALED, 1, 1, CmdRPop},
-    {"LLEN", CO::READONLY, 1, 1, CmdLLen},
-    {"LINDEX", CO::READONLY, 1, 1, CmdLIndex},
-    {"LRANGE", CO::READONLY, 1, 1, CmdLRange},
-    {"LSET", CO::JOURNALED, 1, 1, CmdLSet},
-    {"LREM", CO::JOURNALED, 1, 1, CmdLRem},
-    {"LINSERT", CO::JOURNALED, 1, 1, CmdLInsert},
+    {"LPUSH", CO::JOURNALED, 1, 1, &ListFamily::LPush},
+    {"RPUSH", CO::JOURNALED, 1, 1, &ListFamily::RPush},
+    {"LPOP", CO::JOURNALED, 1, 1, &ListFamily::LPop},
+    {"RPOP", CO::JOURNALED, 1, 1, &ListFamily::RPop},
+    {"LLEN", CO::READONLY, 1, 1, &ListFamily::LLen},
+    {"LINDEX", CO::READONLY, 1, 1, &ListFamily::LIndex},
+    {"LRANGE", CO::READONLY, 1, 1, &ListFamily::LRange},
+    {"LSET", CO::JOURNALED, 1, 1, &ListFamily::LSet},
+    {"LREM", CO::JOURNALED, 1, 1, &ListFamily::LRem},
+    {"LINSERT", CO::JOURNALED, 1, 1, &ListFamily::LInsert},
 };
 static_assert(CheckUniqueNames(kCommands), "list family: duplicate names");
 

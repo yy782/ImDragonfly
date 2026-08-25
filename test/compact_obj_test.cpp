@@ -138,18 +138,10 @@ TEST(CompactObjTest, ToStringEmpty) {
   EXPECT_EQ(obj.ToString(), "");
 }
 
-TEST(CompactObjTest, GetSliceFromInt) {
-  CompactObj obj(false);
-  obj.SetInt(999);
-  std::string scratch;
-  EXPECT_EQ(obj.GetSlice(&scratch), "999");
-}
-
 TEST(CompactObjTest, GetSliceFromStr) {
   CompactObj obj(true);
   obj.SetString(std::string_view("direct slice"));
-  std::string scratch;
-  EXPECT_EQ(obj.GetSlice(&scratch), "direct slice");
+  EXPECT_EQ(obj.GetSlice(), "direct slice");
 }
 
 // ============================================================================

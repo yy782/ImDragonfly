@@ -318,17 +318,16 @@ make -j$(nproc)
 ### 启动方式与命令行参数
 
 ```bash
-./imdragonfly [shards] [port] [--no-rdb] [--config <path>]
+./imdragonfly [shards] [port] [--config <path>]
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `shards` | 分片数量（位置参数，默认 4） |
 | `port` | 监听端口（位置参数，默认 6379） |
-| `--no-rdb` / `--no-snapshot` | 关闭 RDB 快照 |
 | `--config <path>` | 加载 JSON 配置文件，配置值会覆盖命令行参数 |
 
-**推荐通过 `--config` 启动**，加载仓库自带的 `imdragonfly.conf`（4 分片 + io_uring 优化参数 + 关闭 RDB）：
+**推荐通过 `--config` 启动**，加载仓库自带的 `imdragonfly.conf`（4 分片 + io_uring 优化参数）：
 
 ```bash
 # 在 build 目录内运行

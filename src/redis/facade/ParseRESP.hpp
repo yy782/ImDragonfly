@@ -1,5 +1,8 @@
+#pragma once
 
 #include <cctype>
+#include <charconv>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -125,5 +128,35 @@ struct ParseRESP {
     return pr;
   }
 };
+
+inline std::string EncodeBulkString(std::string_view v) {
+  std::string out;
+  out.reserve(v.size() + 32);
+  out.push_back('$');
+  char buf[24];
+  auto res = std::to_chars(buf, buf + sizeof(buf), v.size());
+  out.append(buf, res.ptr - buf);
+  out.append("\r\n");
+  out.append(v);
+  out.append("\r\n");
+  return out;
+}
+
+inline std::string EncodeBulkString(int64_t v) {
+  char num[24];
+  auto nres = std::to_chars(num, num + sizeof(num), v);
+  size_t n = static_cast<size_t>(nres.ptr - num);
+
+  std::string out;
+  out.reserve(n + 32);
+  out.push_back('$');
+  char len[24];
+  auto lres = std::to_chars(len, len + sizeof(len), n);
+  out.append(len, lres.ptr - len);
+  out.append("\r\n");
+  out.append(num, n);
+  out.append("\r\n");
+  return out;
+}
 
 }  // namespace dfly

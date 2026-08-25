@@ -1,10 +1,3 @@
-// function.h
-// 基于 fu2/function2.hpp 提供的非抛异常 std::function 替代品。
-//
-// 与 std::function 的区别：
-//   * 空函数被调用时不会抛出 std::bad_function_call，而是直接 std::abort()。
-//   * unique_function 为 move-only，适用于 mpmc_queue 等只需移动语义的场景。
-//   * FunctionRef 为非拥有函数视图，对应 fu2::function_view。
 #pragma once
 
 #include "util/function2.hpp"

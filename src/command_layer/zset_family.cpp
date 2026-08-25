@@ -1,14 +1,17 @@
 #include "zset_family.hpp"
 
-#include "cmd_arg_parser.hpp"
+#include <vector>
+
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
 #include "detail/conn_context.hpp"
+#include "detail/op_status.hpp"
 #include "redis/redis_aux.hpp"
 #include "sharding/DashTable/compact_obj.hpp"
 #include "sharding/shard.hpp"
-#include "sharding/op_status.hpp"
 #include "transaction_layer/transaction.hpp"
+#include "util/Strings.hpp"
+#include "util/arg_parse.hpp"
 
 namespace dfly {
 
@@ -16,6 +19,9 @@ using cmd::CoroTask;
 
 namespace {
 using Slice = Transaction::Slice;
+
+using util::ParseDouble;
+using util::ParseInt;
 
 ZSetObject* GetOrCreateZSet(Transaction* tx, Shard* shard,
                             std::string_view key) {
@@ -26,40 +32,46 @@ ZSetObject* GetOrCreateZSet(Transaction* tx, Shard* shard,
     if (pv->IsEmpty()) {
       *pv = CompactValue::MakeZSet();
     } else if (pv->ObjType() != OBJ_ZSET) {
-      return;  // 类型不符 → zset 保持 nullptr → WRONG_TYPE
+      return;
     }
     zset = pv->GetZSet();
   });
   return zset;
 }
 
-// ZADD 命令：向有序集合添加一个或多个成员，或更新其分数
+}  // namespace
+
 CoroTask ZSetFamily::ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
-  auto score_str = args[2];
-  auto member = args[3];
 
-  double score = 0.0;
-  if (!absl::SimpleAtod(std::string(score_str), &score)) {
-    cmd_cntx->rb()->BuildError("ERR value is not a valid float");
-    co_return;
+  std::vector<std::pair<double, std::string>> pairs;
+  pairs.reserve((args.size() - 2) / 2);
+  for (size_t i = 2; i + 1 < args.size(); i += 2) {
+    double score = 0.0;
+    if (!ParseDouble(args[i], score)) {
+      cmd_cntx->rb()->BuildError("ERR value is not a valid float");
+      co_return;
+    }
+    pairs.emplace_back(score, std::string(args[i + 1]));
   }
 
-  auto cb = [key, score, member](Transaction* tx,
-                                 Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, pairs](Transaction* tx, Shard* shard) -> OpResult<size_t> {
     ZSetObject* zset = GetOrCreateZSet(tx, shard, key);
     if (!zset) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
-    size_t added = zset->Add(std::string(member), score);
+    size_t added = 0;
+    for (const auto& [score, member] : pairs) {
+      added += zset->Add(member, score);
+    }
     return added;
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -69,7 +81,6 @@ CoroTask ZSetFamily::ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZCARD 命令：返回有序集合的大小
 CoroTask ZSetFamily::ZCard(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
@@ -79,12 +90,12 @@ CoroTask ZSetFamily::ZCard(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return 0ULL;  // 不存在 → 0
+      return 0ULL;
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
@@ -94,7 +105,7 @@ CoroTask ZSetFamily::ZCard(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -104,30 +115,28 @@ CoroTask ZSetFamily::ZCard(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZSCORE 命令：返回有序集合中成员的分数
 CoroTask ZSetFamily::ZScore(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
 
-  auto cb = [key, member](Transaction* tx,
-                          Shard* shard) -> OpResult<double> {
+  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<double> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
     auto score = zset->Score(std::string(member));
     if (!score) {
-      return OpStatus::KEY_NOTFOUND;  // 成员不存在
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
     return *score;
   };
@@ -135,9 +144,9 @@ CoroTask ZSetFamily::ZScore(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildDouble(result.value());
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -147,7 +156,6 @@ CoroTask ZSetFamily::ZScore(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZREM 命令：从有序集合中移除一个或多个成员
 CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto members = args.subspan(2);
@@ -160,10 +168,10 @@ CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
         return util::make_unexpected(f.error());
-      return 0ULL;  // 不存在 → 0
+      return 0ULL;
     }
-    if (f->obj_type() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+    if (f.value()->second.ObjType() != OBJ_ZSET) {
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     size_t removed = 0;
@@ -182,7 +190,7 @@ CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else {
     rb->BuildError(
@@ -192,7 +200,6 @@ CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZRANK 命令：返回有序集合中成员的排名（按分数升序，从 0 开始）
 CoroTask ZSetFamily::ZRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
@@ -203,18 +210,18 @@ CoroTask ZSetFamily::ZRank(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
     int64_t rank = zset->Rank(std::string(member));
     if (rank < 0) {
-      return OpStatus::KEY_NOTFOUND;  // 成员不存在
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
     return rank;
   };
@@ -222,9 +229,9 @@ CoroTask ZSetFamily::ZRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -234,7 +241,6 @@ CoroTask ZSetFamily::ZRank(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZREVRANK 命令：返回有序集合中成员的排名（按分数降序，从 0 开始）
 CoroTask ZSetFamily::ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
@@ -245,18 +251,18 @@ CoroTask ZSetFamily::ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return OpStatus::KEY_NOTFOUND;
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
     int64_t rank = zset->RevRank(std::string(member));
     if (rank < 0) {
-      return OpStatus::KEY_NOTFOUND;  // 成员不存在
+      return util::make_unexpected(OpStatus::KEY_NOTFOUND);
     }
     return rank;
   };
@@ -264,9 +270,9 @@ CoroTask ZSetFamily::ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
-  } else if (result.status() == OpStatus::KEY_NOTFOUND) {
+  } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
   } else {
     rb->BuildError(
@@ -276,50 +282,47 @@ CoroTask ZSetFamily::ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZRANGE 命令：按排名范围返回有序集合的成员（升序）
-CoroTask CmdZRange(CommandContext* cmd_cntx, CmdArgList args) {
+CoroTask ZSetFamily::ZRange(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t start = 0, stop = 0;
-  bool with_scores = args.size() == 4 &&
-                     absl::EqualsIgnoreCase(args[3], "WITHSCORES");
+  bool with_scores =
+      args.size() == 5 &&
+      util::EqualsIgnoreCaseStd(args[4], std::string_view("WITHSCORES"));
 
-  if (!absl::SimpleAtoi(std::string(args[2]), &start) ||
-      !absl::SimpleAtoi(std::string(args[3]), &stop)) {
+  if (!ParseInt(args[2], start) || !ParseInt(args[3], stop)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
 
-  auto cb =
-      [key, start, stop](Transaction* tx,
-                         Shard* shard)
-          -> OpResult<std::vector<std::pair<std::string, double>>> {
+  auto cb = [key, start, stop](Transaction* tx, Shard* shard)
+      -> OpResult<std::vector<std::pair<std::string, double>>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return {};  // 不存在 → 空数组
+      return {};
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
-    // Range 内部处理负索引与越界
+
     return zset->Range(start, stop);
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->StartArray(result.value().size());
     for (const auto& [member, score] : result.value()) {
-      rb->SendBulkString(member);
+      rb->BuildBulkString(member);
       if (with_scores) {
-        rb->SendDouble(score);
+        rb->BuildDouble(score);
       }
     }
   } else {
@@ -330,50 +333,47 @@ CoroTask CmdZRange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// ZREVRANGE 命令：按排名范围返回有序集合的成员（降序）
 CoroTask ZSetFamily::ZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   int64_t start = 0, stop = 0;
-  bool with_scores = args.size() == 4 &&
-                     absl::EqualsIgnoreCase(args[3], "WITHSCORES");
+  bool with_scores =
+      args.size() == 5 &&
+      util::EqualsIgnoreCaseStd(args[4], std::string_view("WITHSCORES"));
 
-  if (!absl::SimpleAtoi(std::string(args[2]), &start) ||
-      !absl::SimpleAtoi(std::string(args[3]), &stop)) {
+  if (!ParseInt(args[2], start) || !ParseInt(args[3], stop)) {
     cmd_cntx->rb()->BuildError("ERR value is not an integer or out of range");
     co_return;
   }
 
-  auto cb =
-      [key, start, stop](Transaction* tx,
-                         Shard* shard)
-          -> OpResult<std::vector<std::pair<std::string, double>>> {
+  auto cb = [key, start, stop](Transaction* tx, Shard* shard)
+      -> OpResult<std::vector<std::pair<std::string, double>>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
     auto res = storage.Find(cntx, key);
     if (!res) {
-      return {};  // 不存在 → 空数组
+      return {};
     }
 
-    const PrimeValue* pv = res->value;
+    const PrimeValue* pv = &res.value()->second;
     if (pv->ObjType() != OBJ_ZSET) {
-      return OpStatus::WRONG_TYPE;
+      return util::make_unexpected(OpStatus::WRONG_TYPE);
     }
 
     const ZSetObject* zset = pv->GetZSet();
-    // RevRange 内部处理负索引与越界，返回降序
+
     return zset->RevRange(start, stop);
   };
 
   auto result = co_await cmd::SingleHopT(cb);
   auto* rb = cmd_cntx->rb();
 
-  if (result.status() == OpStatus::OK) {
+  if (result.has_value()) {
     rb->StartArray(result.value().size());
     for (const auto& [member, score] : result.value()) {
-      rb->SendBulkString(member);
+      rb->BuildBulkString(member);
       if (with_scores) {
-        rb->SendDouble(score);
+        rb->BuildDouble(score);
       }
     }
   } else {
@@ -384,7 +384,7 @@ CoroTask ZSetFamily::ZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
   co_return;
 }
 
-// 命令目录：表驱动注册，constexpr 声明 + 编译期查重。
+namespace {
 constexpr CommandSpec kCommands[] = {
     {"ZADD", CO::JOURNALED, 1, 1, &ZSetFamily::ZAdd},
     {"ZCARD", CO::READONLY, 1, 1, &ZSetFamily::ZCard},

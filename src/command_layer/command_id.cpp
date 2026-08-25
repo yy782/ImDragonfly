@@ -1,16 +1,12 @@
-// Copyright 2022, DragonflyDB authors.  All rights reserved.
-// See LICENSE for licensing terms.
-//
-
 #include "command_layer/command_id.hpp"
 
 #include <glog/logging.h>
 
-#include "command_layer/command_registry.hpp"  // CommandSpec 完整定义
+#include "command_layer/cmd_support.hpp"
+#include "command_layer/command_registry.hpp"
 
 namespace dfly {
 
-// 从命令目录数据行构造：表驱动注册的唯一入口，元数据 + 步长 + 执行器一次到位。
 CommandId::CommandId(const CommandSpec& spec)
     : name_(spec.name),
       opt_mask_(spec.mask),
@@ -19,22 +15,23 @@ CommandId::CommandId(const CommandSpec& spec)
       key_step_(spec.step),
       handler_(spec.handler) {}
 
-// 按 first/last/step 规则（Redis 约定，last 为 -1 表示"到参数末尾"）
-// 遍历参数中的键；全局事务 / 无 key 事务命令返回空区间。
-CommandId::KeyRange CommandId::Keys(cmn::CmdArgList args) const {
+// last 为 -1 表示"到参数末尾"
+CommandId::KeyRange CommandId::Keys(::dfly::CmdArgList args) const {
   if (opt_mask_ & (CO::GLOBAL_TRANS | CO::NO_KEY_TRANSACTIONAL))
     return KeyRange{KeyIterator(args, 0, 0, 1), KeyIterator(args, 0, 0, 1)};
-
-  if (first_key_ <= 0) {
-    LOG(FATAL) << "TBD: Not supported " << name_;
-  }
+  DCHECK(first_key_ > 0);
   unsigned start = unsigned(first_key_);
   unsigned end = last_key_ > 0 ? unsigned(last_key_ + 1)
                                : unsigned(int(args.size()) + last_key_ + 1);
-  unsigned step = key_step_ ? unsigned(key_step_) : 1;
+  unsigned step = unsigned(key_step_);
 
   return KeyRange{KeyIterator(args, start, end, step),
                   KeyIterator(args, end, end, step)};
+}
+
+cmd::CoroTask CommandId::Invoke(CommandContext* cmd_cntx,
+                                CmdArgList args) const {
+  return handler_(cmd_cntx, args);
 }
 
 }  // namespace dfly
