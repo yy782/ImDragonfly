@@ -1,556 +1,276 @@
-# DashTable：基于分段的高性能哈希表设计
+# DashTable：为内存数据库设计的分段哈希索引
 
 > **参考论文**：[Dash: Scalable Hashing on Persistent Memory](https://arxiv.org/abs/2003.07302) — VLDB 2020
-> **原始实现**：DragonflyDB
+> **设计参考**：DragonflyDB
+> **本文档讲"为什么这样设计"**：动机、权衡、收益。实现细节见 `src/sharding/DashTable/`。
 
 ---
 
-## 1. 设计背景
+## 0. 结论先行
 
-传统链式哈希的每个节点独立分配在堆上，通过指针串联。当 Key 不命中时，CPU 需要追逐指针链，每跳一次都可能触发 cache miss。对于内存数据库而言，数据访问本身只需几十纳秒，但一次 cache miss 就要上百纳秒——指针追逐成了性能瓶颈。
+DashTable 是 KV 哈希索引，全部设计围绕四个问题展开：
 
-DashTable 用三个设计解决这个问题：
+1. **扩容太贵** → 用"分段 + 目录"把扩容成本从 O(整表) 摊薄到 O(一段)
+2. **比较太贵** → 用"指纹 SIMD"把 Key 比较从逐字节变成一条指令
+3. **冲突不可控** → 用"归属限定"把每个 Key 的藏身处固定为常数个位置，查找/删除路径确定且有界
+4. **落盘不可靠** → 用"提交点"让快照做到崩溃一致
 
-- **开放寻址**：数据连续存储在 Bucket 数组里，线性探测替代指针链
-- **分段管理**：Segment 作为扩容/缩容的基本单位，类似 Extendible Hashing 的目录映射
-- **指纹过滤**：Hash 值低 8 位作为指纹，用 SIMD 指令一次性比对，跳过完整 Key 比较
-
----
-
-## 2. 总体架构
-
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                    Directory (segment_ 数组)                       │
-│                                                                   │
-│  segment_[0]──→Seg0   segment_[2]──→Seg2   segment_[4]──→Seg4   ......│
-│  segment_[1]──→Seg0   segment_[3]──→Seg2   segment_[5]──→Seg4   │
-│       ↑ 逻辑段               ↑ 逻辑段                              │
-│       可以指向               可以指向                               │
-│       同一个物理段           同一个物理段                            │
-└───────────────────────────────────────────────────────────────────┘
-         │                      │                      │
-         ▼                      ▼                      ▼
-  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-  │   Segment 0  │     │   Segment 2  │     │   Segment 4  │
-  │  (物理段)     │     │  (物理段)     │     │  (物理段)     │
-  │              │     │              │     │              │
-  │ Bucket[0..63]│     │ Bucket[0..63]│     │ Bucket[0..63]│
-  │ Stash[0..3]  │     │ Stash[0..3]  │     │ Stash[0..3]  │
-  └──────────────┘     └──────────────┘     └──────────────┘
-```
-
-**逻辑段 vs 物理段**：`segment_` 数组的每个元素是一个"逻辑段"——它是一个指针，指向真正存储数据的"物理段"（`Segment` 对象）。不同的逻辑段可以指向同一个物理段，这是扩容机制的核心。
-
-**层次**：
-
-| 层级 | 说明 |
-|------|------|
-| Directory | 可动态扩展的指针数组 `segment_`，大小 = `2^global_depth_` |
-| Segment | 64 个主桶 + 4 个 Stash 桶，扩容时的基本单位 |
-| Bucket | 12 个 Key/Value 槽位 + 元数据 |
-| Slot | 单个 Key/Value 对 |
+下面的章节按"难处 → 决策 → 好处/代价"展开。
 
 ---
 
-## 3. Bucket 内部结构
+## 1. 基线问题：链式哈希为什么不够用
 
-```
-Bucket 布局:
-┌────────────────────────────────────────────────────────────────┐
-│ slotb_      │ finger_arr_ │ stash_arr_ │ stash 元数据 │ KV Slots │
-│ bitmap (8B) │ 12 bytes    │ 4 bytes    │ 3 bytes      │ 12 × ... │
-│             │             │            │              │          │
-│ busy位图     │ 槽位指纹     │ Stash指纹   │ busy/pos/    │ key[12]  │
-│ probe位图    │             │            │ overflow_cnt │ value[12]│
-└────────────────────────────────────────────────────────────────┘
-```
+链式哈希每个节点独立分配在堆上、靠指针串联。查询 Key 不存在时，要沿着链表逐跳找到底，**每一跳都可能 cache miss**。内存数据库里一次 cache miss 约 100ns，比一次 Key 比较贵一个量级——指针追逐是纯开销，不产出任何信息。
 
-### 3.1 SlotBitmap — 两张位图
+三个对策由此而来：
 
-每个 Bucket 用两个 `uint32_t` 管理 12 个槽位（受限于 `__builtin_ctz` 在 32 位上的高效操作）：
-
-```
-第一个 uint32_t  busy 位图:
-  Bit 0-11: 每个槽位是否被占用
-  Bit 12-31: 未使用
-
-第二个 uint32_t  probe 位图:
-  Bit 0-11: 该槽位是否属于邻居桶的探测条目
-  Bit 12-31: 未使用
-```
-
-源码注释：
-
-```cpp
-// 超过 28 个槽位，单个 uint32_t（32 位）存不下所有状态
-static_assert(NUM_SLOTS > 0 && NUM_SLOTS <= 28);
-```
-
-### 3.2 Fingerprint — 指纹数组
-
-`finger_arr_` 有 12 个字节，每个槽位对应 1 字节指纹。指纹 = `hash & 0xFF`（8 位）。
-
-查找时用 `_mm_cmpeq_epi8` 一条 SIMD 指令同时比对 16 个字节：
-
-```cpp
-uint32_t CompareFP(uint8_t fp) const {
-    const __m128i key_data = _mm_set1_epi8(fp);           // 广播指纹到 16 字节
-    __m128i seg_data = _mm_loadu_si128(                    // 加载指纹数组
-        reinterpret_cast<const __m128i*>(finger_arr_.data()));
-    __m128i rv_mask = _mm_cmpeq_epi8(seg_data, key_data); // 并行比较
-    int mask = _mm_movemask_epi8(rv_mask);                // 16 位结果掩码
-    return mask;
-}
-```
-
-指纹匹配的槽位才进入完整 Key 比较。负查询在指纹阶段就能确定 Key 不存在，完全避免了加载和比较 Key 值的开销。
-
-### 3.3 Stash 元数据 — 溢出引用管理
-
-Bucket 内嵌 4 字节的 Stash 指纹数组，加上 3 个控制字段：
-
-| 字段 | 含义 |
-|------|------|
-| `stash_busy_` | 低 4 位：哪些 Stash 指纹槽被占用；bit 4：HasStash 标记 |
-| `stash_pos_` | 每 2 位编码一个 Stash 桶 ID（0-3），4 个槽位共 8 位 |
-| `stash_probe_mask_` | 标记哪些 Stash 条目来自 probe（邻居探测） |
-| `overflow_count_` | 记录有多少个 Stash 引用溢出到了邻居桶中 |
-
-`SetStashPtr` 的注释：
-
-```cpp
-// 遍历 Stash 指针并查找匹配指纹
-template <typename F>
-std::pair<unsigned, SlotId> IterateStash(uint8_t fp, bool is_probe, F&& func) const {
-    unsigned om = is_probe ? stash_probe_mask_ : ~stash_probe_mask_;
-    unsigned ob = stash_busy_;
-    for (unsigned i = 0; i < kStashFpLen; ++i) {
-        if ((ob & 1) && (stash_arr_[i] == fp) && (om & 1)) {
-            unsigned pos = (stash_pos_ >> (i * 2)) & 3;
-            // 从 stash_pos_ 中提取当前 Stash 指针的 2 位，获得溢出桶 ID
-            ...
-        }
-        ob >>= 1; om >>= 1;
-    }
-}
-```
+| 对策 | 解决的问题 | 新引入的麻烦 |
+|------|-----------|-------------|
+| 开放寻址（连续存储） | 指针追逐、内存碎片 | 扩容要整表 rehash → 引出分段 |
+| 指纹预过滤 | 完整 Key 比较昂贵 | 每槽 1 字节空间 + 误命中兜底 |
+| 分段管理 | 扩容粒度太大 | 目录维护、逻辑/物理段映射 |
 
 ---
 
-## 4. 目录与扩容机制
+## 2. 分段 + 目录：如何把扩容成本摊薄
 
-DashTable 的扩容借鉴了 Extendible Hashing 的目录映射设计。
+### 难处
 
-### 4.1 核心概念
+普通开放寻址哈希（线性探测、robin hood 等）扩容时**必须整表 rehash**：O(n) 的搬移、峰值时刻内存翻倍，且发生在单次插入内，延迟抖动明显。内存数据库要的是平滑性能，不是偶尔的停顿。
+
+### 决策：Extendible Hashing 式目录
+
+```
+segments_[]（逻辑段，元素是指针）        物理段（真正存数据）
+┌──────────────┐
+│ [0] ────────────────→ Seg_0
+│ [1] ────────────────→ Seg_0      ← 多个逻辑段共享一个物理段
+│ [2] ────────────────→ Seg_2
+│ [3] ────────────────→ Seg_2
+└──────────────┘
+```
+
+- `segments_[]` 的每个元素是一个**逻辑段**（指针），真正存储的是**物理段**（`Segment`）
+- Key 定位用哈希**最高位**：`SegmentId = hash >> (64 - global_depth_)`
+- 只有段满了才分裂，且**只重哈希这一个段**
+
+### 难处 1：翻目录可能覆盖未读数据
+
+`local_depth_ == global_depth_` 时目录长度不够，需要翻倍。若正序复制，前一半旧数据会被后一半覆盖。**解法：倒序复制**——从旧目录尾部往前填，每个旧项复制两份。
+
+### 难处 2：分裂后目录该改哪几项
+
+分裂产生新段后，目录中"本属于新段"的区间必须改指。**解法：选高位不选低位**。同一物理段的逻辑段，其高位相同、下标连续，所以只更新一个局部区间：
 
 ```cpp
-// dash_table.hpp 源码注释
-/*
-    术语:
-        逻辑段: segment_每一个元素为一个逻辑段，逻辑段为一个指针,
-                指向物理段，不同的逻辑段可能指向相同的物理段
-        物理段: 逻辑段为一个指针,指向真正存储数据的物理段
-
-    参数：unique_segments_, initial_depth_, global_depth_;
-    构造: initial_depth_ = global_depth_ = capacity_log,
-          unique_segments_ = 2^capacity_log
-*/
-```
-
-- `global_depth_`：决定目录大小 = `2^global_depth_`；Key 需要用 `global_depth_` 位哈希值来定位逻辑段
-- `local_depth_`：每个 Segment 的局部深度；决定有多少个目录槽指向同一个物理段
-- 一个物理段覆盖的目录项数量 = `2^(global_depth_ - local_depth_)`
-
-### 4.2 初始状态
-
-以 `capacity_log = 2` 为例（`global_depth_ = 2`）：
-
-```
-Hash 值高 2 位作为 Segment ID：
-  key_hash = Hash(key)
-  seg_id = key_hash >> (64 - 2)   // 取最高 2 位
-
-初始目录（4 个逻辑段 → 4 个物理段，一一对应）：
-  00 → Seg_0 (local_depth=2)
-  01 → Seg_1 (local_depth=2)
-  10 → Seg_2 (local_depth=2)
-  11 → Seg_3 (local_depth=2)
-```
-
-此时 `local_depth_ == global_depth_`，每个物理段独占一个目录槽。
-
-### 4.3 Segment Split — 段分裂
-
-当某个 Segment 插满且 Stash 也满时触发 Split。
-
-假设 `Seg_0`（目录槽 `00`）满了。由于 `local_depth_ == global_depth_`，必须先扩大目录：
-
-```
-IncreaseDepth(3): global_depth_ 从 2 变为 3
-
-扩大后目录（每个物理段被 2 个逻辑段共享）：
-  000 → Seg_0   001 → Seg_0
-  010 → Seg_1   011 → Seg_1
-  100 → Seg_2   101 → Seg_2
-  110 → Seg_3   111 → Seg_3
-```
-
-现在 `Seg_0` 的 `local_depth_=2`，而 `global_depth_=3`，它被两个逻辑段（`000` 和 `001`）引用。此时可以 Split：
-
-```
-Split Seg_0(local_depth=2 → 3):
-
-  原始：000 → Seg_0   001 → Seg_0
-
-  分裂后：
-    Seg_0 的 local_depth_ += 1  →  3
-    新建 Seg_4 的 local_depth_ = 3
-
-    对 Seg_0 中所有 Key 重新哈希，看 hash >> (64-3) 的最低位：
-      bit = 0  → 留在 Seg_0（目录槽 000→Seg_0）
-      bit = 1  → 迁移到 Seg_4（目录槽 001→Seg_4）
-
-  最终：
-    000 → Seg_0 (local_depth=3)
-    001 → Seg_4 (local_depth=3)
-    010 → Seg_1
-    011 → Seg_1
-    ...
-```
-
-**Split 源码核心逻辑**：
-
-```cpp
-// dash_internal.hpp Segment::Split
-void Segment::Split(HFunc&& hfn, Segment* dest_right, MoveCb&& on_move_cb) {
-    ++local_depth_;                         // 原段深度 +1
-    dest_right->local_depth_ = local_depth_; // 新段深度相同
-
-    // 判断 Key 属于哪个段：hash >> (64 - local_depth_) 的最低位
-    auto is_mine = [this](Hash_t hash) {
-        return (hash >> (64 - local_depth_) & 1) == 0;  // bit=0 留在原段
-    };
-
-    // 遍历所有主桶，不属于自己的 Key 迁移到 dest_right
-    for (unsigned i = 0; i < kBucketNum; ++i) {
-        bucket_[i].ForEachSlot([&](...) {
-            if (!is_mine(hfn(key))) {
-                dest_right->InsertUniq(key, value, hash, false, ...);
-                invalid_mask |= (1u << slot);
-            }
-        });
-        bucket_[i].ClearSlots(invalid_mask);
-    }
-
-    // Stash 桶同理：属于新段的迁移，留在原段的尝试搬回主桶
-    ...
+const uint32_t span = 1u << (global_depth_ - seg->LocalDepth());
+for (uint32_t i = base + span; i < base + 2 * span; ++i) {
+  segments_[i] = new_seg;
 }
 ```
 
-### 4.4 完整扩容演进示例
+如果选低位，同一物理段的逻辑段下标会交错，分裂要改的目录项既不连续又更多。
 
-从一个空的 DashTable (`capacity_log=0`) 开始，逐步插入直到触发多次 Split：
+### 收益
 
-```
-阶段 1：初始状态
-  global_depth_ = 0, 目录大小 = 1
-  0 → Seg_0 (local_depth=0)
+- 扩容写放大 = O(段内条目数)，本段 64×16 = 1024 槽级别，且只影响一个段，其余段无感知
+- 目录扩展是 O(2^gd) 的指针复制，按条目数摊薄后很小
+- 段是内存回收的基本单位：空段可整体归还给分配器
 
-阶段 2：Seg_0 满了，需要 Split
-  但 local_depth_ == global_depth_ == 0，先 IncreaseDepth(1)
-  global_depth_ = 1, 目录大小 = 2
-  0 → Seg_0   1 → Seg_0  (共享)
-  Split Seg_0: local_depth_ → 1
-  0 → Seg_0   1 → Seg_1
+### 代价
 
-阶段 3：Seg_0 又满了
-  local_depth_(1) == global_depth_(1)，先 IncreaseDepth(2)
-  global_depth_ = 2, 目录大小 = 4
-  00 → Seg_0   01 → Seg_0
-  10 → Seg_1   11 → Seg_1
-  Split Seg_0: local_depth_ → 2
-  00 → Seg_0   01 → Seg_2
-  10 → Seg_1   11 → Seg_1
-
-阶段 4：Seg_1 满了
-  local_depth_(1) < global_depth_(2), 直接 Split, 不需要 IncreaseDepth
-  Split Seg_1: local_depth_ → 2
-  00 → Seg_0   01 → Seg_2
-  10 → Seg_1   11 → Seg_3
-
-阶段 5：继续插入，某个 Seg 满了...
-  local_depth_ == global_depth_ == 2，IncreaseDepth(3)
-  global_depth_ = 3, 目录大小 = 8
-  000 001 → Seg_0   010 011 → Seg_2
-  100 101 → Seg_1   110 111 → Seg_3
-  Split: local_depth_ → 3，分裂出 Seg_4
-  000 → Seg_0   001 → Seg_4
-  ...
-```
-
-**关键代码**（确定 Segment ID）：
-
-```cpp
-// dash_table.hpp
-uint32_t SegmentId(size_t hash) const {
-    if (global_depth_) {
-        return hash >> (64 - global_depth_);  // 取高 global_depth_ 位
-    }
-    return 0;
-}
-
-// 确定逻辑段在目录中的下一跳（跳过共享同一物理段的连续槽位）
-size_t NextSeg(size_t sid) const {
-    size_t delta = (1u << (global_depth_ - segment_[sid]->local_depth()));
-    return sid + delta;
-}
-```
-
-### 4.5 IncreaseDepth — 目录扩展
-
-```cpp
-// dash_table.hpp  IncreaseDepth 源码注释
-/*
-    原始目录 (global_depth_=2):
-      00 -> 逻辑段1 -> 物理段1
-      01 -> 逻辑段2 -> 物理段2
-      10 -> 逻辑段3 -> 物理段3
-      11 -> 逻辑段4 -> 物理段4
-
-    IncreaseDepth(3) 后:
-      repl_cnt = 2^(3-2) = 2  表示每个物理段被2个逻辑段引用
-
-      000 -> 逻辑段1 -> 物理段1
-      001 -> 逻辑段2 -> 物理段1  ← 新增
-      010 -> 逻辑段3 -> 物理段2
-      011 -> 逻辑段4 -> 物理段2  ← 新增
-      100 -> 逻辑段5 -> 物理段3
-      101 -> 逻辑段6 -> 物理段3  ← 新增
-      110 -> 逻辑段7 -> 物理段4
-      111 -> 逻辑段8 -> 物理段4  ← 新增
-*/
-```
-
-从后往前填充，避免覆盖未处理的数据：
-
-```cpp
-for (int i = prev_sz - 1; i >= 0; --i) {         // 从后往前
-    size_t offs = i * repl_cnt;
-    std::fill(segment_.begin() + offs,            // 连续 repl_cnt 个槽
-              segment_.begin() + offs + repl_cnt, // 都指向同一个物理段
-              segment_[i]);
-}
-```
+多一次指针间接（先查目录再进段）；段过小时分裂频繁。因此初始段数按预期数据量配置（反序列化时按条目数估算），避免冷启动反复分裂。
 
 ---
 
-## 5. 插入流程
+## 3. 段内组织：归属限定，把查找路径固定下来
 
-`InsertUniq` 实现了四级递进的插入策略：
+### 难处
 
-### 5.1 完整流程
+段内同样是哈希，也会有冲突。纯线性探测的致命伤是**归属不确定**：一个 Key 可能被挤到很远，查找只能一路找下去，删除还要处理连续区间（墓碑或回填），最坏情况无法界定。
+
+### 决策：每个 Key 只有三个藏身处
+
+1. 主桶 `home` 的非 probe 槽 —— **自己家**
+2. 右邻桶 `nxt` 的 probe 槽 —— **借宿邻居家**
+3. 段尾溢出区 —— **发配边疆**
 
 ```
-InsertUniq(key, value, key_hash, spread=true):
-  │
-  │  bid = HomeIndex(key_hash)        // hash >> 8 % 64
-  │  nid = NextBid(bid)               // 邻居桶: bid+1 (63 的下一个是 0)
-  │  meta_hash = key_hash & 0xFF      // 指纹
-  │
-  ├─[第1级] 均衡插入 (spread=true)
-  │   比较 target(bid) 和 neighbor(nid) 的空闲槽位数
-  │   选空闲更多的桶插入
-  │   → 成功: 返回
-  │
-  ├─[第2级] 位移 (Displacement)
-  │   尝试 MoveToOther(true, nid, NextBid(nid))
-  │   将 nid 桶中一个"属于自己"的条目移到 nid+1
-  │   腾出的位置插入新 Key
-  │   → 成功: 返回
-  │
-  │   尝试 MoveToOther(false, bid, PrevBid(bid))
-  │   将 bid 桶中一个"来自邻居"的条目移回前一个桶
-  │   → 成功: 返回
-  │
-  ├─[第3级] Stash 溢出
-  │   遍历 4 个 Stash 桶:
-  │     stash_pos = (bid + i) % 4
-  │     插入到 bucket_[64 + stash_pos]
-  │     调用 SetStashPtr 在主桶/邻居桶建立反向引用
-  │   → 成功: 返回
-  │
-  └─[第4级] 返回空 Iterator → 触发 Segment Split
+home = (hash >> 8) & (kMainBuckets - 1)   // 指纹外的 6 位
+nxt  = home + 1                            // 注意不环回：63 的邻居不存在
+fp   = hash & 0xFF                         // 8 位指纹
 ```
 
-### 5.2 源码注释关键点
+查找路径因此**确定且短**：`home → nxt → 溢出区`，三步走完，绝不漂移。
 
-```cpp
-// HomeIndex: 计算主桶位置
-static LogicalBid HomeIndex(Hash_t hash) {
-    return (hash >> kFingerBits) % kBucketNum;   // hash >> 8, 取模 64
-}
+### 收益
 
-// NextBid: 线性探测下一个桶（环形）
-static LogicalBid NextBid(LogicalBid bid) {
-    return bid < kBucketNum - 1 ? bid + 1 : 0;    // 63 → 0
-}
+- 删除 O(1)：直接清槽，不需要墓碑/回填——因为 Key 的归属不依赖"连续区间"假设
+- 最坏查找路径有界：2 个主桶 + 溢出区
+- 无墓碑意味着槽位复用直接，负载因子可以推高
 
-// InsertUniq 参数说明
-Iterator InsertUniq(U&& key, V&& value, Hash_t key_hash,
-    bool spread,  /*
-        spread true:  选择负载较小的桶（主桶或邻居桶）做均衡插入
-        spread false: 优先选择主桶
-    */
-    OnMoveCb&& on_move_cb);  // 条目移动时的回调（用于通知淘汰策略）
-```
+### 代价
 
-### 5.3 MoveToOther — 位移操作细节
-
-```cpp
-// MoveToOther 参数说明
-int MoveToOther(
-    bool own_items,  /*
-        true:  移动自己的条目（非探测槽位，即属于 from_bid 本身的）
-        false: 移动别人的条目（探测槽位，即通过 probe 暂存在 from_bid 的）
-    */
-    unsigned from_bid,
-    unsigned to_bid); /*
-        桶满时将一个条目从当前桶移动到另一个桶，为新条目腾出空间
-    */
-
-// 源码逻辑
-auto& src = bucket_[from_bid];
-uint32_t mask = src.GetProbe(!own_items);  // 找到可移动的条目
-int src_slot = __builtin_ctz(mask);        // 取第一个匹配的槽位
-
-// 尝试插入到目标桶
-int dst_slot = bucket_[to_bid].TryInsertToBucket(
-    src.key[src_slot], src.value[src_slot], src.Fp(src_slot), own_items);
-
-if (dst_slot >= 0) {
-    src.Delete(src_slot);  // 从原桶删除
-    return src_slot;       // 返回腾出的槽位
-}
-```
+桶号必须用掩码算，所以 `kBucketNum` 被限定为 2 的幂；指纹宽度固定 8 位，挤掉了哈希位（`hash >> 8` 才是桶位）。
 
 ---
 
-## 6. 查找流程
+## 4. 指纹 SIMD：把"比较"变成"过滤"
 
-### 6.1 完整路径
+### 难处
 
-```
-FindIt(key_hash, pred):
-  │
-  │  bid = HomeIndex(key_hash)          // 主桶索引
-  │  fp_hash = key_hash & 0xFF          // 指纹
-  │
-  ├─[1] 查主桶
-  │    target = bucket_[bid]
-  │    sid = target.FindByFp(fp_hash, probe=false, pred)
-  │    // FindByFp 内部：
-  │    //   mask = CompareFP(fp_hash) & GetBusy() & GetProbe(false)
-  │    //   指纹匹配 + 槽位占用 + 非探测条目
-  │    //   逐槽调用 pred(key) 做完整比较
-  │    → 找到: 返回 Iterator(bid, sid)
-  │
-  ├─[2] 查邻居桶
-  │    nid = NextBid(bid)
-  │    probe = bucket_[nid]
-  │    sid = probe.FindByFp(fp_hash, probe=true, pred)
-  │    // 查 probe=true 的条目（被均衡插入放到邻居桶的）
-  │    → 找到: 返回 Iterator(nid, sid)
-  │
-  ├─[3] Stash 查找
-  │    if !target.HasStash(): 返回空
-  │
-  │    if target.HasStashOverflow():  // 溢出计数 > 0
-  │        遍历全部 4 个 Stash 桶的每一个槽位
-  │        → 找到: 返回
-  │
-  │    else:  // 正常 Stash，目标明确
-  │        IterateStash(fp_hash, false) 查主桶 Stash 引用
-  │        IterateStash(fp_hash, true)  查邻居桶 Stash 引用
-  │        → 找到: 返回
-  │
-  └─ 返回空 Iterator
-```
+开放寻址的查询第一步是排除空槽、缩小候选集。逐槽加载 Key 做完整比较很贵，尤其是字符串键；而哈希表里**绝大多数查询是负查询**（Key 不存在）。
 
-### 6.2 为什么"最多查两个桶"
+### 决策
 
-每个 Key 的"家"只有两个候选位置——主桶 `bid = hash >> 8 % 64` 和邻居桶 `nid = bid + 1`。均衡插入会在这两个桶之间选择，位移操作也严格限制在这两个桶的邻域内。所以查找永远只需要检查这两个桶（加上可能的 Stash），保证了 O(1) 的确定性查找。
-
----
-
-## 7. Key/Value 存储格式：CompactObj
-
-ImDragonfly 使用 Tagged Union 存储 Key 和 Value，避免为每种类型分配独立内存：
+哈希低 8 位作为指纹，每个槽存 1 字节。16 槽恰好 16 字节 = 一个 `__m128i`，一条指令同时比完：
 
 ```cpp
-// compact_obj.hpp
-enum Tag : uint8_t {
-    EMPTY = 0,
-    INT_TAG = 1,      // int64_t 内联存储
-    STR_TAG = 2,      // std::string
-    ROBJ_TAG = 3,     // 复杂对象指针（List/Hash/Set/ZSet）
-    TTL_STR_TAG = 4,  // 带过期时间的字符串
-};
-
-union CompactU {
-    int64_t ival_;
-    std::string str_;
-    TtlString ttl_;    // {std::string val; uint64_t exp_ms;}
-    Robj robj_;        // {void* ptr; CompactObjType type;}
-};
-```
-
-**Key 存储 (CompactKey)**：支持带过期标记的字符串，通过 `TTL_STR_TAG` 存 `{value, expire_ms}` 对。
-
-**Value 存储 (CompactValue)**：小整数和短字符串内联在 Bucket slot 内。复杂对象（List/Hash/Set/ZSet）使用 mimalloc 分配并用 `ROBJ_TAG` 引用，析构时自动释放。
-
----
-
-## 8. Segment 遍历：TraverseLogicalBucket
-
-遍历一个"逻辑桶"的所有条目——包括分散在主桶、邻居桶和 Stash 桶中的：
-
-```cpp
-bool Segment::TraverseLogicalBucket(LogicalBid bid, HashFn&& hfun, Cb&& cb) const {
-    const Bucket& b = bucket_[bid];
-
-    // 1. 主桶中属于 bid 的条目（probe=false）
-    if (b.GetProbe(false)) {
-        b.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
-            if (!probe) cb(Iterator{bid, slot});
-        });
-    }
-
-    // 2. 邻居桶中属于 bid 的条目（probe=true，说明是从 bid 溢出过去的）
-    const Bucket& next = GetBucket(NextBid(bid));
-    if (next.GetProbe(true)) {
-        next.ForEachSlot([&](auto* bucket, SlotId slot, bool probe) {
-            if (probe && HomeIndex(hfun(bucket->key[slot])) == bid)
-                cb(Iterator{NextBid(bid), slot});
-        });
-    }
-
-    // 3. Stash 桶中属于 bid 的条目
-    if (b.HasStash()) {
-        for (uint8_t j = kBucketNum; j < kTotalBuckets; ++j) {
-            stashb.ForEachSlot([&](auto* bucket, SlotId slot, ...) {
-                if (HomeIndex(hfun(bucket->key[slot])) == bid)
-                    cb(Iterator{j, slot});
-            });
-        }
-    }
+uint16_t MatchFp(uint8_t fp) const {
+  const __m128i data = _mm_loadu_si128(reinterpret_cast<const __m128i*>(fp_));
+  const __m128i eq = _mm_cmpeq_epi8(_mm_set1_epi8(static_cast<char>(fp)), data);
+  return static_cast<uint16_t>(_mm_movemask_epi8(eq)) & kSlotMask<kSlots>;
 }
 ```
+
+候选集 = `MatchFp & occupied_ & (probe 位过滤)`，三步位运算之后，剩下的槽才做完整比较。
+
+### 收益
+
+负查询几乎零成本：一条 SIMD + 两组位运算即可断言"不存在"，从头到尾不碰 Key。正查询把昂贵的比较压缩到指纹命中的少数槽。
+
+### 代价（可接受的交换）
+
+8 位指纹误命中概率 2⁻⁸，16 槽中至少一个指纹命中的概率 ≈ 6%——不构成正确性问题（完整比较兜底），只是平均多花一点比较。这是典型的**用 1 字节空间换一次 SIMD 的确定性收益**。
+
+---
+
+## 5. 插入三级策略：均衡 → 腾挪 → 溢出区
+
+一个 Key 该放哪？答案决定段内负载分布，进而决定整张表的最高负载因子。
+
+### 第 1 级：均衡安置（spread）
+
+- **难处**：固定 home 优先会造成热点桶——某些桶先满，溢出区先膨胀，其余桶还空着
+- **决策**：插入时比较 home 与 nxt 的空闲数，**谁空落谁**；借宿的槽打上 probe 位
+- **收益**：桶占用均匀，同等槽位数下能扛更高的负载因子
+- **代价**：一次 popcount + 比较，常数开销
+
+### 第 2 级：腾挪（级联移动）
+
+- **难处**：home、nxt 都满。直接发配？溢出区会膨胀
+- **决策**：先"挤一挤"，两步各搬一个条目：
+  1. nxt 的**自家**条目往后挪一格到 `nxt+1` —— 腾出 nxt 给新条目做借宿位
+  2. home 的**借宿**条目挪回它家 `home-1` —— 腾出 home 给自己
+- **收益**：这是 Dash 论文"级联移动"的微型版：冲突只在相邻桶间滑动，成本常数、影响局部，却能把插入再往后推迟两级
+- **代价**：极端情况下一次插入做两次搬移
+
+### 第 3 级：溢出区（发配 + 归属管理）
+
+- **难处**：溢出条目散落在段尾几个桶里，怎么知道谁属于谁？没有约束的话，热点桶能把溢出区撑爆，查找退化成扫全段
+- **决策**：段级两张辅助表——
+
+```cpp
+uint8_t overflow_home_[kOverflowSlots];  // 每个溢出槽的归属主桶（kNoHome=空闲）
+uint8_t overflow_cnt_[kMainBuckets];     // 每个主桶已占用的溢出槽数
+```
+
+外加硬上限：**每个主桶最多 4 个溢出槽**（`kMaxOverflowPerBucket`）。
+- **收益**：溢出有界（每段至多 64 个溢出槽）；溢出查找先指纹粗筛再核对归属，误判为零；"溢出满"成为分裂的明确触发信号，而不是无限兜底
+- **代价**：删除溢出条目时要同步维护两张表（否则归属信息泄漏，查找误判）
+
+---
+
+## 6. 分裂：全段搬移，顺便"自愈"
+
+### 难处：论文的选择性分裂要不要抄？
+
+Dash 论文在持久内存场景下追求**低写放大**，段满时只重哈希"最拥挤的组"。但代价是实现复杂：段内要维护组级状态、组级索引。本项目是 DRAM 实现，段内只有 1024 个槽——**整段重哈希的成本本身就是常数**。
+
+### 决策：整段 `SplitInto` 一次搬完
+
+- `local_depth_` 加 1，判别位是哈希在新深度下的最高位：`(h >> (64 - local_depth_)) & 1`
+- 主桶：右半条目 `ForceInsert` 搬进新段（move，不拷贝）
+- 溢出区：右半整体搬进新段；**左半尝试回收**（`TryReclaimOverflow`）
+
+### 为什么分裂后要"回收溢出条目"？
+
+分裂让段内桶数翻倍、拥挤立刻缓解——被发配的条目有机会"回家"了。不回收的话，溢出槽被历史包袱长期占用，后续插入的余量被持续蚕食，下一轮分裂会提前到来。回收是**段内结构的自愈**：每次分裂之后，负载重新均匀，溢出区回归低位。
+
+### 收益
+
+- 实现简单：无组级状态、无选择性重哈希的簿记
+- 每次分裂附带一次全局再平衡，段内结构自动收敛
+- 目录更新只需改局部区间（§2）
+
+### 代价
+
+一次分裂搬 1024 槽的常数成本；超高负载因子下分裂频繁时会有峰值。这是"简单优先"的取舍——若未来需要多线程并发分裂或降低写放大，可以再引入论文的组级分裂。
+
+---
+
+## 7. 持久化：快照如何做到崩溃一致
+
+### 难处
+
+1. **直接 dump 内存布局**：内部是指针和物理结构，跨进程、跨版本都不可移植
+2. **写一半崩溃**：文件里是一堆半截数据，不检查就察觉不到
+3. **布局参数漂移**：槽数/桶数是模板参数，读旧文件若按新布局解释，数据全错
+
+### 决策：三段式快照 + 三个防线
+
+```
+[Header]  magic "IMDT" + version + 槽数/桶数/溢出桶数 + entry_count
+[Data]    entry_count 条 (key, value)，字节格式由 Policy 定义
+[Commit]  entry_count + checksum      ← 提交点，最后写
+```
+
+- **防线 1（可移植）**：序列化的是逻辑记录（`tag + payload`），不是内存布局；字节格式由 `Policy::WriteKey/WriteValue` 定义，表本身不关心
+- **防线 2（可检测）**：Header 里 magic/version/布局参数任一项不匹配就拒绝加载，杜绝旧格式误读
+- **防线 3（崩溃一致）**：Header+Data 先落盘，`PersistCommit` **最后**写。恢复时若 Commit 缺失或 checksum 不匹配，判定快照不完整。这等价于数据库里的"提交点"语义——数据再完整，没有提交点就不算数
+
+```cpp
+struct PersistHeader { char magic[4]; uint16_t version, slots, main_buckets, stash_buckets; uint64_t entry_count; };
+struct PersistCommit { uint64_t entry_count; uint64_t checksum; };
+```
+
+### 恢复的两个细节
+
+- **按条目数估算初始段数**：一次建够目录，避免重放时每插满一段就分裂一次——既快又省写放大
+- **重放走线上同一路径**：`InsertNewByHash` 与运行时插入共用代码，恢复结果与"逐条插入得到的状态"完全一致
+
+### 收益 / 代价
+
+跨进程可移植、版本可演进、崩溃可检测；代价是 checksum 线性扫描 O(n)，相对落盘本身可忽略。
+
+
+---
+
+## 8. 权衡总览
+
+| 设计点 | 难处 | 决策 | 收益 | 代价 |
+|--------|------|------|------|------|
+| 开放寻址 | 指针追逐、cache miss | 连续存储 | 缓存友好 | 扩容贵 → 被分段解决 |
+| 分段 + 目录 | 整表 rehash | 高位定位 + 局部目录更新 | 扩容 O(一段) | 一次指针间接 |
+| 归属限定 | 冲突位置漂移 | home/nxt/溢出区 | 查找删除确定有界 | 桶数需 2 的幂 |
+| 指纹 SIMD | Key 比较昂贵 | 8 位指纹 + `__m128i` | 负查询近零成本 | 1B/槽 + 6% 误命中 |
+| 三级插入 | 负载不均 / 溢出膨胀 | 均衡 → 腾挪 → 溢出 | 高负载因子、溢出有界 | 极端插入两次搬移 |
+| 全段分裂 | 写放大 | 整段 `SplitInto` + 回收 | 简单、自愈 | 分裂常数成本 |
+| 提交点 | 半截数据 | Header/Data/Commit | 崩溃一致、可检测 | checksum O(n) |
+
+整体：平均 O(1)、最坏 O(段内)；单线程实现，并发由上层分片（Shard）隔离。
+
+---
+
+## 9. 设计来源
+
+- **Dash 论文**（VLDB 2020）：分段管理思想、级联移动（腾挪）、崩溃一致与快速恢复的目标
+- **DragonflyDB**：指纹 SIMD 过滤、溢出区（stash）、具体布局的灵感
 
 ---
 
 ## 参考文献
 
 1. Lu, B., Hao, X., Wang, T., & Lo, E. (2020). **Dash: Scalable Hashing on Persistent Memory**. *Proceedings of the VLDB Endowment*, 13(8), 1147-1161. [arXiv:2003.07302](https://arxiv.org/abs/2003.07302)
-
-2. DragonflyDB. [GitHub Repository](https://github.com/dragonflydb/dragonfly). BSD License.
+2. DragonflyDB. [GitHub Repository](https://github.com/dragonflydb/dragonfly). Business Source License 1.1.

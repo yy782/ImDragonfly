@@ -24,13 +24,13 @@ ImDragonfly 采用 **DashTable** 作为核心数据存储引擎，这是一款�
 
 **核心技术原理：**
 
-- **开放寻址 + 线性探测**：摒弃传统链式哈希的指针开销，数据直接存储在连续内存槽位中。当发生哈希冲突时，通过线性探测（`NextBid`）查找相邻桶，实现 O(1) 平均复杂度的查找和插入操作。每个 Bucket 包含 12 个槽位，使用位图（`SlotBitmap`）高效管理槽位状态。
+- **开放寻址 + 归属限定**：摒弃传统链式哈希的指针开销，数据直接存储在连续内存槽位中。每个 Key 的藏身处固定为主桶、右邻桶（`NextBucket`）、溢出区三处，查找路径确定且有界，实现 O(1) 平均复杂度的查找和插入操作。每个 Bucket 包含 16 个槽位，由指纹数组（`fp_[16]`）配合占用/借宿位图（`occupied_`/`probe_`）高效管理槽位状态。
 
-- **Fingerprint 指纹优化**：提取哈希值的低 8 位作为指纹（`kFingerBits = 8`），存储在 `finger_arr_` 数组中。查找时先通过 SIMD 指令（`_mm_cmpeq_epi8`）进行指纹比对，快速过滤不匹配的候选键，显著减少不必要的完整键比较。
+- **Fingerprint 指纹优化**：提取哈希值的低 8 位作为指纹（`kFpBits = 8`），每槽 1 字节存储于 `fp_[16]`。查找时先通过 SIMD 指令（`_mm_cmpeq_epi8`）一次性比对 16 个槽位，快速过滤不匹配的候选键，显著减少不必要的完整键比较。
 
-- **Stash 溢出处理**：每个 Segment 包含 64 个主桶和 4 个 Stash 桶。当主桶及其邻居桶均已满时，数据会被写入 Stash 桶，并通过 `SetStashPtr` 建立反向引用，确保查找时能够追踪到溢出数据。
+- **溢出区处理**：每个 Segment 包含 64 个主桶和 4 个溢出桶。当主桶及其邻居桶均已满时，数据被写入溢出区，由段级归属表（`overflow_home_` 记录每个溢出槽的归属主桶、`overflow_cnt_` 记录计数）追踪，每主桶最多占用 4 个溢出槽，超出即触发分裂。
 
-- **可扩展哈希分段**：采用类似 Extendible Hashing 的目录结构，支持动态扩展。通过 `Split` 操作将单个 Segment 分裂为两个，`IncreaseDepth` 扩展全局目录，实现按需扩容而无需重建整个哈希表。
+- **可扩展哈希分段**：采用类似 Extendible Hashing 的目录结构，支持动态扩展。通过 `SplitInto` 操作将单个 Segment 分裂为两个，`IncreaseDepth` 扩展全局目录，实现按需扩容而无需重建整个哈希表。
 
 ### 5️⃣ 替换传统 2PL 锁为 VVL 意向锁
 
@@ -97,7 +97,7 @@ struct IntentLock {
 
 ### 核心组件
 
-- **EngineShardSet**: 分片集合管理器，负责分片的创建，分片事务的运行
+- **ShardPool**: 分片池管理器，负责分片的创建与销毁，并向指定分片投递任务（`Post`）
 - **CommandRegistry**: 命令注册中心
 - **RedisSession**: 客户端会话管理，处理连接生命周期
 - **Transaction**: 事务引擎，处理分片事务
@@ -355,20 +355,21 @@ OK
 
 ```
 ImDragonfly/
-├── net/                    # 网络核心层
-│   ├── base/              # 异步 IO 封装、Socket 抽象
-│   ├── cppcoro/           # C++ 20 协程库
-│   └── util/              # 工具函数、并发原语
 ├── src/                   # 业务逻辑层
 │   ├── command_layer/     # 命令处理、参数解析
-│   ├── network/           # Redis 协议实现
-│   ├── redis/             # RESP 编解码
+│   ├── detail/            # 内部实现细节
+│   ├── io/                # io_uring 网络层（Proactor、Socket）
+│   ├── redis/             # RESP 协议、aux、skiplist
+│   ├── server/            # 服务端入口、连接与会话管理
 │   ├── sharding/          # 分片管理、DashTable
 │   ├── transaction_layer/ # 事务引擎
-│   └── detail/            # 内部实现细节
+│   └── util/              # 工具库、并发原语、vendored 第三方库
 ├── test/                  # 测试套件
+├── docs/                  # 设计文档
+├── scripts/               # 辅助脚本
+├── main.cpp               # 程序入口
 ├── CMakeLists.txt         # 构建配置
-└── LICENSE                # BSL 1.1 许可证
+└── LICENSE                # MIT License（原创部分）
 ```
 
 ***
@@ -387,11 +388,7 @@ ImDragonfly/
 
 ## 📜 许可证
 
-本项目采用 **Business Source License 1.1 (BSL 1.1)**，详见 [LICENSE](LICENSE)。
-
-- Change Date：2030-11-01，届时将转为 Apache License 2.0
-- 非生产环境（开发/测试/学习）使用不受限
-- 部分文件衍生自 [DragonflyDB](https://github.com/dragonflydb/dragonfly)，版权归 DragonflyDB authors 所有
+本项目代码采用 **MIT License**，详见 [LICENSE](LICENSE)。
 
 ***
 
