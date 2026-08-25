@@ -40,33 +40,34 @@ class UringProactorPool {
   }
 
   void stop() {
-    DispatchBrief([](UringProactor* p) { p->Shutdown(); });
+    DispatchBriefFromMain([](UringProactor* p) { p->Shutdown(); });
 
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i]->join();
     }
-    // threads_ join 后 proactors_ 已被各 worker 线程清空
+
   }
 
   size_t size() const { return proactors_.size(); }
 
+
   template <typename Func>
-  void DispatchBrief(Func&& f) {
+  void DispatchBriefFromMain(Func&& f) {
     for (std::size_t i = 0; i < size(); ++i) {
       auto p = proactors_[i];
 
-      p->DispatchBrief([p, f]() mutable { f(p); });
+      p->DispatchBriefFromMain([p, f]() mutable { f(p); });
     }
   }
   template <typename Func>
-  void AwaitOnAll(Func&& func) {
+  void AwaitOnAllFromMain(Func&& func) {
     std::latch latch(size());
     auto cb = [func = std::forward<Func>(func),
                &latch](UringProactor* p) mutable {
       func(p);
       latch.count_down();
     };
-    DispatchBrief(std::move(cb));
+    DispatchBriefFromMain(std::move(cb));
     latch.wait();
   }
 

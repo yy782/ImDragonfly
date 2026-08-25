@@ -323,7 +323,7 @@ void UringProactor::Run() {
 }
 
 void UringProactor::Shutdown() noexcept {
-  DispatchBrief([this] { shutdown_ = true; });
+  DispatchBriefFromMain([this] { shutdown_ = true; });
   task_queue_.Shutdown();
 }
 

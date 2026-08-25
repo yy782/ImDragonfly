@@ -45,9 +45,8 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
   }
 
   dfly::BlockingCounter bc(sids.size());
-  for (ShardId sid : sids) {
-    ShardDispatch& sd = dispatched_[sid];
-    shard_pool->Post(sid, [this, &sd, bc]() mutable {
+  auto make_cb = [this, bc](ShardDispatch& sd) {
+    return [this, &sd, bc]() mutable {
       auto t = [](ShardDispatch& sd, dfly::BlockingCounter bc,
                   DbIndex db) -> cppcoro::AsyncTask {
         sd.local_tx.reset(new Transaction(
@@ -66,8 +65,24 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
         co_return;
       };
       t(sd, std::move(bc), db_);
-    });
+    };
+  };
+
+  bool has_local = false;
+  for (ShardId sid : sids) {
+    ShardDispatch& sd = dispatched_[sid];
+    if constexpr (dfly::kUseMpmcTaskQueue) {
+      shard_pool->Post(sid, make_cb(sd));
+    } else {
+      if (sid == Shard::tlocal()->shard_id()) {
+        has_local = true;
+      } else {
+        shard_pool->PostShard(sid, Shard::tlocal()->shard_id(),
+                              make_cb(sd));
+      }
+    }
   }
+  if (has_local) make_cb(dispatched_[Shard::tlocal()->shard_id()])();
   co_await bc->Wait();
 
   for (ShardId sid : order_) {  // 这里可能不好理解哦

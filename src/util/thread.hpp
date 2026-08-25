@@ -18,8 +18,6 @@ class Thread {
   template <typename Func, typename... Args>
   explicit Thread(const char* name, Func&& func, Args&&... args)
       : Thread(name) {
-    // 用 lambda 代替 std::bind：std::bind 内部依赖已废弃的 std::result_of，
-    // 会触发 -Wdeprecated-declarations 警告。lambda 按值捕获转发语义一致。
     auto* wrapper = new std::function<void()>(
         [func = std::forward<Func>(func),
          ... args = std::forward<Args>(args)]() mutable {
@@ -66,9 +64,8 @@ class Thread {
     int ret =
         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
     if (ret != 0) {
-      std::cerr << "Failed to set CPU affinity for thread " << pthread_self()
-                << std::endl;
-      assert(false && "Failed to set CPU affinity");
+      LOG(FATAL) << "Failed to set CPU affinity for thread " << pthread_self() << " error " <<ret 
+                ;
       return false;
     }
     return true;

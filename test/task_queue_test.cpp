@@ -4,7 +4,7 @@
 //     TASK_QUEUE_NUM_TASKS=10000 ./build/unit_tests \
 //         --gtest_filter='*TaskQueue*Concurrent*:*MpmcQueue*MultiThread*'
 
-#include "util/task_queue.hpp"
+#include "detail/task_queue.hpp"
 
 #include <gtest/gtest.h>
 
@@ -65,7 +65,7 @@ class CountingResource : public std::pmr::memory_resource {
 // ═══════════════════════════════════════════════════════════
 
 TEST(TaskQueueTest, BasicFifo) {
-  util::TaskQueue q(8);
+  dfly::TaskQueue q(8);
   std::vector<int> order;
   std::mutex mu;
   for (int i = 0; i < 5; ++i) {
@@ -84,7 +84,7 @@ TEST(TaskQueueTest, BasicFifo) {
 }
 
 TEST(TaskQueueTest, Capacity) {
-  util::TaskQueue q(4);  // 容量 4（2 的幂）
+  dfly::TaskQueue q(4);  // 容量 4（2 的幂）
   for (int i = 0; i < 4; ++i) {
     EXPECT_TRUE(q.TryAdd([] {}));
   }
@@ -101,7 +101,7 @@ TEST(TaskQueueTest, Capacity) {
 TEST(TaskQueueTest, ConcurrentDrain) {
   const size_t kNumTasks = TaskCountFromEnv();
   constexpr size_t kProducers = 10;
-  util::TaskQueue q(64);  // 小容量制造更多入队竞争
+  dfly::TaskQueue q(64);  // 小容量制造更多入队竞争
 
   std::vector<std::atomic<uint8_t>> seen(kNumTasks);
   for (auto& s : seen) s.store(0, std::memory_order_relaxed);
@@ -152,7 +152,7 @@ TEST(TaskQueueTest, ConcurrentDrain) {
 TEST(TaskQueueTest, CustomAllocator) {
   CountingResource res;
   {
-    util::TaskQueue q(8, &res);
+    dfly::TaskQueue q(8, &res);
     ASSERT_TRUE(q.TryAdd([] {}));
     ASSERT_TRUE(q.TryAdd([] {}));
     q.TryDrain();

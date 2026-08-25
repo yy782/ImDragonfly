@@ -11,7 +11,7 @@
 #include "sharding/shard_storage.hpp"
 #include "util/intrusive_ptr.hpp"
 #include "util/mi_memory_resource.hpp"
-#include "util/task_queue.hpp"
+#include "detail/task_queue.hpp"
 
 namespace dfly {
 
@@ -29,7 +29,7 @@ class Shard {
   ShardId shard_id() const { return shard_id_; }
   base::UringProactor* proactor() const { return proactor_; }
   std::pmr::memory_resource* memory_resource() { return &mi_resource_; }
-  util::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }
+  dfly::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }
   void DriveQueue(util::intrusive_ptr<Transaction> tx);
 
   TxQueue& Queue() { return txq_; }

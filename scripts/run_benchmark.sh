@@ -26,7 +26,7 @@ if ss -tlnp | grep -q ":${PORT} "; then
 fi
 
 # ── 自动检测 CPU 核心数 ────────────────────────────────────
-THREADS=$(nproc)
+THREADS=8
 echo "Detected CPU cores: $THREADS"
 RESULT_DIR="./benchmark-results"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

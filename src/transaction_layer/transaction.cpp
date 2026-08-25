@@ -211,7 +211,12 @@ cppcoro::AsyncTask Transaction::Run(Callback cb,
     if (CanRunInlined()) {
       hop();
     } else {
-      shard_pool->Post(involved_.single.sid, hop);
+      if constexpr (dfly::kUseMpmcTaskQueue) {
+        shard_pool->Post(involved_.single.sid, hop);
+      } else {
+        shard_pool->PostShard(involved_.single.sid,
+                              Shard::tlocal()->shard_id(), hop);
+      }
     }
     co_await barrier_->Wait();
   } else {
@@ -237,8 +242,13 @@ cppcoro::task<> Transaction::Schedule() {
         fail_cnt.fetch_add(1, std::memory_order_relaxed);
       barrier_->Dec();
     };
-    for (size_t i = 0; i < active_shard_count_; ++i)
-      shard_pool->Post(InvolvedAt(i), hop);
+    for (size_t i = 0; i < active_shard_count_; ++i) {
+      if constexpr (dfly::kUseMpmcTaskQueue) {
+        shard_pool->Post(InvolvedAt(i), hop);
+      } else {
+        shard_pool->PostShard(InvolvedAt(i), Shard::tlocal()->shard_id(), hop);
+      }
+    }
     co_await barrier_->Wait();
 
     if (fail_cnt.load(std::memory_order_relaxed) == 0) break;
@@ -247,19 +257,30 @@ cppcoro::task<> Transaction::Schedule() {
     barrier_->Start(active_shard_count_);
     for (size_t i = 0; i < active_shard_count_; ++i) {
       const ShardId sid = InvolvedAt(i);
-      shard_pool->Post(sid, [this, &need_poll]() {
+      auto rollback_cb = [this, &need_poll]() {
         if (RollbackOnShard(*Shard::tlocal()))
           need_poll.store(true, std::memory_order_relaxed);
         barrier_->Dec();
-      });
+      };
+      if constexpr (dfly::kUseMpmcTaskQueue) {
+        shard_pool->Post(sid, rollback_cb);
+      } else {
+        shard_pool->PostShard(sid, Shard::tlocal()->shard_id(), rollback_cb);
+      }
     }
     co_await barrier_->Wait();
 
     // 队首被移走：通知相关分片重新驱动队列
     if (need_poll.load(std::memory_order_relaxed)) {
-      for (size_t i = 0; i < active_shard_count_; ++i)
-        shard_pool->Post(InvolvedAt(i),
-                         [] { Shard::tlocal()->DriveQueue(nullptr); });
+      for (size_t i = 0; i < active_shard_count_; ++i) {
+        if constexpr (dfly::kUseMpmcTaskQueue) {
+          shard_pool->Post(InvolvedAt(i),
+                           [] { Shard::tlocal()->DriveQueue(nullptr); });
+        } else {
+          shard_pool->PostShard(InvolvedAt(i), Shard::tlocal()->shard_id(),
+                                [] { Shard::tlocal()->DriveQueue(nullptr); });
+        }
+      }
     }
     SetStartTime();
   }
@@ -291,7 +312,14 @@ void Transaction::Distribute() {
     Shard::tlocal()->DriveQueue(intrusive_ptr_from_this());
   } else {
     for (size_t i = 0; i < active_shard_count_; ++i) {
-      if (poll.test(i)) shard_pool->Post(InvolvedAt(i), poll_cb);
+      if (poll.test(i)) {
+        if constexpr (dfly::kUseMpmcTaskQueue) {
+          shard_pool->Post(InvolvedAt(i), poll_cb);
+        } else {
+          shard_pool->PostShard(InvolvedAt(i), Shard::tlocal()->shard_id(),
+                                poll_cb);
+        }
+      }
     }
   }
 }
@@ -417,11 +445,17 @@ void Transaction::ResumeIfNeed() {
                                                    std::memory_order_acq_rel)) {
     state_ |= TxState::kFinished;
     auto* es = Shard::tlocal();
-    if (es && es->shard_id() == coro_ctx_.owner_) {
+    DCHECK(es);
+    if (es->shard_id() == coro_ctx_.owner_) {
       coro_ctx_.resume.resume();
     } else {
-      shard_pool->Post(coro_ctx_.owner_,
-                       [h = coro_ctx_.resume] { h.resume(); });
+      if constexpr (dfly::kUseMpmcTaskQueue) {
+        shard_pool->Post(coro_ctx_.owner_,
+                         [h = coro_ctx_.resume] { h.resume(); });
+      } else {
+        shard_pool->PostShard(coro_ctx_.owner_, es->shard_id(),
+                              [h = coro_ctx_.resume] { h.resume(); });
+      }
     }
   }
 }

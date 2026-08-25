@@ -55,10 +55,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
       if (batch.empty()) return;
       auto self = weak_self.lock();
       if (!self) return;
-      auto p = self->GetProactor();
-      p->DispatchBrief([self, batch = std::move(batch)]() mutable {
-        self->SendBatchImp(std::move(batch));
-      });
+      self->SendBatchImp(std::move(batch));
     };
     context_ = ConnectionContext(self, 0);
     // context_ 是 RedisSession 的成员，这里又把 self（指向自己）塞进
@@ -229,7 +226,15 @@ class RedisServer {
     shard_pool = new ShardPool(&pool_);
     shard_pool->Init(pool_.size());
 
-    main_proactor_->DispatchBrief([this] {
+    // main_proactor_ 独立于分片池（不在 pool_ 中），是 main 线程专用 proactor：
+    // 段式队列同样必须先分配段内存才能投递。它只接收 main 线程的任务
+    //（listen 协程），无需分片间投递，单段即可（shard_num=1, owner=0）。
+    if constexpr (!dfly::kUseMpmcTaskQueue) {
+      main_proactor_->GetTaskQueue().InitShardQueue(0, 1);
+    }
+
+    // Start 在 main 线程执行（main_proactor 非分片队列）
+    main_proactor_->DispatchBriefFromMain([this] {
       LOG(INFO) << "Starting ListenSocket...";
       listen();
     });
@@ -276,7 +281,8 @@ class RedisServer {
         setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
 
         auto p = NextProactor();
-        bool success = p->DispatchBrief([fd, p]() {
+        // main 线程向分片 p 投递新连接任务（段模式下写分片 p 队列的 main 段）
+        bool success = p->DispatchBriefFromMain([fd, p]() {
           auto session = std::make_shared<RedisSession>(fd, p);
           session->init();
           session->DoRead();

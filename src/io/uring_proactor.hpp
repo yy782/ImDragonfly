@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "util/task_queue.hpp"
+#include "detail/task_queue.hpp"
 
 namespace base {
 
@@ -95,12 +95,18 @@ class UringProactor {
   void Run();
   void Shutdown() noexcept;
 
-  util::TaskQueue& GetTaskQueue() { return task_queue_; }
+  dfly::TaskQueue& GetTaskQueue() { return task_queue_; }
+
 
   template <typename F>
-  bool DispatchBrief(F&& f) {
-    return task_queue_.TryAdd(std::forward<F>(f));
+  bool DispatchBriefFromMain(F&& f) {
+    if constexpr (dfly::kUseMpmcTaskQueue) {
+      return task_queue_.TryAdd(std::forward<F>(f));
+    } else {
+      return task_queue_.TryAddFromMain(std::forward<F>(f));
+    }
   }
+  
 
   pthread_t GetLoopThreadId() const { return loop_thread_id_; }
   int GetPoolIndex() const { return pool_index_; }
@@ -142,7 +148,7 @@ class UringProactor {
   };
   std::vector<RegBufSlot> reg_bufs_;
   int next_buf_ = 0;
-  util::TaskQueue task_queue_;
+  dfly::TaskQueue task_queue_;
   pthread_t
       loop_thread_id_;  // TODO 多余，应该用分片ID检查检查状态而不是线程ID检查
   bool shutdown_{false};
