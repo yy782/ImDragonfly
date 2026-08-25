@@ -94,7 +94,7 @@ class Transaction final
   uint64_t TimeMs() const { return start_ms_; }
   ::dfly::CmdArgList Args() const { return args_; }
   size_t GetKeyNum() const { return key_num_; }  // 总键数（BuildKeyMap 时累计）
-  KeyLockArgs LockArgsOn(ShardId sid) const;
+  KeyLockContext LockArgsOn(ShardId sid) const;
   class Slice {
    public:
     Slice(std::span<const IndexSlice> slices, unsigned step,

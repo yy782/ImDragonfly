@@ -382,11 +382,10 @@ TEST_F(TransactionTest, VLLLock) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+      shard_pool->Post(sid, [&, s = sid, f = fps]() mutable {
         auto& db_slice = shard_pool->At(s)->GetShardStorage();
-        KeyLockArgs lock_args;
-        lock_args.db_index = db_index;
-        lock_args.fps = f;
+        KeyLockContext lock_args{static_cast<DbIndex>(db_index), f,
+                                 IntentLock::Mode::EXCLUSIVE};
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         finished.fetch_add(1, std::memory_order_release);
       });
@@ -429,11 +428,10 @@ TEST_F(TransactionTest, VLLLock) {
       std::atomic<int> release_done{0};
       const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_pool->Post(sid, [&, s = sid, f = fps]() {
+        shard_pool->Post(sid, [&, s = sid, f = fps]() mutable {
           auto& db_slice = shard_pool->At(s)->GetShardStorage();
-          KeyLockArgs lock_args;
-          lock_args.db_index = db_index;
-          lock_args.fps = f;
+          KeyLockContext lock_args{static_cast<DbIndex>(db_index), f,
+                                   IntentLock::Mode::EXCLUSIVE};
           db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
           release_done.fetch_add(1, std::memory_order_release);
         });
@@ -457,11 +455,10 @@ TEST_F(TransactionTest, VLLLock) {
 
     std::atomic<int> finished{0};
 
-    shard_pool->Post(locked_sid, [&, fps = locked_fps]() {
+    shard_pool->Post(locked_sid, [&, fps = locked_fps]() mutable {
       auto& db_slice = shard_pool->At(locked_sid)->GetShardStorage();
-      KeyLockArgs lock_args;
-      lock_args.db_index = db_index;
-      lock_args.fps = fps;
+      KeyLockContext lock_args{static_cast<DbIndex>(db_index), fps,
+                               IntentLock::Mode::EXCLUSIVE};
       db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
       finished.store(1, std::memory_order_release);
     });
@@ -548,11 +545,10 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+      shard_pool->Post(sid, [&, s = sid, f = fps]() mutable {
         auto& db_slice = shard_pool->At(s)->GetShardStorage();
-        KeyLockArgs lock_args;
-        lock_args.db_index = db_index;
-        lock_args.fps = f;
+        KeyLockContext lock_args{static_cast<DbIndex>(db_index), f,
+                                 IntentLock::Mode::EXCLUSIVE};
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         Shard::tlocal()->set_committed_txid(5);
         finished.fetch_add(1, std::memory_order_release);
@@ -591,11 +587,10 @@ TEST_F(TransactionTest, VLLLockRetry) {
       std::atomic<int> release_done{0};
       const int total = static_cast<int>(involved_shards.size());
       for (const auto& [sid, fps] : fps_by_shard) {
-        shard_pool->Post(sid, [&, s = sid, f = fps]() {
+        shard_pool->Post(sid, [&, s = sid, f = fps]() mutable {
           auto& db_slice = shard_pool->At(s)->GetShardStorage();
-          KeyLockArgs lock_args;
-          lock_args.db_index = db_index;
-          lock_args.fps = f;
+          KeyLockContext lock_args{static_cast<DbIndex>(db_index), f,
+                                   IntentLock::Mode::EXCLUSIVE};
           db_slice.Release(IntentLock::EXCLUSIVE, lock_args);
           Shard::tlocal()->set_committed_txid(0);
           release_done.fetch_add(1, std::memory_order_release);
@@ -619,11 +614,10 @@ TEST_F(TransactionTest, VLLLockRetry) {
     const int nshards = static_cast<int>(involved_shards.size());
 
     for (const auto& [sid, fps] : fps_by_shard) {
-      shard_pool->Post(sid, [&, s = sid, f = fps]() {
+      shard_pool->Post(sid, [&, s = sid, f = fps]() mutable {
         auto& db_slice = shard_pool->At(s)->GetShardStorage();
-        KeyLockArgs lock_args;
-        lock_args.db_index = db_index;
-        lock_args.fps = f;
+        KeyLockContext lock_args{static_cast<DbIndex>(db_index), f,
+                                 IntentLock::Mode::EXCLUSIVE};
         db_slice.Acquire(IntentLock::EXCLUSIVE, lock_args);
         if (s == committed_sid) {
           Shard::tlocal()->set_committed_txid(5);

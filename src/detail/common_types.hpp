@@ -10,6 +10,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "detail/intent_lock.hpp"
 namespace dfly {
 
 using Arg = std::string_view;
@@ -72,9 +74,10 @@ inline ShardId ShardIndex(std::string_view key, ssize_t shard_set_size) {
   return hash % shard_set_size;
 }
 
-struct KeyLockArgs {
+struct KeyLockContext {
   DbIndex db_index = 0;
-  std::vector<LockFp> fps;
+  std::span<const LockFp> fps;
+  IntentLock::Mode mode = IntentLock::Mode::SHARED;
 };
 
 inline LockFp KeyFingerprint(std::string_view key) {

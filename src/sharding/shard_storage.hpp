@@ -123,8 +123,8 @@ class ShardStorage {
   void Watch(const DbContext& cntx, Key key, const WatchedContext& observer);
   void Unwatch(const WatchedContext& observer, Key key);
 
-  bool Acquire(IntentLock::Mode mode, const KeyLockArgs& lock_args);
-  void Release(IntentLock::Mode mode, const KeyLockArgs& lock_args);
+  bool Acquire(IntentLock::Mode mode, const KeyLockContext& lock_args);
+  void Release(IntentLock::Mode mode, const KeyLockContext& lock_args);
 
  private:
   OpResult<PrimeIterator> Locate(const DbContext& cntx, Key key) const;

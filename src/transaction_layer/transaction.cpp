@@ -394,12 +394,9 @@ Transaction::Slice Transaction::GetSlice(ShardId sid) const {
   return Slice(std::span<const IndexSlice>(sd.slices), cid_->key_step(), args_);
 }
 
-KeyLockArgs Transaction::LockArgsOn(ShardId sid) const {
-  KeyLockArgs res;
-  res.db_index = db_;
+KeyLockContext Transaction::LockArgsOn(ShardId sid) const {
   const PerShardData& sd = ShardDataAt(IndexInvolved(sid));
-  res.fps = sd.fps;
-  return res;
+  return KeyLockContext{db_, sd.fps, LockMode()};
 }
 
 void Transaction::InvokeCallback(Shard& shard) {
@@ -431,7 +428,7 @@ void Transaction::ResumeIfNeed() {
 
 bool Transaction::AcquireLocks(Shard& shard, PerShardData& sd) {
   const IntentLock::Mode mode = LockMode();
-  const KeyLockArgs lock_args{db_, sd.fps};
+  const KeyLockContext lock_args{db_, sd.fps, mode};
   const bool keys_free = shard.GetShardStorage().Acquire(mode, lock_args);
   const bool shard_free = IsGlobal() ? shard.ShardLock().Acquire(mode) : true;
   return keys_free && shard_free;
@@ -439,7 +436,7 @@ bool Transaction::AcquireLocks(Shard& shard, PerShardData& sd) {
 
 void Transaction::ReleaseLocks(Shard& shard, PerShardData& sd) {
   const IntentLock::Mode mode = LockMode();
-  const KeyLockArgs lock_args{db_, sd.fps};
+  const KeyLockContext lock_args{db_, sd.fps, mode};
   if (IsGlobal()) {
     shard.ShardLock().Release(mode);
   } else {

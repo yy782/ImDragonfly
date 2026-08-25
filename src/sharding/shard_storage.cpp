@@ -194,7 +194,7 @@ void ShardStorage::SyncTtl(PrimeIterator& it, TimeMs ttl_at) {
 }
 
 bool ShardStorage::Acquire(IntentLock::Mode mode,
-                           const KeyLockArgs& lock_args) {
+                           const KeyLockContext& lock_args) {
   DCHECK(IsDbValid(lock_args.db_index));
   DbTable& db = *db_arr_[lock_args.db_index];
 
@@ -209,7 +209,7 @@ bool ShardStorage::Acquire(IntentLock::Mode mode,
 }
 
 void ShardStorage::Release(IntentLock::Mode mode,
-                           const KeyLockArgs& lock_args) {
+                           const KeyLockContext& lock_args) {
   DCHECK(IsDbValid(lock_args.db_index));
   DbTable& db = *db_arr_[lock_args.db_index];
   for (LockFp fp : lock_args.fps) {

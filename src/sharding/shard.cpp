@@ -75,7 +75,7 @@ void Shard::MaybeDriveUnblocked() {
   // 先完成全部冲突检查再写入，避免同一事务内两个指纹碰撞同一位。
   auto scan_mark = [&](util::intrusive_ptr<Transaction> tx) -> bool {
     const bool is_read = (tx->LockMode() == IntentLock::SHARED);
-    const KeyLockArgs largs = tx->LockArgsOn(shard_id_);
+    const KeyLockContext largs = tx->LockArgsOn(shard_id_);
     bool conflict = false;
     for (LockFp fp : largs.fps) {
       const size_t idx = fp & (kScgBits - 1);
