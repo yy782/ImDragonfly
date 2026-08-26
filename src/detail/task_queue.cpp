@@ -10,20 +10,12 @@ TaskQueueImpl<true>::TaskQueueImpl(unsigned queue_size,
                                    std::pmr::memory_resource* mr)
     : queue_(queue_size, mr) {}
 
-void TaskQueueImpl<true>::Shutdown() {
-  is_closed_.store(true, std::memory_order_seq_cst);
-}
-
 bool TaskQueueImpl<true>::TryDrain() {
   CbFunc func;
   while (queue_.try_dequeue(func)) {
     func();
   }
   return true;
-}
-
-bool TaskQueueImpl<true>::isRuning() const {
-  return !is_closed_.load(std::memory_order_relaxed);
 }
 
 bool TaskQueueImpl<true>::Empty() const { return queue_.empty(); }
@@ -37,10 +29,6 @@ TaskQueueImpl<false>::TaskQueueImpl(unsigned queue_size,
 
 void TaskQueueImpl<false>::InitShardQueue(size_t shard_num) {
   shard_queue_.Init(queue_size_, shard_num, mr_);
-}
-
-void TaskQueueImpl<false>::Shutdown() {
-  is_closed_.store(true, std::memory_order_seq_cst);
 }
 
 bool TaskQueueImpl<false>::TryDrain() {
@@ -61,10 +49,6 @@ bool TaskQueueImpl<false>::TryDrain() {
 
 bool TaskQueueImpl<false>::TryDrainSeg(uint32_t max_task_num, ShardId seg) {
   return shard_queue_.TryDrain(max_task_num, seg);
-}
-
-bool TaskQueueImpl<false>::isRuning() const {
-  return !is_closed_.load(std::memory_order_relaxed);
 }
 
 bool TaskQueueImpl<false>::Empty() const { return shard_queue_.Empty(); }

@@ -15,7 +15,7 @@
 
 namespace dfly {
 
-inline constexpr bool kUseMpmcTaskQueue = false;
+inline constexpr bool kUseMpmcTaskQueue = true;
 
 inline constexpr size_t kMaxPerSegment = 64;
 
@@ -64,7 +64,6 @@ class TaskQueueImpl<true> {
     return false;
   }
 
-  void Shutdown();
   bool TryDrain();
   // 模板化使 static_assert 惰性：MPMC 下无人调用则不实例化、
   // 不报错；一旦误用（调用 TryDrainSeg）才在编译期拒斥。
@@ -73,13 +72,11 @@ class TaskQueueImpl<true> {
     static_assert(sizeof(F) == 0, "TaskQueue: TryDrainSeg not supported");
     return false;
   }
-  bool isRuning() const;
   bool Empty() const;
 
  private:
   using FuncQ = util::mpmc_queue<CbFunc>;
   FuncQ queue_;
-  std::atomic<bool> is_closed_{false};
 };
 
 template <>
@@ -117,17 +114,14 @@ class TaskQueueImpl<false> {
     return shard_queue_.TryAddForSeg(seg, std::forward<F>(f));
   }
 
-  void Shutdown();
   bool TryDrain();
   bool TryDrainSeg(uint32_t max_task_num, ShardId seg);
-  bool isRuning() const;
   bool Empty() const;
 
  private:
   spsc_shard_queue<CbFunc> shard_queue_;
   unsigned queue_size_;
   std::pmr::memory_resource* mr_ = nullptr;
-  std::atomic<bool> is_closed_{false};
 };
 
 template <typename Q>

@@ -335,7 +335,6 @@ void UringProactor::Shutdown() noexcept {
   // RedisServer::Stop()）都运行在本 proactor 自己的线程上，直接置位即可
   // （bool 同线程写读，无需原子；不给自己的队列投任务，符合 SPSC 设计）。
   shutdown_ = true;
-  task_queue_.Shutdown();
 }
 
 }  // namespace base
