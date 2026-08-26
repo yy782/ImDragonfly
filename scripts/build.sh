@@ -18,7 +18,7 @@
 #   bash scripts/build.sh -t "imdragonfly"         # 只构建 ImDragonfly
 #   bash scripts/build.sh -b build-release -j 8    # 自定义目录和并行数
 # bash scripts/build.sh -t "unit_tests"
-
+# bash scripts/build.sh -r -t "imdragonfly" 
 # SPSC 分片段队列没有适配unit_tests，所以不要在kUseMpmcTaskQueue = false时编译unit_tests，会编译报错
 
 set -euo pipefail

@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "sharding/shard.hpp"
 #include "uring_proactor.hpp"
 #include "util/thread.hpp"
 
@@ -26,17 +27,34 @@ class UringProactorPool {
   UringProactorPool(const UringProactorPool&) = delete;
   UringProactorPool& operator=(const UringProactorPool&) = delete;
 
-  void AsyncLoop() {
+  // 线程级启动同步：
+  //   ready: 每个分片线程创建完 UringProactor 后 count_down，
+  //          AsyncLoop() 返回前 wait 它 —— 保证返回时 proactors_[i] 全部有效；
+  //   gate:  分片线程在进入 Run() 前 wait 它，
+  //          由主线程完成 ShardPool::Init() 后 count_down 放行。
+  // 两个同步器都在调用方（RedisServer::Start）栈上，生命周期覆盖本次启动。
+  void AsyncLoop(std::latch* ready, std::latch* gate) {
     std::string base_name = "proactor_thread_";
     for (std::size_t i = 0; i < proactors_.size(); ++i) {
       threads_[i] = std::make_unique<util::Thread>(
-          (base_name + std::to_string(i)).c_str(), [this, i] {
+          (base_name + std::to_string(i)).c_str(), [this, i, ready, gate] {
             proactors_[i] = new UringProactor(cfg_, i);
+            ready->count_down();  // 通知主线程：本 proactor 已创建
+            gate->wait();         // 等主线程完成 ShardPool::Init()
+            if constexpr (!dfly::kUseMpmcTaskQueue) {
+              // 主线程已把 InitThreadLocal 任务投到 main 队列段 i（见
+              // ShardPool::Init 的 DispatchBriefFromMain）。先消费掉以设置
+              // 本线程的 Shard::tlocal()，否则 Run() 里 TryDrain() 用
+              // Shard::tlocal()->shard_id() 会命中空指针（段号 = pool_index =
+              // i）。
+              dfly::main_queue_->TryDrainSeg(dfly::kMaxPerSegment, i);
+            }
             proactors_[i]->Run();
             delete proactors_[i];
             proactors_[i] = nullptr;
           });
     }
+    ready->wait();  // 等所有 proactor 创建完再返回
   }
 
   void stop() {
@@ -51,12 +69,20 @@ class UringProactorPool {
 
   template <typename Func>
   void DispatchBriefFromMain(Func&& f) {
-    for (std::size_t i = 0; i < size(); ++i) {
-      auto p = proactors_[i];
-
-      p->DispatchBriefFromMain([p, f]() mutable { f(p); });
+    if constexpr (dfly::kUseMpmcTaskQueue) {
+      for (std::size_t i = 0; i < size(); ++i) {
+        auto p = proactors_[i];
+        p->GetTaskQueue().TryAdd([p, f]() mutable { f(p); });
+      }
+    } else {
+      for (std::size_t i = 0; i < size(); ++i) {
+        dfly::main_queue_->TryPostFromMain(
+            i,
+            [p = proactors_[i], f = std::forward<Func>(f)]() mutable { f(p); });
+      }
     }
   }
+
   template <typename Func>
   void AwaitOnAllFromMain(Func&& func) {
     std::latch latch(size());

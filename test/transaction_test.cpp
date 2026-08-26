@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <latch>
 #include <map>
 #include <memory>
 #include <set>
@@ -36,10 +37,13 @@ const int shardNum = 4;
 class TransactionTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pool_.AsyncLoop();
-    sleep(1);
+    std::latch ready(pool_.size());
+    std::latch gate(1);
+    pool_.AsyncLoop(&ready, &gate);
     shard_pool = new ShardPool(&pool_);
     shard_pool->Init(pool_.size());
+    gate.count_down();
+    pool_.AwaitOnAllFromMain([](base::UringProactor*) {});
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     // 之前namespaces 单独new 了，内存泄漏了

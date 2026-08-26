@@ -213,11 +213,7 @@ CoroTask GenericFamily::Client_Info(CommandContext* cmd_cntx,
 }
 
 CoroTask GenericFamily::ShutDown(CommandContext*, CmdArgList) {
-  // main_proactor 非分片队列
-  RedisServer::Instance().MainProactor()->DispatchBriefFromMain([] {
-    LOG(INFO) << "[shutdown] ShutDown invoked";
-    RedisServer::Instance().Stop();
-  });
+  RedisServer::Instance().NotifyStop();
   co_return;
 }
 

@@ -61,8 +61,7 @@ struct WriteCursor {
 
 class WriteBatcher {
  public:
-  WriteBatcher(base::UringSocket* socket, pthread_t loop_tid) noexcept
-      : socket_(socket), loop_tid_(loop_tid) {}
+  WriteBatcher(base::UringSocket* socket) noexcept : socket_(socket) {}
 
   // 单条回复入队。如果当前没有写在进行，启动 DoWrite。
   void Enqueue(std::string&& s);
@@ -81,7 +80,6 @@ class WriteBatcher {
   void StartIfNeeded();
 
   base::UringSocket* socket_;
-  pthread_t loop_tid_;
 
   std::vector<std::string> queue_;
   size_t read_idx_ = 0;

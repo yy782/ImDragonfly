@@ -18,6 +18,7 @@
 #include "io/fd_wrapper.hpp"
 #include "src/server/redis_server.hpp"
 #include "src/util/json_config.hpp"
+#include "src/util/startup_log.hpp"
 
 using namespace dfly;
 
@@ -33,8 +34,8 @@ int main(int argc, char* argv[]) {
   // google::ParseCommandLineFlags(&argc, &argv, true); 没有引入#include
   // <gflags/gflags.h>，所以不可用
 
-  FLAGS_logtostderr = true;
-  FLAGS_alsologtostderr = false;
+  FLAGS_logtostderr = false;  // 常规日志只写日志文件
+  FLAGS_alsologtostderr = false;  // 终端仅打印启动信息（见 util::StartupLog）
   FLAGS_minloglevel = 0;
 #ifndef NDEBUG
   FLAGS_logbufsecs = 0;
@@ -97,7 +98,8 @@ int main(int argc, char* argv[]) {
   }
 
   RedisServer::Init(listenFd, num, cfg);
-  LOG(INFO) << "RedisServer initialized with " << num << " shards";
+  util::StartupLog("RedisServer initialized with " + std::to_string(num) +
+                   " shards");
   RedisServer::Instance().Start();
   RedisServer::Destroy();
 

@@ -68,20 +68,14 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
     };
   };
 
-  bool has_local = false;
   for (ShardId sid : sids) {
     ShardDispatch& sd = dispatched_[sid];
     if constexpr (dfly::kUseMpmcTaskQueue) {
       shard_pool->Post(sid, make_cb(sd));
     } else {
-      if (sid == Shard::tlocal()->shard_id()) {
-        has_local = true;
-      } else {
-        shard_pool->PostShard(sid, Shard::tlocal()->shard_id(), make_cb(sd));
-      }
+      shard_pool->PostShard(sid, Shard::tlocal()->shard_id(), make_cb(sd));
     }
   }
-  if (has_local) make_cb(dispatched_[Shard::tlocal()->shard_id()])();
   co_await bc->Wait();
 
   for (ShardId sid : order_) {  // 这里可能不好理解哦

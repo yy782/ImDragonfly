@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <exception>
+#include <latch>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,6 +33,7 @@
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
 #include "util/json_config.hpp"
+#include "util/startup_log.hpp"
 namespace dfly {
 
 inline CommandRegistry* CIs = nullptr;
@@ -40,9 +42,7 @@ class RedisSession : public std::enable_shared_from_this<RedisSession> {
  public:
   // proactor 由 UringProactorPool 管理生命周期，传裸指针即可。
   RedisSession(int fd, base::UringProactor* p)
-      : socket_(p, fd),
-        write_batcher_(&socket_, p->GetLoopThreadId()),
-        pId_(p->GetLoopThreadId()) {}
+      : socket_(p, fd), write_batcher_(&socket_), pId_(p->GetLoopThreadId()) {}
 
   ~RedisSession() { assert(std::uncaught_exceptions() == 0); }
 
@@ -219,30 +219,44 @@ class RedisServer {
   }
 
   void Start() {
-    LOG(INFO) << "Starting RedisServer...";
+    util::StartupLog("Starting RedisServer...");
     isRuning = true;
-    pool_.AsyncLoop();
-    sleep(1);
+
+    main_queue_ = &main_proactor_->GetTaskQueue();
+    util::StartupLog(
+        "Task queue mode: " +
+        std::string(dfly::kUseMpmcTaskQueue ? "MPMC" : "SPSC") +
+        ", main_queue_ set, shard_count=" + std::to_string(pool_.size()));
+
+    // ready:  分片线程创建完 UringProactor 后 count_down，
+    //         AsyncLoop() 返回即保证所有 proactor 已创建、线程阻塞在 gate 上；
+    // gate:   Init() 完成后 count_down，放行分片线程进入 Run()。
+    std::latch ready(pool_.size());
+    std::latch gate(1);
+    pool_.AsyncLoop(&ready, &gate);
+    util::StartupLog("All " + std::to_string(pool_.size()) +
+                     " proactor threads created, waiting on gate");
+
     shard_pool = new ShardPool(&pool_);
-    shard_pool->Init(pool_.size());
+    shard_pool->Init(pool_.size());  // 此时 proactors_[i] 全部有效
 
-    dfly::InitShardQueueIfSpsc(main_proactor_->GetTaskQueue(), 0, 1);
+    util::StartupLog("ShardPool::Init done, releasing shard threads");
+    gate.count_down();
 
-    main_proactor_->DispatchBriefFromMain([this] {
-      LOG(INFO) << "Starting ListenSocket...";
-      listen();
+    pool_.AwaitOnAllFromMain([](base::UringProactor*) {
+      // 空任务，确保shard_pool::Init()里的任务都执行完了，才启动服务器
     });
+    util::StartupLog("All shard threads ready");
+
+    util::StartupLog("Starting ListenSocket...");
+    listen();
+
+    util::StartupLog("Entering main event loop");
     main_proactor_->Run();
+    util::StartupLog("Main event loop exited");
   }
 
-  void Stop() {
-    if (shard_pool) {
-      shard_pool->Shutdown();
-    }
-    pool_.stop();
-    main_proactor_->Shutdown();
-    isRuning = false;
-  }
+  void NotifyStop() { isRuning = false; }
 
   size_t ShardCount() const { return pool_.size(); }
 
@@ -264,6 +278,18 @@ class RedisServer {
   }
 
  private:
+  void Stop() {
+    LOG(INFO) << "Stopping server...";
+    if (shard_pool) {
+      shard_pool->Shutdown();
+      LOG(INFO) << "Shard pool thread-locals destroyed";
+    }
+    pool_.stop();
+    LOG(INFO) << "Shard proactor threads joined";
+    main_proactor_->Shutdown();
+    LOG(INFO) << "Main proactor shut down";
+  }
+
   cppcoro::AsyncTask listen() {
     while (isRuning) {
       auto fd = co_await ListenSocket_.AsyncAccept();
@@ -273,17 +299,22 @@ class RedisServer {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
         int quickack = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &quickack, sizeof(quickack));
-
-        auto p = NextProactor();
-        // main 线程向分片 p 投递新连接任务（段模式下写分片 p 队列的 main 段）
-        bool success = p->DispatchBriefFromMain([fd, p]() {
+        bool success = false;
+        auto cb = [fd]() {
+          auto p = dfly::Shard::tlocal()->proactor();
           auto session = std::make_shared<RedisSession>(fd, p);
           session->init();
           session->DoRead();
-        });
+        };
+        if constexpr (dfly::kUseMpmcTaskQueue) {
+          auto& q = NextProactor()->GetTaskQueue();
+          success = q.TryAdd(std::move(cb));
+        } else {
+          success = main_queue_->TryPostFromMain(NextShardId(), std::move(cb));
+        }
+
         if (!success) {
-          LOG(ERROR) << "Failed to dispatch session to proactor: "
-                     << p->GetPoolIndex();
+          LOG(ERROR) << "Failed to dispatch session, closing fd: " << fd;
           close(fd);
         }
       } else if (fd < 0) {
@@ -291,19 +322,21 @@ class RedisServer {
                      << strerror(errno);
       }
     }
+    Stop();
     co_return;
   }
 
-  auto NextProactor() -> base::UringProactor* {
-    NextProIndex_ = (NextProIndex_ + 1) % pool_.size();
-    return pool_[NextProIndex_];
+  auto NextProactor() -> base::UringProactor* { return pool_[NextShardId()]; }
+  auto NextShardId() -> ShardId {
+    NextShardId_ = (NextShardId_ + 1) % shard_pool->size();
+    return NextShardId_;
   }
 
-  ssize_t NextProIndex_ = 0;
+  ShardId NextShardId_ = 0;
   base::UringProactor* main_proactor_ = nullptr;
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
-  bool isRuning = false;
+  std::atomic_bool isRuning = false;
 
   inline static RedisServer* instance_ = nullptr;
 };

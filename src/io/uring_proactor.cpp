@@ -7,6 +7,8 @@
 #include <cstring>
 #include <exception>
 
+#include "util/startup_log.hpp"
+
 namespace base {
 
 void IoAwaitable::await_suspend(std::coroutine_handle<> h) noexcept {
@@ -115,6 +117,9 @@ void UringProactor::InitRegisteredBuffers() {
 }
 
 uint32_t UringProactor::AllocSlot() {
+  // 这里还是有问题的，slot和sqe不是固定一对一的，一个sqe提交后，
+  // sqe可以继续他的服务，但是slot是绑定了那个服务对象已经在等cqe了，他没有和sqe形成绑定关系,
+  // 导致slot的数量要大于sqe数量的，目前没有实现，是有这个风险，参考tx_queue的队列扩容逻辑即可实现
   DCHECK(next_free_IoCompletionNode_ >= 0);
   uint32_t idx = static_cast<uint32_t>(next_free_IoCompletionNode_);
   DCHECK(idx != static_cast<uint32_t>(-1))
@@ -303,6 +308,8 @@ int UringProactor::PollOnce(unsigned min_cqe, unsigned timeout_ms) {
 
 void UringProactor::Run() {
   loop_thread_id_ = pthread_self();
+  util::StartupLog("Proactor thread " + std::to_string(pool_index_) +
+                   " starting (tid=" + std::to_string(loop_thread_id_) + ")");
 
   while (!shutdown_) {
     task_queue_.TryDrain();
@@ -320,10 +327,14 @@ void UringProactor::Run() {
 
   task_queue_.TryDrain();
   PollOnce(0, 0);
+  LOG(INFO) << "Proactor thread " << pool_index_ << " exited";
 }
 
 void UringProactor::Shutdown() noexcept {
-  DispatchBriefFromMain([this] { shutdown_ = true; });
+  // 所有调用点（pool_.stop() 的广播回调在分片线程执行、main 线程的
+  // RedisServer::Stop()）都运行在本 proactor 自己的线程上，直接置位即可
+  // （bool 同线程写读，无需原子；不给自己的队列投任务，符合 SPSC 设计）。
+  shutdown_ = true;
   task_queue_.Shutdown();
 }
 

@@ -97,15 +97,6 @@ class UringProactor {
 
   dfly::TaskQueue& GetTaskQueue() { return task_queue_; }
 
-  template <typename F>
-  bool DispatchBriefFromMain(F&& f) {
-    if constexpr (dfly::kUseMpmcTaskQueue) {
-      return task_queue_.TryAdd(std::forward<F>(f));
-    } else {
-      return task_queue_.TryAddFromMain(std::forward<F>(f));
-    }
-  }
-
   pthread_t GetLoopThreadId() const { return loop_thread_id_; }
   int GetPoolIndex() const { return pool_index_; }
 

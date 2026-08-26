@@ -32,10 +32,6 @@ class ShardPool {
   void PostShard(ShardId consumer, ShardId producer,
                  F&& f) {  // 只能在spsc模式调用
     DCHECK_LT(consumer, size_);
-    if (consumer == producer) {
-      f();  // 这种支持并不友好，会耽误调度
-      return;
-    }
     bool success =
         shards_[consumer]->GetQueue()->TryAdd(producer, std::forward<F>(f));
     if (!success) {
@@ -45,13 +41,12 @@ class ShardPool {
   }
 
   template <typename F>
-  void PostFromMain(ShardId consumer, F&& f) {  // 只能在spsc模式调用
-    DCHECK_LT(consumer, size_);
-    bool success =
-        shards_[consumer]->GetQueue()->TryAddFromMain(std::forward<F>(f));
+  void BroadcastFromMain(F&& f) {  // 只能在spsc模式调用
+    DCHECK(main_queue_);
+    bool success = main_queue_->TryBroadcastFromMain(std::forward<F>(f));
     if (!success) {
-      LOG(FATAL) << "main -> " << consumer
-                 << " task queue overflow, TryAdd failed";
+      LOG(FATAL) << "main -> shards task queue overflow, "
+                    "TryBroadcastFromMain failed";
     }
   }
 

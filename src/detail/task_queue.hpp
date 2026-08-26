@@ -15,10 +15,16 @@
 
 namespace dfly {
 
-inline constexpr bool kUseMpmcTaskQueue = true;
+inline constexpr bool kUseMpmcTaskQueue = false;
+
+inline constexpr size_t kMaxPerSegment = 64;
 
 template <bool UseMpmc>
 class TaskQueueImpl;
+
+using TaskQueue = TaskQueueImpl<kUseMpmcTaskQueue>;
+
+inline TaskQueue* main_queue_ = nullptr;
 
 template <>
 class TaskQueueImpl<true> {
@@ -27,8 +33,7 @@ class TaskQueueImpl<true> {
 
   explicit TaskQueueImpl(
       unsigned queue_size = 128,
-      std::pmr::memory_resource* mr = std::pmr::get_default_resource())
-      : queue_(queue_size, mr) {}
+      std::pmr::memory_resource* mr = std::pmr::get_default_resource());
 
   template <typename F>
   bool TryAdd(F&& f) {
@@ -44,26 +49,32 @@ class TaskQueueImpl<true> {
   }
 
   template <typename F>
-  bool TryAddFromMain(F&&) {
+  bool TryBroadcastFromMain(F&&) {
     static_assert(sizeof(F) == 0,
-                  "TaskQueue: TryAddFromMain(F&&) not supported; "
-                  "MPMC 下没有 main/分片区分，请用 TryAdd(F&&)");
+                  "TaskQueue: TryBroadcastFromMain(F&&) not supported; "
+                  "MPMC 下没有分片区分，请用 TryAdd(F&&)");
     return false;
   }
 
-  void Shutdown() { is_closed_.store(true, std::memory_order_seq_cst); }
-
-  bool TryDrain() {
-    CbFunc func;
-    while (queue_.try_dequeue(func)) {
-      func();
-    }
-    return true;
+  template <typename F>
+  bool TryPostFromMain(ShardId, F&&) {
+    static_assert(sizeof(F) == 0,
+                  "TaskQueue: TryPostFromMain(ShardId, F&&) not supported; "
+                  "MPMC 下没有分片区分，请用 TryAdd(F&&)");
+    return false;
   }
 
-  bool isRuning() const { return !is_closed_.load(std::memory_order_relaxed); }
-
-  bool Empty() const { return queue_.empty(); }
+  void Shutdown();
+  bool TryDrain();
+  // 模板化使 static_assert 惰性：MPMC 下无人调用则不实例化、
+  // 不报错；一旦误用（调用 TryDrainSeg）才在编译期拒斥。
+  template <typename F = void>
+  bool TryDrainSeg(uint32_t /*max_task_num*/, ShardId /*seg*/) {
+    static_assert(sizeof(F) == 0, "TaskQueue: TryDrainSeg not supported");
+    return false;
+  }
+  bool isRuning() const;
+  bool Empty() const;
 
  private:
   using FuncQ = util::mpmc_queue<CbFunc>;
@@ -74,25 +85,20 @@ class TaskQueueImpl<true> {
 template <>
 class TaskQueueImpl<false> {
  public:
-  using CbFunc = util::unique_function<void()>;
+  using CbFunc = util::function<void()>;
 
   explicit TaskQueueImpl(
       unsigned queue_size = 128,
-      std::pmr::memory_resource* mr = std::pmr::get_default_resource())
-      : queue_size_(queue_size), mr_(mr) {
-    assert((queue_size & (queue_size - 1)) == 0 &&
-           "TaskQueue: queue_size must be a power of two");
-  }
+      std::pmr::memory_resource* mr = std::pmr::get_default_resource());
 
-  void InitShardQueue(ShardId owner_id, size_t shard_num) {
-    shard_queue_.Init(queue_size_, owner_id, shard_num, mr_);
-  }
+  void InitShardQueue(size_t shard_num);
 
   template <typename F>
   bool TryAdd(F&&) {
     static_assert(sizeof(F) == 0,
-                  "TaskQueue: TryAdd(F&&) not supported; use TryAddFromMain "
-                  "(main 语境) or TryAdd(ShardId, F&&)/PostShard (分片语境)");
+                  "TaskQueue: TryAdd(F&&) not supported; use TryPostFromMain/"
+                  "TryBroadcastFromMain (main 语境) or TryAdd(ShardId, F&&)/"
+                  "PostShard (分片语境)");
     return false;
   }
 
@@ -102,17 +108,20 @@ class TaskQueueImpl<false> {
   }
 
   template <typename F>
-  bool TryAddFromMain(F&& f) {
-    return shard_queue_.TryAddFromMain(std::forward<F>(f));
+  bool TryBroadcastFromMain(F&& f) {  // 主线程调用
+    return shard_queue_.TryAddForAllSeg(std::forward<F>(f));
   }
 
-  void Shutdown() { is_closed_.store(true, std::memory_order_seq_cst); }
+  template <typename F>
+  bool TryPostFromMain(ShardId seg, F&& f) {  // 主线程调用
+    return shard_queue_.TryAddForSeg(seg, std::forward<F>(f));
+  }
 
-  bool TryDrain() { return shard_queue_.TryDrain(); }
-
-  bool isRuning() const { return !is_closed_.load(std::memory_order_relaxed); }
-
-  bool Empty() const { return shard_queue_.Empty(); }
+  void Shutdown();
+  bool TryDrain();
+  bool TryDrainSeg(uint32_t max_task_num, ShardId seg);
+  bool isRuning() const;
+  bool Empty() const;
 
  private:
   spsc_shard_queue<CbFunc> shard_queue_;
@@ -122,12 +131,10 @@ class TaskQueueImpl<false> {
 };
 
 template <typename Q>
-void InitShardQueueIfSpsc(Q& queue, ShardId owner_id, size_t shard_num) {
+void InitShardQueueIfSpsc(Q& queue, size_t shard_num) {
   if constexpr (!kUseMpmcTaskQueue) {
-    queue.InitShardQueue(owner_id, shard_num);
+    queue.InitShardQueue(shard_num);
   }
 }
-
-using TaskQueue = TaskQueueImpl<kUseMpmcTaskQueue>;
 
 }  // namespace dfly

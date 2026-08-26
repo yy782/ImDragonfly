@@ -29,7 +29,6 @@ void WriteBatcher::StartIfNeeded() {
 }
 
 cppcoro::AsyncTask WriteBatcher::DoWrite() {
-  assert(util::Thread::current_tid() == loop_tid_);
   std::vector<std::string> batch;
   std::vector<struct iovec> rem;
   WriteCursor cursor;
