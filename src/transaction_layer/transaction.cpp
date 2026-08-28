@@ -194,15 +194,16 @@ cppcoro::AsyncTask Transaction::Run(Callback cb,
                   active_shard_count_);
 
   if (active_shard_count_ == 1) {
-    ShardDataAt(0).is_armed.store(true, std::memory_order_relaxed);
     barrier_->Add(1);
-    auto hop = [self = intrusive_ptr_from_this()]() {
-      ScheduleResult res = self->ScheduleOnShard(*Shard::tlocal(), true);
+    auto hop = [this]() {
+      ScheduleResult res = ScheduleOnShard(*Shard::tlocal(), true);
       CHECK(res != ScheduleResult::kRejected) << "single-shard tx rejected";
       if (res != ScheduleResult::kGranted) {
-        Shard::tlocal()->DriveQueue(self);
+        ShardDataAt(0).is_armed.store(
+            true, std::memory_order_relaxed);  // 进入事务队列了，需要武装
+        Shard::tlocal()->DriveQueue(this);
       }
-      self->barrier_->Dec();
+      barrier_->Dec();
     };
     if (CanRunInlined()) {
       hop();
@@ -302,10 +303,10 @@ void Transaction::Distribute() {
   }
 
   auto poll_cb = [self = intrusive_ptr_from_this()]() {
-    Shard::tlocal()->DriveQueue(self);
+    Shard::tlocal()->DriveQueue(self.get());
   };
   if (CanRunInlined()) {
-    Shard::tlocal()->DriveQueue(intrusive_ptr_from_this());
+    Shard::tlocal()->DriveQueue(this);
   } else {
     for (size_t i = 0; i < active_shard_count_; ++i) {
       if (poll.test(i)) {

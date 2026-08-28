@@ -39,13 +39,13 @@ Shard::Shard(base::UringProactor* pb, mi_heap_t* heap)
       storage_(shard_id_, this),
       txq_(&mi_resource_) {}
 
-void Shard::DriveQueue(util::intrusive_ptr<Transaction> tx) {
+void Shard::DriveQueue(Transaction* tx) {
   const ShardId sid = shard_id_;
 
   const bool tx_ready = tx && tx->AllowOnIf(sid, Transaction::kUncontended);
 
   while (!txq_.Empty()) {
-    util::intrusive_ptr<Transaction> head = txq_.Front();
+    Transaction* head = txq_.Front().get();
     const bool should_run = (head == tx && tx_ready) || head->AllowOn(sid);
     if (!should_run) break;
     if (head == tx) tx = nullptr;

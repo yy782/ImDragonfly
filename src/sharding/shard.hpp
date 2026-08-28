@@ -30,7 +30,7 @@ class Shard {
   base::UringProactor* proactor() const { return proactor_; }
   std::pmr::memory_resource* memory_resource() { return &mi_resource_; }
   dfly::TaskQueue* GetQueue() { return &proactor_->GetTaskQueue(); }
-  void DriveQueue(util::intrusive_ptr<Transaction> tx);
+  void DriveQueue(Transaction* tx);
 
   TxQueue& Queue() { return txq_; }
   const TxQueue& Queue() const { return txq_; }
