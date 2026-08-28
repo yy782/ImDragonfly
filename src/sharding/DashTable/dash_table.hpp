@@ -43,6 +43,28 @@ struct PersistCommit {
   uint64_t checksum;
 };
 
+/*
+ 关于持久化，会遇到一个问题:
+ 数据不一致:
+ 比如对于MSET命令涉及到多分片，分片1，分片2，，
+ 对于分片1，持久化前完成了对MSET在分片1的操作,对于分片2，持久化后才完成了对MSET在分片2的操作，就出现了数据不一致的问题
+ 解决方案:
+ 设置全局事务进行调度就可以在MSET命令前面或者后面完成持久化，就可以解决这个问题了
+
+ 这就产生了新的问题，如果数据库的数据过多，会严重阻塞线程，导致持久化命令(SAVE)后面的命令严重阻塞
+ 解决这个问题，需要每次都持久化一部分数据，而不是全部，持续调度，即可，
+ 但是怎么做到持久化一部分数据呢
+
+ 对于DashTable的段而言，段内桶的数据会左右移动的，比如SAVE了桶1的数据，然后继续调度，在执行第二个SAVE前，
+ 桶2的数据向桶1腾挪了(看Segment::TryInsert),这时，第二次SAVE就会漏了桶2的一部分数据，
+ 以段为单位进行持久化，主要的问题是扩展哈希目录，在执行第二次SAVE时，物理段数已经改变了，
+ 已经扫描过的物理段的数据一部分迁移到了新物理段，新物理段是不能扫描的，但是对于执行第二次SAVE时没扫描的物理段呢
+ 就需要扫描这个没扫描的物理段，以及这个物理段扩展出来的新段，但是这不是最好的办法，会产生反复扫描新段的可能吗
+
+
+
+*/
+
 template <typename Key, typename Value, typename Policy>
 class DashTable {
   static_assert(Policy::kSlotNum > 0 && Policy::kSlotNum <= kMaxSlotsPerBucket,
@@ -241,7 +263,6 @@ class DashTable {
 
   template <typename K>
   iterator FindByHash(Hash_t hash, const K& key) {
-    if (size_ == 0) return iterator{};
     Segment* seg = segments_[SegmentId(hash)];
     if (auto pos = seg->FindIn(hash, key)) {
       return iterator(this, seg, BaseOf(SegmentId(hash)), pos->bid, pos->slot);
@@ -250,7 +271,6 @@ class DashTable {
   }
   template <typename K>
   const_iterator FindByHash(Hash_t hash, const K& key) const {
-    if (size_ == 0) return const_iterator{};
     Segment* seg = segments_[SegmentId(hash)];
     if (auto pos = seg->FindIn(hash, key)) {
       return const_iterator(this, seg, BaseOf(SegmentId(hash)), pos->bid,
@@ -528,7 +548,31 @@ class DashTable {
     Segment* seg = segments_[sid];
     const uint32_t base_old = BaseOf(sid);
     const bool need_grow = seg->LocalDepth() == global_depth_;
-    if (need_grow) {
+    if (need_grow) {  // 判断是否有多余的逻辑段可以给seg扩容
+      /*
+            情况1: local_depth=2 < global_depth=3
+      目录有8项，段占2项，分裂后可以指向新段
+
+      索引:  0   1   2   3   4   5   6   7
+            ┌───┬───┬───┬───┬───┬───┬───┬───┐
+            │ A │ A │ A │ A │ B │ B │ B │ B │
+            └───┴───┴───┴───┴───┴───┴───┴───┘
+                  ↑
+                段A占2项，分裂后有一半可以给新段
+                ✓ 不需要扩展目录
+
+
+      情况2: local_depth=3 = global_depth=3
+      段独占1项，分裂后没地方放新段
+
+      索引:  0   1   2   3   4   5   6   7
+            ┌───┬───┬───┬───┬───┬───┬───┬───┐
+            │ A │ B │ C │ D │ E │ F │ G │ H │
+            └───┴───┴───┴───┴───┴───┴───┴───┘
+                  ↑
+                段A只占1项，分裂后需要2项
+                ✗ 必须扩展目录
+       */
       IncreaseDepth();
     }
     const uint32_t base = need_grow ? (base_old << 1) : base_old;
