@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory_resource>
 #include <unordered_map>
 #include <vector>
 
@@ -31,6 +32,8 @@ class WatchedContext {
 
 class LockTable {
  public:
+  explicit LockTable(std::pmr::memory_resource* mr) : locks_(mr) {}
+
   IntentLock& Acquire(LockFp fp) {
     auto [it, inserted] = locks_.try_emplace(fp);
     (void)inserted;
@@ -41,10 +44,10 @@ class LockTable {
     auto it = locks_.find(fp);
     if (it == locks_.end()) return;
     it->second.Release(mode);
-    if (it->second.IsFree()) locks_.erase(it);
   }
 
-  void RemoveIfUnused(LockFp fp) {
+  void RemoveIfUnused(
+      LockFp fp) {  // 考虑在淘汰键的时候来Release相关Lock减少内存占用
     auto it = locks_.find(fp);
     if (it != locks_.end() && it->second.IsFree()) locks_.erase(it);
   }
@@ -56,7 +59,7 @@ class LockTable {
   size_t Size() const { return locks_.size(); }
 
  private:
-  std::unordered_map<LockFp, IntentLock> locks_;
+  std::pmr::unordered_map<LockFp, IntentLock> locks_;
 };
 
 struct DbTable
@@ -72,7 +75,8 @@ struct DbTable
   PrimeTable prime_;
 
   LockTable trans_locks;
-  std::unordered_map<LockFp, std::vector<WatchedContext>> watched_keys_;
+  std::pmr::unordered_map<LockFp, std::pmr::vector<WatchedContext>>
+      watched_keys_;
 };
 
 using DbTableArray = std::vector<util::intrusive_ptr<DbTable>>;

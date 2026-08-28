@@ -7,7 +7,9 @@ constexpr unsigned kInitSegmentLog = 3;
 }  // namespace
 
 DbTable::DbTable(std::pmr::memory_resource* mr)
-    : prime_(kInitSegmentLog, detail::PrimeTablePolicy{}, mr) {}
+    : prime_(kInitSegmentLog, detail::PrimeTablePolicy{}, mr),
+      trans_locks(mr),
+      watched_keys_(mr) {}
 
 DbTable::~DbTable() = default;
 
