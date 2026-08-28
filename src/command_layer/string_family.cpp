@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
@@ -18,6 +19,7 @@
 #include "detail/op_status.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "sharding/shard.hpp"
+#include "sharding/shard_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 #include "util/Strings.hpp"
 #include "util/arg_parse.hpp"
@@ -152,20 +154,30 @@ CoroTask StringFamily::MSet(CommandContext* cmd_cntx, CmdArgList args) {
 
 CoroTask StringFamily::MGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   std::vector<std::string> vec(cmd_cntx->tx()->GetKeyNum());
-  auto cb = [&vec](Transaction* tx, Shard* es) -> OpResult<void> {
+
+  // 每个分片一个独立结果缓冲：cb 在各分片线程上并发执行，只写自己那份，
+  // 避免多线程同时写 vec 相邻槽位（同一缓存行）造成的伪共享。
+  std::vector<std::vector<std::pair<unsigned, std::string>>> per_shard(
+      shard_pool->size());
+
+  auto cb = [&per_shard](Transaction* tx, Shard* es) -> OpResult<void> {
+    auto& local = per_shard[es->shard_id()];
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
     for (const auto& [key, keyId] : tx->GetSlice(es->shard_id())) {
       auto res = shard.Find(cntx, key);
-      if (res) {
-        vec[keyId - 1] = res.value()->second.ToString();
-      } else {
-        vec[keyId - 1] = "";  // args第一个参数是MGET,与vec不同，要减一
-      }
+      local.emplace_back(keyId,
+                         res ? res.value()->second.ToString() : std::string{});
     }
     return {};
   };
   co_await cmd::SingleHopT(cb);
+
+  // 协程恢复时所有分片 cb 已执行完（barrier + acq_rel 保证可见），
+  // 此时单线程按 keyId 归并回结果槽，不再有任何并发写。
+  for (auto& local : per_shard) {
+    for (auto& [keyId, v] : local) vec[keyId - 1] = std::move(v);
+  }
 
   auto* rb = cmd_cntx->rb();
   rb->BuildArray(std::move(vec));
