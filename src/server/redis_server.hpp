@@ -254,9 +254,10 @@ class RedisServer {
     util::StartupLog("Entering main event loop");
     main_proactor_->Run();
     util::StartupLog("Main event loop exited");
+    Stop();
   }
 
-  void NotifyStop() { isRuning = false; }
+  void NotifyStop() { main_proactor_->Wake(); }
 
   size_t ShardCount() const { return pool_.size(); }
 
@@ -279,6 +280,8 @@ class RedisServer {
 
  private:
   void Stop() {
+    if (!isRuning) return;
+    isRuning = false;
     LOG(INFO) << "Stopping server...";
     if (shard_pool) {
       shard_pool->Shutdown();
@@ -322,7 +325,6 @@ class RedisServer {
                      << strerror(errno);
       }
     }
-    Stop();
     co_return;
   }
 
@@ -336,7 +338,7 @@ class RedisServer {
   base::UringProactor* main_proactor_ = nullptr;
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
-  std::atomic_bool isRuning = false;
+  bool isRuning = false;
 
   inline static RedisServer* instance_ = nullptr;
 };

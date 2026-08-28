@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "detail/task_queue.hpp"
+#include "util/cppcoro/async_task.hpp"
 
 namespace base {
 
@@ -95,6 +96,8 @@ class UringProactor {
   void Run();
   void Shutdown() noexcept;
 
+  void Wake() noexcept;
+
   dfly::TaskQueue& GetTaskQueue() { return task_queue_; }
 
   pthread_t GetLoopThreadId() const { return loop_thread_id_; }
@@ -108,6 +111,9 @@ class UringProactor {
 
   void InitRing();
   void InitRegisteredBuffers();
+  void ArmWakePoll();
+  cppcoro::AsyncTask WakeLoop();
+  IoAwaitable AsyncPoll(int fd, unsigned poll_mask);
 
   uint32_t AllocSlot();
   void FreeSlot(uint32_t slot_idx);
@@ -142,6 +148,8 @@ class UringProactor {
       loop_thread_id_;  // TODO 多余，应该用分片ID检查检查状态而不是线程ID检查
   bool shutdown_{false};
   uint32_t pending_sqes_{0};
+
+  int wake_fd_ = -1;
 };
 
 }  // namespace base

@@ -1,7 +1,10 @@
 #include "uring_proactor.hpp"
 
 #include <glog/logging.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstring>
@@ -43,6 +46,7 @@ UringProactor::UringProactor(UringConfig cfg, int pool_index)
   next_free_IoCompletionNode_ = 0;
 
   InitRing();
+  ArmWakePoll();
 
   InitRegisteredBuffers();
 }
@@ -58,6 +62,9 @@ UringProactor::~UringProactor() {
   }
 
   io_uring_queue_exit(&ring_);
+  if (wake_fd_ >= 0) {
+    close(wake_fd_);
+  }
 }
 
 void UringProactor::InitRing() {
@@ -90,6 +97,12 @@ void UringProactor::InitRing() {
             << " defer_tw=" << config_.use_defer_taskrun
             << " single_issuer=" << config_.use_single_issuer
             << " sqpoll=" << config_.use_sqpoll;
+}
+
+void UringProactor::ArmWakePoll() {
+  wake_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  CHECK_GE(wake_fd_, 0) << "eventfd failed: " << errno;
+  WakeLoop();
 }
 
 void UringProactor::InitRegisteredBuffers() {
@@ -216,6 +229,15 @@ IoAwaitable UringProactor::AsyncSendV(int fd, const struct msghdr* msg) {
   return IoAwaitable(this, slot_idx);
 }
 
+IoAwaitable UringProactor::AsyncPoll(int fd, unsigned poll_mask) {
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  io_uring_prep_poll_add(sqe, fd, poll_mask);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
 IoAwaitable UringProactor::ArmPeriodicTimer(uint64_t interval_ms) {
   uint32_t slot_idx = AllocSlot();
 
@@ -330,11 +352,25 @@ void UringProactor::Run() {
   LOG(INFO) << "Proactor thread " << pool_index_ << " exited";
 }
 
-void UringProactor::Shutdown() noexcept {
-  // 所有调用点（pool_.stop() 的广播回调在分片线程执行、main 线程的
-  // RedisServer::Stop()）都运行在本 proactor 自己的线程上，直接置位即可
-  // （bool 同线程写读，无需原子；不给自己的队列投任务，符合 SPSC 设计）。
-  shutdown_ = true;
+void UringProactor::Shutdown() noexcept { shutdown_ = true; }
+
+void UringProactor::Wake() noexcept {
+  if (wake_fd_ < 0) {
+    return;
+  }
+  uint64_t one = 1;
+  ssize_t rc = write(wake_fd_, &one, sizeof(one));
+  if (rc < 0) {
+    LOG(ERROR) << "Wake: eventfd write failed: " << errno;
+  }
+}
+
+cppcoro::AsyncTask UringProactor::WakeLoop() {
+  co_await AsyncPoll(wake_fd_, POLLIN);
+  uint64_t val;
+  while (read(wake_fd_, &val, sizeof(val)) > 0) {
+  }
+  Shutdown();
 }
 
 }  // namespace base
