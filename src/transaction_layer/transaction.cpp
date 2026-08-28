@@ -15,7 +15,7 @@ std::atomic_uint64_t global_seq{1};
 
 struct KeyAccum {
   std::vector<std::string_view> keys;
-  std::vector<IndexSlice> slices;
+  std::vector<unsigned> key_idx;
 };
 thread_local std::vector<KeyAccum> key_accum;
 
@@ -23,7 +23,7 @@ struct AccumGuard {
   ~AccumGuard() {
     for (auto& a : key_accum) {
       a.keys.clear();
-      a.slices.clear();
+      a.key_idx.clear();
     }
   }
 };
@@ -111,11 +111,7 @@ void Transaction::BuildKeyMap() {
       if (active_shard_count_ == 0) sole = sid;
       ++active_shard_count_;
     }
-    if (!acc.slices.empty() && acc.slices.back().second == pos) {
-      acc.slices.back().second = pos + step;
-    } else {
-      acc.slices.emplace_back(pos, pos + step);
-    }
+    acc.key_idx.push_back(pos);
     acc.keys.push_back(key);
   }
   if (active_shard_count_ == 0) return;
@@ -132,7 +128,7 @@ void Transaction::BuildKeyMap() {
   auto fill = [&](size_t idx, ShardId sid) {
     auto& acc = key_accum[sid];
     PerShardData& sd = ShardDataAt(idx);
-    sd.slices = std::move(acc.slices);
+    sd.key_idx = std::move(acc.key_idx);
     sd.fps.reserve(acc.keys.size());
     key_num_ += acc.keys.size();
     for (const std::string_view k : acc.keys)
@@ -419,7 +415,7 @@ DbContext Transaction::GetDbContext() const {
 
 Transaction::Slice Transaction::GetSlice(ShardId sid) const {
   const PerShardData& sd = ShardDataAt(IndexInvolved(sid));
-  return Slice(std::span<const IndexSlice>(sd.slices), cid_->key_step(), args_);
+  return Slice(std::span<const unsigned>(sd.key_idx), args_);
 }
 
 KeyLockContext Transaction::LockArgsOn(ShardId sid) const {

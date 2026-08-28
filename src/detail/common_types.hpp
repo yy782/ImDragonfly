@@ -22,8 +22,6 @@ using ShardId = uint16_t;
 using LockFp = uint64_t;
 using SlotId = std::uint16_t;
 
-using IndexSlice = std::pair<unsigned, unsigned>;
-
 class MiMemoryResource;
 using MemResource = MiMemoryResource;
 

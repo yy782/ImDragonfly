@@ -97,14 +97,11 @@ class Transaction final
   KeyLockContext LockArgsOn(ShardId sid) const;
   class Slice {
    public:
-    Slice(std::span<const IndexSlice> slices, unsigned step,
-          ::dfly::CmdArgList args)
-        : slices_(slices), step_(step), args_(args) {}
+    Slice(std::span<const unsigned> key_idx, ::dfly::CmdArgList args)
+        : key_idx_(key_idx), args_(args) {}
     struct Iterator {
-      const IndexSlice* cur_ = nullptr;
-      const IndexSlice* end_ = nullptr;
-      unsigned idx_ = 0;
-      unsigned step_ = 1;
+      const unsigned* cur_ = nullptr;
+      const unsigned* end_ = nullptr;
       ::dfly::CmdArgList args_;
       std::pair<std::string_view, unsigned> val_;
 
@@ -112,46 +109,25 @@ class Transaction final
         return val_;
       }
       Iterator& operator++() {
-        idx_ += step_;
-        if (idx_ >= cur_->second) {
-          ++cur_;
-          if (cur_ < end_) {
-            idx_ = cur_->first;
-          } else {
-            return *this;
-          }
-        }
-        val_ = {args_[idx_], idx_};
+        ++cur_;
+        if (cur_ != end_) val_ = {args_[*cur_], *cur_};
         return *this;
       }
-
-      bool operator!=(const Iterator& o) const { return idx_ != o.idx_; }
+      bool operator!=(const Iterator& o) const { return cur_ != o.cur_; }
     };
 
     Iterator begin() const {
-      if (slices_.empty()) return end();
-      Iterator it{&slices_.front(),
-                  &slices_.back() + 1,
-                  slices_.front().first,
-                  step_,
-                  args_,
-                  {}};
-      it.val_ = {args_[it.idx_], it.idx_};
-      return it;
+      if (key_idx_.empty()) return end();
+      const unsigned* p = key_idx_.data();
+      return Iterator{p, p + key_idx_.size(), args_, {args_[p[0]], p[0]}};
     }
-
     Iterator end() const {
-      if (slices_.empty()) return {nullptr, nullptr, 0, step_, args_, {}};
-      return {&slices_.back() + 1,
-              &slices_.back() + 1,
-              slices_.back().second,
-              step_,
-              args_,
-              {}};
+      const unsigned* p = key_idx_.data();
+      const unsigned* e = key_idx_.empty() ? nullptr : p + key_idx_.size();
+      return Iterator{e, e, args_, {}};
     }
 
-    std::span<const IndexSlice> slices_;
-    unsigned step_ = 1;
+    std::span<const unsigned> key_idx_;
     ::dfly::CmdArgList args_;
   };
 
@@ -161,11 +137,11 @@ class Transaction final
   struct alignas(64) PerShardData {
     PerShardData() = default;
     PerShardData(PerShardData&& o) noexcept
-        : slices(std::move(o.slices)), fps(std::move(o.fps)) {}
+        : key_idx(std::move(o.key_idx)), fps(std::move(o.fps)) {}
 
     uint16_t flags = 0;
     std::atomic_bool is_armed = false;
-    std::vector<IndexSlice> slices;
+    std::vector<unsigned> key_idx;  // 本分片涉及的 key 在命令参数中的下标
     std::vector<LockFp> fps;
     TxQueue::Iterator queue_pos = TxQueue::kEnd;
   };
