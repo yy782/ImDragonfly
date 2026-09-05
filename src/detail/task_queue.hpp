@@ -16,7 +16,7 @@
 namespace dfly {
 
 inline constexpr bool kUseMpmcTaskQueue = true;
-
+// spsc模式不支持向主线程投递任务，且性能提升不高，目前是实验阶段
 inline constexpr size_t kMaxPerSegment = 64;
 
 template <bool UseMpmc>
