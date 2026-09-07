@@ -70,11 +70,7 @@ cppcoro::task<void> PipelineSquasher::ExecuteSquashed() {
 
   for (ShardId sid : sids) {
     ShardDispatch& sd = dispatched_[sid];
-    if constexpr (dfly::kUseMpmcTaskQueue) {
-      shard_pool->Post(sid, make_cb(sd));
-    } else {
-      shard_pool->PostShard(sid, Shard::tlocal()->shard_id(), make_cb(sd));
-    }
+    shard_pool->Post(sid, make_cb(sd));
   }
   co_await bc->Wait();
 

@@ -16,20 +16,9 @@ namespace dfly {
 ShardPool* shard_pool = nullptr;
 
 void ShardPool::Init(uint32_t sz) {
-  if constexpr (!dfly::kUseMpmcTaskQueue) {
-    if (sz == 0 || (sz & (sz - 1)) != 0) {
-      LOG(ERROR) << "shards 必须是 2 的幂（SPSC 分片段队列要求），当前: " << sz;
-      std::exit(1);
-    }
-    dfly::InitShardQueueIfSpsc(*dfly::main_queue_, sz);
-  }
   LOG(INFO) << "Initializing ShardPool with " << sz << " shards";
   shards_.reset(new Shard*[sz]);
   size_ = sz;
-
-  for (uint32_t i = 0; i < sz; ++i) {
-    dfly::InitShardQueueIfSpsc(pp_->at(i)->GetTaskQueue(), sz);
-  }
 
   pp_->DispatchBriefFromMain(
       [this](base::UringProactor* pb) { InitThreadLocal(pb); });

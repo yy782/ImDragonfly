@@ -41,14 +41,6 @@ class UringProactorPool {
             proactors_[i] = new UringProactor(cfg_, i);
             ready->count_down();  // 通知主线程：本 proactor 已创建
             gate->wait();         // 等主线程完成 ShardPool::Init()
-            if constexpr (!dfly::kUseMpmcTaskQueue) {
-              // 主线程已把 InitThreadLocal 任务投到 main 队列段 i（见
-              // ShardPool::Init 的 DispatchBriefFromMain）。先消费掉以设置
-              // 本线程的 Shard::tlocal()，否则 Run() 里 TryDrain() 用
-              // Shard::tlocal()->shard_id() 会命中空指针（段号 = pool_index =
-              // i）。
-              dfly::main_queue_->TryDrainSeg(dfly::kMaxPerSegment, i);
-            }
             proactors_[i]->Run();
             delete proactors_[i];
             proactors_[i] = nullptr;
@@ -69,17 +61,9 @@ class UringProactorPool {
 
   template <typename Func>
   void DispatchBriefFromMain(Func&& f) {
-    if constexpr (dfly::kUseMpmcTaskQueue) {
-      for (std::size_t i = 0; i < size(); ++i) {
-        auto p = proactors_[i];
-        p->GetTaskQueue().TryAdd([p, f]() mutable { f(p); });
-      }
-    } else {
-      for (std::size_t i = 0; i < size(); ++i) {
-        dfly::main_queue_->TryPostFromMain(
-            i,
-            [p = proactors_[i], f = std::forward<Func>(f)]() mutable { f(p); });
-      }
+    for (std::size_t i = 0; i < size(); ++i) {
+      auto p = proactors_[i];
+      p->GetTaskQueue().TryAdd([p, f]() mutable { f(p); });
     }
   }
 

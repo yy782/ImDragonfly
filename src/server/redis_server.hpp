@@ -222,11 +222,8 @@ class RedisServer {
     util::StartupLog("Starting RedisServer...");
     isRuning = true;
 
-    main_queue_ = &main_proactor_->GetTaskQueue();
-    util::StartupLog(
-        "Task queue mode: " +
-        std::string(dfly::kUseMpmcTaskQueue ? "MPMC" : "SPSC") +
-        ", main_queue_ set, shard_count=" + std::to_string(pool_.size()));
+    util::StartupLog("Task queue mode: MPMC, shard_count=" +
+                     std::to_string(pool_.size()));
 
     // ready:  分片线程创建完 UringProactor 后 count_down，
     //         AsyncLoop() 返回即保证所有 proactor 已创建、线程阻塞在 gate 上；
@@ -309,12 +306,8 @@ class RedisServer {
           session->init();
           session->DoRead();
         };
-        if constexpr (dfly::kUseMpmcTaskQueue) {
-          auto& q = NextProactor()->GetTaskQueue();
-          success = q.TryAdd(std::move(cb));
-        } else {
-          success = main_queue_->TryPostFromMain(NextShardId(), std::move(cb));
-        }
+        auto& q = NextProactor()->GetTaskQueue();
+        success = q.TryAdd(std::move(cb));
 
         if (!success) {
           LOG(ERROR) << "Failed to dispatch session, closing fd: " << fd;
