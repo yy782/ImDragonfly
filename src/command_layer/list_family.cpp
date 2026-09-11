@@ -42,7 +42,9 @@ CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto values = args.subspan(2);
 
-  auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, values](Transaction* tx, Shard* shard,
+                          OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     ListObject* list = GetOrCreateList(tx, shard, key);
     if (!list) {
       return util::make_unexpected(OpStatus::WRONG_TYPE);
@@ -59,6 +61,8 @@ CoroTask ListFamily::LPush(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -71,7 +75,9 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto values = args.subspan(2);
 
-  auto cb = [key, values](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, values](Transaction* tx, Shard* shard,
+                          OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     ListObject* list = GetOrCreateList(tx, shard, key);
     if (!list) {
       return util::make_unexpected(OpStatus::WRONG_TYPE);
@@ -88,6 +94,8 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -99,10 +107,11 @@ CoroTask ListFamily::RPush(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<std::string> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus sched) -> OpResult<std::string> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
-
     auto f = storage.Find(cntx, key);
     if (!f) {
       if (f.error() != OpStatus::KEY_NOTFOUND)
@@ -136,6 +145,8 @@ CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
     }
   } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -147,7 +158,9 @@ CoroTask ListFamily::LPop(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<std::string> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus sched) -> OpResult<std::string> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -184,6 +197,8 @@ CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
     }
   } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -195,7 +210,8 @@ CoroTask ListFamily::RPop(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask ListFamily::LLen(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -234,8 +250,8 @@ CoroTask ListFamily::LIndex(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, index](Transaction* tx,
-                         Shard* shard) mutable -> OpResult<std::string> {
+  auto cb = [key, index](Transaction* tx, Shard* shard,
+                         OpStatus /*sched*/) mutable -> OpResult<std::string> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -284,8 +300,8 @@ CoroTask ListFamily::LRange(CommandContext* cmd_cntx, CmdArgList args) {
   }
 
   auto cb = [key, start, stop](
-                Transaction* tx,
-                Shard* shard) -> OpResult<std::vector<std::string>> {
+                Transaction* tx, Shard* shard,
+                OpStatus /*sched*/) -> OpResult<std::vector<std::string>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -325,8 +341,9 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, index, value](Transaction* tx,
-                                Shard* shard) mutable -> OpResult<void> {
+  auto cb = [key, index, value](Transaction* tx, Shard* shard,
+                                OpStatus sched) mutable -> OpResult<void> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -368,6 +385,8 @@ CoroTask ListFamily::LSet(CommandContext* cmd_cntx, CmdArgList args) {
     rb->BuildError("ERR no such key");
   } else if (result.error() == OpStatus::OUT_OF_RANGE) {
     rb->BuildError("ERR index out of range");
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -385,8 +404,9 @@ CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, count, value](Transaction* tx,
-                                Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, count, value](Transaction* tx, Shard* shard,
+                                OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -414,6 +434,8 @@ CoroTask ListFamily::LRem(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -428,8 +450,9 @@ CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
   auto pivot = args[3];
   auto value = args[4];
 
-  auto cb = [key, pos, pivot, value](Transaction* tx,
-                                     Shard* shard) -> OpResult<int> {
+  auto cb = [key, pos, pivot, value](Transaction* tx, Shard* shard,
+                                     OpStatus sched) -> OpResult<int> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -471,6 +494,8 @@ CoroTask ListFamily::LInsert(CommandContext* cmd_cntx, CmdArgList args) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
   } else if (result.error() == OpStatus::SYNTAX_ERROR) {
     rb->BuildError("ERR syntax error");
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");

@@ -30,6 +30,15 @@ class ShardPool {
 
   Shard* At(ShardId sid) { return shards_[sid]; }
 
+  // 在每个分片线程上点火 raft 日志刷新定时器。必须在 Init() 之后调用
+  // —— 那时 shards_[sid] 已全部填好、thread_local shard_ 已赋值。
+  // 不能放在 Shard 构造函数里，见 raft.md §12.7。
+  void StartRaftLogTimers() {
+    for (ShardId sid = 0; sid < size_; ++sid) {
+      Post(sid, [] { Shard::tlocal()->StartRaftLogTimer(); });
+    }
+  }
+
  private:
   void InitThreadLocal(base::UringProactor* pb);
 

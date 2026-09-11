@@ -25,6 +25,11 @@ using namespace dfly;
 // ASAN对协程有误报，注意一下
 
 int main(int argc, char* argv[]) {
+  // 忽略 SIGPIPE：客户端在响应发出前断连时，往对端已关闭的 socket 写会
+  // 触发 SIGPIPE，默认动作是**终止整个进程** —— 一个断连的客户端就能把
+  // 服务打挂。写操作会改为返回 EPIPE，由 socket.cc 记日志后走正常断连。
+  signal(SIGPIPE, SIG_IGN);
+
   std::set_new_handler([]() noexcept {
     std::fputs("out of memory: operator new failed\n", stderr);
     std::fflush(stderr);

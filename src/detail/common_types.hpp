@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "detail/conflig.hpp"
 #include "detail/intent_lock.hpp"
 namespace dfly {
 

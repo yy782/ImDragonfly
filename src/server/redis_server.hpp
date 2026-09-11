@@ -19,11 +19,13 @@
 #include "command_layer/command_registry.hpp"
 #include "command_layer/generic_family.hpp"
 #include "command_layer/multi_family.hpp"
+#include "detail/conflig.hpp"
 #include "detail/conn_context.hpp"
 #include "io/fd_wrapper.hpp"
 #include "io/uring_proactor.hpp"
 #include "io/uring_proactor_pool.hpp"
 #include "io/uring_socket.hpp"
+#include "raft/raft_node.hpp"
 #include "redis/facade/ParseRESP.hpp"
 #include "redis/facade/reply_builder.hpp"
 #include "server/pipeline_squasher.hpp"
@@ -151,6 +153,21 @@ class RedisServer {
             new base::UringProactor(CreateOptimizedRedisConfig(config))),
         pool_(size, CreateOptimizedRedisConfig(config)),
         ListenSocket_(main_proactor_, listenFd) {
+    if (config) {
+      use_raft = config->GetBool("use_raft", use_raft);
+      raft_log_path_ = config->GetString("raft_log_path", raft_log_path_);
+      raft_node_id_ = static_cast<uint32_t>(config->GetInt("raft_node_id", 0));
+      raft_is_leader_ = config->GetBool("raft_is_leader", false);
+      raft_peers_csv_ = config->GetString("raft_peers", "");
+      raft_rpc_timeout_ms_ =
+          static_cast<uint64_t>(config->GetInt("raft_rpc_timeout_ms", 1000));
+      raft_election_timeout_ms_ =
+          static_cast<uint64_t>(config->GetInt("election_timeout_ms", 300));
+      raft_max_entries_per_rpc_ =
+          static_cast<uint32_t>(config->GetInt("raft_max_entries_per_rpc", 64));
+      raft_joining_ = config->GetBool("raft_joining", false);
+      raft_seed_ = config->GetString("raft_seed", "");
+    }
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
@@ -209,6 +226,11 @@ class RedisServer {
     delete CIs;
     CIs = nullptr;
 
+    if (raft_node) {
+      delete raft_node;
+      raft_node = nullptr;
+    }
+
     if (shard_pool) {
       delete shard_pool;
       shard_pool = nullptr;
@@ -244,6 +266,39 @@ class RedisServer {
       // 空任务，确保shard_pool::Init()里的任务都执行完了，才启动服务器
     });
     util::StartupLog("All shard threads ready");
+
+    // raft 初始化必须在此之后：RecoverFromDisk() 的重放要 Post 到分片线程
+    // 并等它完成，所以分片线程必须已经在跑 Run()。
+    if (use_raft) {
+      RaftConfig rcfg;
+      rcfg.node_id = raft_node_id_;
+      rcfg.is_leader = raft_is_leader_;
+      rcfg.peers = ParsePeerList(raft_peers_csv_);
+      rcfg.log_path = raft_log_path_;
+      rcfg.rpc_timeout_ms = raft_rpc_timeout_ms_;
+      rcfg.election_timeout_ms = raft_election_timeout_ms_;
+      rcfg.max_entries_per_rpc = raft_max_entries_per_rpc_;
+      rcfg.joining = raft_joining_;
+      rcfg.seed = raft_seed_;
+
+      util::StartupLog("Initializing raft (log=" + raft_log_path_ +
+                       ", node_id=" + std::to_string(rcfg.node_id) +
+                       ", role=" + (rcfg.is_leader ? "leader" : "follower") +
+                       ", cluster=" + std::to_string(rcfg.ClusterSize()) +
+                       ", quorum=" + std::to_string(rcfg.Quorum()) + ")");
+
+      raft_node = new RaftNode(main_proactor_, std::move(rcfg));
+      if (!raft_node->Open()) {
+        LOG(FATAL) << "raft: failed to open log " << raft_log_path_;
+      }
+      if (!raft_node->StartTransport()) {
+        LOG(FATAL) << "raft: failed to start transport";
+      }
+      shard_pool->StartRaftLogTimers();
+      util::StartupLog(
+          "Raft ready (term=" + std::to_string(raft_node->term()) +
+          ", last_index=" + std::to_string(raft_node->last_log_index()) + ")");
+    }
 
     util::StartupLog("Starting ListenSocket...");
     listen();
@@ -332,6 +387,16 @@ class RedisServer {
   base::UringProactorPool pool_;
   base::UringSocket ListenSocket_;
   bool isRuning = false;
+  std::string raft_log_path_ = "./raft.log";
+  uint32_t raft_node_id_ = 0;
+  bool raft_is_leader_ = false;
+  std::string raft_peers_csv_;
+  uint64_t raft_rpc_timeout_ms_ = 1000;
+  uint64_t raft_election_timeout_ms_ = 300;
+  uint32_t raft_max_entries_per_rpc_ = 64;
+  // 动态加节点：joining 节点以 learner 身份启动，向 raft_seed 拨号追日志。
+  bool raft_joining_ = false;
+  std::string raft_seed_;
 
   inline static RedisServer* instance_ = nullptr;
 };

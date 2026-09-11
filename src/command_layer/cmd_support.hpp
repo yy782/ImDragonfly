@@ -19,9 +19,11 @@
 namespace dfly::cmd {
 using ::dfly::CmdArgList;
 template <typename RT>
-using SingleHopSentinelT = util::FunctionRef<RT(Transaction*, Shard*)>;
+using SingleHopSentinelT =
+    util::FunctionRef<RT(Transaction*, Shard*, OpStatus)>;
 
-auto SingleHopT(auto& f) -> SingleHopSentinelT<decltype(f(nullptr, nullptr))> {
+auto SingleHopT(auto& f)
+    -> SingleHopSentinelT<decltype(f(nullptr, nullptr, OpStatus::OK))> {
   return f;
 }
 
@@ -105,8 +107,8 @@ class Coro {
       return true;
     }
 
-    void operator()(Transaction* tx, Shard* es) const {
-      result_ = callback_(tx, es);
+    void operator()(Transaction* tx, Shard* es, OpStatus sched) const {
+      result_ = callback_(tx, es, sched);
       return;
     }
 

@@ -37,6 +37,10 @@ struct IoCompletionSlot {
   std::coroutine_handle<> coro;
   int32_t result = 0;
   uint32_t flags = 0;
+  // ArmPeriodicTimer 用：io_uring_prep_timeout 只记录 &timespec，内核在超时
+  // 到期时才读它，因此该结构不能是调用方的栈变量 —— 必须活到 CQE 到达。
+  // 挂在 slot 上，随 slot 的生命周期存活。
+  __kernel_timespec timeout_ts{};
 };
 
 class IoAwaitable {
@@ -88,7 +92,23 @@ class UringProactor {
   RecvAwaitable AsyncRecvFixed(int fd, int buf_idx, size_t offset = 0);
   IoAwaitable AsyncSend(int fd, const void* buf, size_t len);
 
+  // 主动连接（raft peer 用）。addr 必须活到 co_await 返回（sqe 只记指针）。
+  IoAwaitable AsyncConnect(int fd, const struct sockaddr* addr,
+                           socklen_t addrlen);
+
+  // 普通 recv，不走注册缓冲区。raft peer 的连接数很少（就几个），
+  // 不值得占用 registered_buf_count 的配额（那是给客户端连接的）。
+  IoAwaitable AsyncRecv(int fd, void* buf, size_t len);
+
   IoAwaitable AsyncSendV(int fd, const struct msghdr* msg);
+
+  // 文件 io（raft 日志落盘用）。AsyncSend 是 prep_send，只能用于 socket。
+  // buf 必须活到 co_await 返回（sqe 只记指针）。
+  IoAwaitable AsyncWriteFile(int fd, const void* buf, size_t len,
+                             uint64_t offset);
+  IoAwaitable AsyncWriteFileV(int fd, const struct iovec* iov, unsigned nr_vecs,
+                              uint64_t offset);
+  IoAwaitable AsyncFsync(int fd, bool datasync = true);
 
   IoAwaitable ArmPeriodicTimer(uint64_t interval_ms);
 

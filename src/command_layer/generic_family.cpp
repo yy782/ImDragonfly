@@ -3,7 +3,9 @@
 #include <glog/logging.h>
 
 #include <atomic>
+#include <latch>
 #include <optional>
+#include <string>
 
 #include "cmd_support.hpp"
 #include "command_registry.hpp"
@@ -18,7 +20,8 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
   (void)args;
 
   std::atomic<uint32_t> result = 0;
-  auto cb = [&](Transaction* tx, Shard* es) -> OpResult<void> {
+  auto cb = [&](Transaction* tx, Shard* es, OpStatus sched) -> OpResult<void> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     ShardStorage& db_slice = es->GetShardStorage();
     const auto& cntx = tx->GetDbContext();
     uint32_t res = 0;
@@ -39,6 +42,8 @@ CoroTask CmdDel(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (res.has_value())
     rb->BuildInteger(del_cnt);
+  else if (res.error() == OpStatus::RAFT_SCHED_FAIL)
+    rb->BuildError("not leader");
   else
     rb->BuildError("ERR");
   co_return;
@@ -74,7 +79,8 @@ CoroTask CmdExists(CommandContext* cmd_cntx, CmdArgList args) {
 
   std::atomic<uint32_t> result{0};
 
-  auto cb = [&result, &Op](Transaction* t, Shard* es) -> OpResult<void> {
+  auto cb = [&result, &Op](Transaction* t, Shard* es,
+                           OpStatus /*sched*/) -> OpResult<void> {
     auto res = Op(t, es->GetShardStorage());
     result.fetch_add(res.has_value() ? res.value() : 0,
                      std::memory_order_relaxed);
@@ -99,7 +105,8 @@ CoroTask GenericFamily::Exists(CommandContext* cmd_cntx, CmdArgList args) {
 
 CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key,
                    int64_t sec) {
-  auto cb = [&](Transaction* t, Shard* es) -> OpResult<void> {
+  auto cb = [&](Transaction* t, Shard* es, OpStatus sched) -> OpResult<void> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& db_slice = es->GetShardStorage();
     const auto& cntx = t->GetDbContext();
     auto ttl_at = cntx.GetTimeNowMs() + static_cast<uint64_t>(sec) * 1000;
@@ -110,6 +117,8 @@ CoroTask CmdExpire(CommandContext* cmd_cntx, std::string_view key,
   auto* rb = cmd_cntx->rb();
   if (res.has_value()) {
     rb->BuildInteger(1);
+  } else if (res.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildInteger(0);
   }
@@ -129,7 +138,8 @@ CoroTask GenericFamily::Expire(CommandContext* cmd_cntx, CmdArgList args) {
 // }
 
 CoroTask CmdExpireTime(CommandContext* cmd_cntx, std::string_view key) {
-  auto cb = [&](Transaction* t, Shard* es) -> OpResult<int64_t> {
+  auto cb = [&](Transaction* t, Shard* es,
+                OpStatus /*sched*/) -> OpResult<int64_t> {
     auto& db_slice = es->GetShardStorage();
     const auto& cntx = t->GetDbContext();
     auto et = db_slice.ExpireTime(cntx, key);
@@ -165,7 +175,8 @@ CoroTask GenericFamily::ExpireTime(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 CoroTask CmdTtl(CommandContext* cmd_cntx, std::string_view key) {
-  auto cb = [&](Transaction* t, Shard* es) -> OpResult<int64_t> {
+  auto cb = [&](Transaction* t, Shard* es,
+                OpStatus /*sched*/) -> OpResult<int64_t> {
     auto& db_slice = es->GetShardStorage();
     const auto& cntx = t->GetDbContext();
     auto et = db_slice.ExpireTime(cntx, key);
@@ -232,7 +243,7 @@ CoroTask GenericFamily::Debug(CommandContext* cmd_cntx, CmdArgList args) {
     cmd_cntx->rb()->BuildSimpleString(out.empty() ? "OK" : out);
     co_return;
   }
-  auto cb = [](Transaction* /*tx*/, Shard* es) {
+  auto cb = [](Transaction* /*tx*/, Shard* es, OpStatus /*sched*/) {
     ShardId sid = es->shard_id();
     auto& storage = es->GetShardStorage();
     for (DbIndex dbid = 0; dbid < storage.DbCount(); ++dbid) {

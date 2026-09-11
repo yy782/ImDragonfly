@@ -40,8 +40,9 @@ CoroTask HashFamily::HSet(CommandContext* cmd_cntx, CmdArgList args) {
   auto field = args[2];
   auto value = args[3];
 
-  auto cb = [key, field, value](Transaction* tx,
-                                Shard* shard) -> OpResult<int> {
+  auto cb = [key, field, value](Transaction* tx, Shard* shard,
+                                OpStatus sched) -> OpResult<int> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     HashObject* hash = GetOrCreateHash(tx, shard, key);
     if (!hash) {
       return util::make_unexpected(OpStatus::WRONG_TYPE);
@@ -57,6 +58,8 @@ CoroTask HashFamily::HSet(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -69,8 +72,8 @@ CoroTask HashFamily::HGet(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto field = args[2];
 
-  auto cb = [key, field](Transaction* tx,
-                         Shard* shard) -> OpResult<std::string> {
+  auto cb = [key, field](Transaction* tx, Shard* shard,
+                         OpStatus /*sched*/) -> OpResult<std::string> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -111,7 +114,9 @@ CoroTask HashFamily::HDel(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto fields = args.subspan(2);
 
-  auto cb = [key, fields](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, fields](Transaction* tx, Shard* shard,
+                          OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -141,6 +146,8 @@ CoroTask HashFamily::HDel(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -153,7 +160,8 @@ CoroTask HashFamily::HExists(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto field = args[2];
 
-  auto cb = [key, field](Transaction* tx, Shard* shard) -> OpResult<int> {
+  auto cb = [key, field](Transaction* tx, Shard* shard,
+                         OpStatus /*sched*/) -> OpResult<int> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -187,7 +195,8 @@ CoroTask HashFamily::HExists(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask HashFamily::HLen(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 

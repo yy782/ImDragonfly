@@ -103,6 +103,10 @@ class ReplyBuilder {
     pending_.clear();
   }
 
+  // 丢弃尚未 Flush 的回复，不经过 send_cb_。
+  // 用于 raft 复制失败时把 handler 产出的回复整体作废、改回 -ERR。
+  void DiscardPending() { pending_.clear(); }
+
   bool empty() const { return pending_.empty(); }
 
  private:

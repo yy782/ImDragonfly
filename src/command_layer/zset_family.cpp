@@ -55,7 +55,9 @@ CoroTask ZSetFamily::ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
     pairs.emplace_back(score, std::string(args[i + 1]));
   }
 
-  auto cb = [key, pairs](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, pairs](Transaction* tx, Shard* shard,
+                         OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     ZSetObject* zset = GetOrCreateZSet(tx, shard, key);
     if (!zset) {
       return util::make_unexpected(OpStatus::WRONG_TYPE);
@@ -73,6 +75,8 @@ CoroTask ZSetFamily::ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -84,7 +88,8 @@ CoroTask ZSetFamily::ZAdd(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask ZSetFamily::ZCard(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -119,7 +124,8 @@ CoroTask ZSetFamily::ZScore(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
 
-  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<double> {
+  auto cb = [key, member](Transaction* tx, Shard* shard,
+                          OpStatus /*sched*/) -> OpResult<double> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -160,7 +166,9 @@ CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto members = args.subspan(2);
 
-  auto cb = [key, members](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, members](Transaction* tx, Shard* shard,
+                           OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -192,6 +200,8 @@ CoroTask ZSetFamily::ZRem(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -204,7 +214,8 @@ CoroTask ZSetFamily::ZRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
 
-  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, member](Transaction* tx, Shard* shard,
+                          OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -245,7 +256,8 @@ CoroTask ZSetFamily::ZRevRank(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
 
-  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, member](Transaction* tx, Shard* shard,
+                          OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -294,7 +306,8 @@ CoroTask ZSetFamily::ZRange(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, start, stop](Transaction* tx, Shard* shard)
+  auto cb = [key, start, stop](Transaction* tx, Shard* shard,
+                               OpStatus /*sched*/)
       -> OpResult<std::vector<std::pair<std::string, double>>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
@@ -345,7 +358,8 @@ CoroTask ZSetFamily::ZRevRange(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, start, stop](Transaction* tx, Shard* shard)
+  auto cb = [key, start, stop](Transaction* tx, Shard* shard,
+                               OpStatus /*sched*/)
       -> OpResult<std::vector<std::pair<std::string, double>>> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();

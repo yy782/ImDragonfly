@@ -38,7 +38,9 @@ CoroTask SetFamily::SAdd(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto members = args.subspan(2);
 
-  auto cb = [key, members](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, members](Transaction* tx, Shard* shard,
+                           OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     SetObject* set = GetOrCreateSet(tx, shard, key);
     if (!set) {
       return util::make_unexpected(OpStatus::WRONG_TYPE);
@@ -56,6 +58,8 @@ CoroTask SetFamily::SAdd(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -68,7 +72,9 @@ CoroTask SetFamily::SRem(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto members = args.subspan(2);
 
-  auto cb = [key, members](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key, members](Transaction* tx, Shard* shard,
+                           OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -98,6 +104,8 @@ CoroTask SetFamily::SRem(CommandContext* cmd_cntx, CmdArgList args) {
 
   if (result.has_value()) {
     rb->BuildInteger(static_cast<int64_t>(result.value()));
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -110,7 +118,8 @@ CoroTask SetFamily::SMembers(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   std::vector<std::string> members;
 
-  auto cb = [key, &members](Transaction* tx, Shard* shard) -> OpResult<void> {
+  auto cb = [key, &members](Transaction* tx, Shard* shard,
+                            OpStatus /*sched*/) -> OpResult<void> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -147,7 +156,8 @@ CoroTask SetFamily::SMembers(CommandContext* cmd_cntx, CmdArgList args) {
 CoroTask SetFamily::SCard(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* shard) -> OpResult<size_t> {
+  auto cb = [key](Transaction* tx, Shard* shard,
+                  OpStatus /*sched*/) -> OpResult<size_t> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -182,7 +192,8 @@ CoroTask SetFamily::SIsMember(CommandContext* cmd_cntx, CmdArgList args) {
   auto key = args[1];
   auto member = args[2];
 
-  auto cb = [key, member](Transaction* tx, Shard* shard) -> OpResult<int> {
+  auto cb = [key, member](Transaction* tx, Shard* shard,
+                          OpStatus /*sched*/) -> OpResult<int> {
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 

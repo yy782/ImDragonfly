@@ -41,19 +41,29 @@ class Transaction final
     kScheduling = 1 << 1,
     kDistributed = 1 << 2,
     kFinished = 1 << 3,
+    // follower 上由 leader 日志重放产生的写（区别于本节点客户端的写）。
+    // 这些条目定义上已提交，允许越过队首未就绪的读乱序执行：
+    // 那些读在 ReadIndex 放行前不会执行回调，故观察不到中间状态。
+    kReplayed = 1 << 4,
   };
 
   TxState State() const { return static_cast<TxState>(state_); }
   bool IsPipeline() const { return (state_ & TxState::kPipeline) != 0; }
+  bool IsFromLeader() const { return (state_ & TxState::kReplayed) != 0; }
+  void MarkFromLeader() { state_ |= TxState::kReplayed; }
   std::string StateName() const;
 
   enum class ScheduleResult : uint8_t {
     kGranted,
     kQueued,
     kRejected,
+    // 调度失败且不可重试（如本节点非 leader）：已就地回错误码给回调，
+    // 不会入队，也不参与重试/回滚协议。
+    kFailed,
   };
 
-  using Callback = util::FunctionRef<void(Transaction*, Shard*)>;
+  using Callback =
+      util::FunctionRef<void(Transaction*, Shard*, OpStatus sched)>;
 
   Transaction();
   explicit Transaction(const CommandId* cid);
@@ -69,6 +79,7 @@ class Transaction final
 #endif
 
   TxId txid() const { return txid_; }
+
   bool IsGlobal() const;
   bool IsReadOnly() const { return (cid_->opt_mask() & CO::READONLY) != 0; }
   IntentLock::Mode LockMode() const {
@@ -79,12 +90,24 @@ class Transaction final
   ShardId SoleShard() const {
     return active_shard_count_ == 1 ? involved_.single.sid : kInvalidSid;
   }
+
+  // 遍历本事务涉及的分片。main 线程用它做定向唤醒（只 Post 给相关分片，
+  // 不广播给全部分片）。
+  template <typename F>
+  void ForEachInvolvedShard(F&& f) const {
+    for (size_t i = 0; i < active_shard_count_; ++i) f(InvolvedAt(i));
+  }
+
+  // 从 raft 日志重放时，执行时刻必须用 leader 写进日志里的值，不能用本机
+  // 时钟，否则 EXPIRE / SET PX 会算出不同的过期时刻。
+  // 必须在 Init() 之后调用 —— Init 内部会 SetStartTime() 覆盖它。
+  void OverrideStartTimeMs(uint64_t ms) { start_ms_ = ms; }
   std::string_view Name() const { return cid_ ? cid_->name() : "null-command"; }
 
   cppcoro::AsyncTask Run(Callback cb, std::coroutine_handle<> resume);
 
   ScheduleResult ScheduleOnShard(Shard& shard, bool allow_optimistic);
-  void ExecuteOnShard(Shard& shard);
+  void ExecuteOnShard(Shard& shard, OpStatus sched = OpStatus::OK);
   bool RollbackOnShard(Shard& shard);
   bool AllowOn(ShardId sid);
   bool AllowOnIf(ShardId sid, uint16_t need_flags);
@@ -158,7 +181,7 @@ class Transaction final
   std::vector<ShardId>& ActivateMany();
   cppcoro::task<> Schedule();
   void Distribute();
-  void InvokeCallback(Shard& shard);
+  void InvokeCallback(Shard& shard, OpStatus sched = OpStatus::OK);
   bool AcquireLocks(Shard& shard, PerShardData& sd);
   void ReleaseLocks(Shard& shard, PerShardData& sd);
   void SetStartTime();

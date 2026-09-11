@@ -219,12 +219,64 @@ IoAwaitable UringProactor::AsyncSend(int fd, const void* buf, size_t len) {
   return IoAwaitable(this, slot_idx);
 }
 
+IoAwaitable UringProactor::AsyncConnect(int fd, const struct sockaddr* addr,
+                                        socklen_t addrlen) {
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  io_uring_prep_connect(sqe, fd, addr, addrlen);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
+IoAwaitable UringProactor::AsyncRecv(int fd, void* buf, size_t len) {
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  io_uring_prep_recv(sqe, fd, buf, len, 0);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
 IoAwaitable UringProactor::AsyncSendV(int fd, const struct msghdr* msg) {
   DCHECK(msg != nullptr && msg->msg_iovlen > 0);
   uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
   io_uring_prep_sendmsg(sqe, fd, msg, MSG_NOSIGNAL);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
+IoAwaitable UringProactor::AsyncWriteFile(int fd, const void* buf, size_t len,
+                                          uint64_t offset) {
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  io_uring_prep_write(sqe, fd, buf, static_cast<unsigned>(len), offset);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
+IoAwaitable UringProactor::AsyncWriteFileV(int fd, const struct iovec* iov,
+                                           unsigned nr_vecs, uint64_t offset) {
+  DCHECK(iov != nullptr && nr_vecs > 0);
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  io_uring_prep_writev(sqe, fd, iov, nr_vecs, offset);
+  sqe->user_data = slot_idx;
+  return IoAwaitable(this, slot_idx);
+}
+
+IoAwaitable UringProactor::AsyncFsync(int fd, bool datasync) {
+  uint32_t slot_idx = AllocSlot();
+
+  struct io_uring_sqe* sqe = GetSqeOrFlush();
+  // IORING_FSYNC_DATASYNC = fdatasync 语义：只保证数据落盘，不同步 inode
+  // 元数据（mtime 等）。raft 日志是定长头 + 追加写，文件大小变化仍会被记录，
+  // 用 datasync 足够且更快。
+  io_uring_prep_fsync(sqe, fd, datasync ? IORING_FSYNC_DATASYNC : 0);
   sqe->user_data = slot_idx;
   return IoAwaitable(this, slot_idx);
 }
@@ -242,9 +294,11 @@ IoAwaitable UringProactor::ArmPeriodicTimer(uint64_t interval_ms) {
   uint32_t slot_idx = AllocSlot();
 
   struct io_uring_sqe* sqe = GetSqeOrFlush();
-  __kernel_timespec ts{
-      static_cast<__kernel_time64_t>(interval_ms / 1000),
-      static_cast<__kernel_time64_t>(interval_ms % 1000) * 1000000};
+  // ts 必须活到 CQE 到达（prep_timeout 只记录指针），挂到 slot 上。
+  // 用栈变量会让内核在超时到期时读到已失效的栈内存，定时器时灵时不灵。
+  __kernel_timespec& ts = GetSlot(slot_idx).timeout_ts;
+  ts.tv_sec = static_cast<__kernel_time64_t>(interval_ms / 1000);
+  ts.tv_nsec = static_cast<__kernel_time64_t>(interval_ms % 1000) * 1000000;
   io_uring_prep_timeout(sqe, &ts, 0, 0);
   sqe->user_data = slot_idx;
   io_uring_submit(&ring_);

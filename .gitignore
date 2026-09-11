@@ -60,6 +60,11 @@ test/redis-py/__pycache__/
 *.rdb
 .rdb/
 
+# raft 运行时产物（日志文件与持久化状态文件）
+raft_*.log
+raft_*.log.state
+*.log.state
+
 
 
 # Python 虚拟环境

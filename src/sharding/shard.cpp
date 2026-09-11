@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <memory>
 
+#include "detail/conflig.hpp"
 #include "detail/stateless_alloceator.hpp"
+#include "raft/raft_node.hpp"
+#include "server/redis_server.hpp"
+#include "sharding/shard_pool.hpp"
 #include "transaction_layer/transaction.hpp"
 
 namespace dfly {
@@ -39,14 +43,30 @@ Shard::Shard(base::UringProactor* pb, mi_heap_t* heap)
       storage_(shard_id_, this),
       txq_(&mi_resource_) {}
 
+void Shard::StartRaftLogTimer() {
+  if (!use_raft || raft_timer_started_) return;
+  raft_timer_started_ = true;
+  RaftLogTimerLoop();
+}
+
+cppcoro::AsyncTask Shard::RaftLogTimerLoop() {
+  while (true) {
+    co_await proactor_->ArmPeriodicTimer(kLogFlushIntervalMs);
+    FlushLogToMain();
+  }
+  co_return;
+}
+
 void Shard::DriveQueue(Transaction* tx) {
   const ShardId sid = shard_id_;
 
-  const bool tx_ready = tx && tx->AllowOnIf(sid, Transaction::kUncontended);
+  const bool tx_ready =
+      tx && IsRaftReady(tx) && tx->AllowOnIf(sid, Transaction::kUncontended);
 
   while (!txq_.Empty()) {
     Transaction* head = txq_.Front().get();
-    const bool should_run = (head == tx && tx_ready) || head->AllowOn(sid);
+    const bool should_run =
+        (head == tx && tx_ready) || (IsRaftReady(head) && head->AllowOn(sid));
     if (!should_run) break;
     if (head == tx) tx = nullptr;
     committed_txid_ = head->txid();
@@ -63,7 +83,49 @@ void Shard::DriveQueue(Transaction* tx) {
   MaybeDriveUnblocked();
 }
 
+static void PostFollowerReadToMain(TxId txid) {
+  auto* main_q = &RedisServer::Instance().MainProactor()->GetTaskQueue();
+  const bool ok =
+      main_q->TryAdd([txid]() { raft_node->RequestFollowerRead(txid); });
+  if (!ok) {
+    // 与 FlushLogToMain 同样的不可恢复状态：main 卡死时读也无法被确认，
+    // 队列容量 16384 远大于正常在读事务数。
+    LOG(FATAL) << "raft: main task queue overflow while posting follower read";
+  }
+}
+
+// ready 集合查找：区间只增不删，直接遍历（区间数远小于事务数）。
+bool Shard::InRanges(const std::vector<std::pair<TxId, TxId>>& ranges,
+                     TxId txid) {
+  for (const auto& [lo, hi] : ranges) {
+    if (txid >= lo && txid <= hi) return true;
+  }
+  return false;
+}
+
+void Shard::AddReadyRanges(bool is_read,
+                           std::vector<std::pair<TxId, TxId>> ranges) {
+  if (ranges.empty()) return;
+  auto& dst = is_read ? read_ready_ranges_ : write_ready_ranges_;
+  dst.insert(dst.end(), ranges.begin(), ranges.end());
+}
+
+bool Shard::IsRaftReady(Transaction* tx) {
+  if (!use_raft) return true;
+  if (tx->IsFromLeader()) return true;
+  if (tx->IsReadOnly()) {
+    if (ReadTxReady(tx->txid())) return true;
+    if (raft_node != nullptr && raft_node->LeaseReadAllowed()) return true;
+    return false;
+  }
+  return WriteTxReady(tx->txid());
+}
+
 void Shard::MaybeDriveUnblocked() {
+  // SCA 会执行队列中**非队首**的事务，是一条绕过 raft 门闩的路径；
+  // 且它的合法性前提是"幂等"，与 raft 要求的确定性顺序重放根本冲突。
+  // raft 模式下直接关闭，不做兼容。见 raft.md §8。
+  if (use_raft) return;
   if (txq_.Size() <= kQueueHighWater) return;
 
   std::fill(scg_dx_.begin(), scg_dx_.end(), 0);
@@ -121,6 +183,50 @@ void Shard::MaybeDriveUnblocked() {
     DCHECK(disarmed) << "IsAllowedOn true but AllowOn returned false";
     committed_txid_ = std::max(committed_txid_, tx->txid());
     tx->ExecuteOnShard(*this);
+  }
+}
+
+bool Shard::PushLogIfNeed(Transaction* tx) {
+  if (!use_raft) return true;
+  // 重放窗口内不写日志：重放走的是完整正常命令路径，会经过这里。
+  // 不拦住的话，日志里的条目会被当成新命令重新落盘，每次重启翻一倍。
+  if (IsRaftReplaying()) return true;
+
+  if (tx->IsReadOnly()) return true;
+  if (!tx->IsFromLeader() && !raft_node->is_leader()) return false;
+
+  RaftLogEntry e;
+  e.txid = tx->txid();
+
+  e.start_ms = tx->TimeMs();
+
+  e.payload = EncodeRespCommand(tx->Args());
+
+  log_.push_back(std::move(e));
+
+  if (log_.size() >= kLogHighWater) FlushLogToMain();
+  return true;
+}
+
+void Shard::PushReadIndexIfNeed(Transaction* tx) {
+  if (!use_raft) return;
+  if (!tx->IsReadOnly()) return;
+  if (IsRaftReplaying()) return;
+  PostFollowerReadToMain(tx->txid());
+}
+
+void Shard::FlushLogToMain() {
+  if (log_.empty()) return;
+  auto batch = std::move(log_);
+  log_.clear();
+
+  auto* main_q = &RedisServer::Instance().MainProactor()->GetTaskQueue();
+  const bool ok = main_q->TryAdd([batch = std::move(batch)]() mutable {
+    raft_node->SubmitBatch(std::move(batch));
+  });
+  if (!ok) {
+    LOG(FATAL) << "raft: main task queue overflow while flushing shard "
+               << shard_id_ << " log";
   }
 }
 

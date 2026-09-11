@@ -199,8 +199,7 @@ cppcoro::AsyncTask Transaction::Run(Callback cb,
       ScheduleResult res = ScheduleOnShard(*Shard::tlocal(), true);
       CHECK(res != ScheduleResult::kRejected) << "single-shard tx rejected";
       if (res != ScheduleResult::kGranted) {
-        ShardDataAt(0).is_armed.store(
-            true, std::memory_order_relaxed);  // 进入事务队列了，需要武装
+        ShardDataAt(0).is_armed.store(true, std::memory_order_relaxed);
         Shard::tlocal()->DriveQueue(this);
       }
       barrier_->Dec();
@@ -263,6 +262,19 @@ cppcoro::task<> Transaction::Schedule() {
     }
     SetStartTime();
   }
+  if (!Shard::tlocal()->PushLogIfNeed(
+          this)) {  // PushLogIfNeed到PushReadIndexIfNeed可能节点状态发生变化导致数据不一致，TODO,改成一次调用
+    barrier_->Start(active_shard_count_);
+    for (size_t i = 0; i < active_shard_count_; ++i) {
+      shard_pool->Post(InvolvedAt(i), [this]() {
+        ExecuteOnShard(*Shard::tlocal(), OpStatus::RAFT_SCHED_FAIL);
+        barrier_->Dec();
+      });
+    }
+    co_await barrier_->Wait();
+    co_return;
+  }
+  Shard::tlocal()->PushReadIndexIfNeed(this);
   co_return;
 }
 
@@ -311,8 +323,29 @@ Transaction::ScheduleResult Transaction::ScheduleOnShard(
   if (granted) {
     sd.flags |= kUncontended;
   }
+  // leader 日志重放的写：定义上已提交，即使没拿到锁（前面有 ReadIndex
+  // 未放行的读持着 SHARED）也标记乱序可执行，由 DriveQueue 的非队首旁路
+  // 越过等待中的读直接执行。安全前提：那些读在 ReadIndex 确认前不会执行
+  // 回调（IsRaftReady 挡着），而本条目正是它们要等的 applied 水位之一。
+  // 注意 AcquireLocks 冲突时仍已 ++cnt_[X]（排队意向），ExecuteOnShard
+  // 末尾的 ReleaseLocks 与之配对，锁计数不坏。
+  if (IsFromLeader()) {
+    sd.flags |= kUncontended;
+  }
 
-  if (granted && allow_optimistic) {
+  if (txid_ == 0) {
+    txid_ = global_seq.fetch_add(1, std::memory_order_relaxed);
+    if (!Shard::tlocal()->PushLogIfNeed(this)) {
+      ReleaseLocks(shard, sd);
+      sd.flags &= ~kUncontended;
+      InvokeCallback(shard, OpStatus::RAFT_SCHED_FAIL);
+      return ScheduleResult::kFailed;
+    }
+    Shard::tlocal()->PushReadIndexIfNeed(this);
+  }
+
+  if (!use_raft && granted &&
+      allow_optimistic) {  // 这里执行回调是只能是在不使用raft的情况下,raft必须顺序执行
     sd.flags |= kOptimistic;
     InvokeCallback(shard);
     ReleaseLocks(shard, sd);
@@ -320,29 +353,27 @@ Transaction::ScheduleResult Transaction::ScheduleOnShard(
     return ScheduleResult::kGranted;
   }
 
-  if (txid_ == 0) {
-    txid_ = global_seq.fetch_add(1, std::memory_order_relaxed);
-  }
-
   TxQueue& queue = shard.Queue();
 
-  if (!queue.Empty() && txid_ < queue.Back()->txid() && !granted) {
-    ReleaseLocks(shard, sd);
-    return ScheduleResult::kRejected;
-  }
-  // 队列高水位（论文 §2.1）：多分片未拿全锁且队列堆积 → 拒绝入队，
-  // 把 CPU 让给队首推进 / SCA 消化队列
-  if (active_shard_count_ > 1 && !granted &&
-      queue.Size() >= Shard::kQueueHighWater) {
-    ReleaseLocks(shard, sd);
-    return ScheduleResult::kRejected;
+  if (!IsFromLeader()) {
+    if (!queue.Empty() && txid_ < queue.Back()->txid() && !granted) {
+      ReleaseLocks(shard, sd);
+      return ScheduleResult::kRejected;
+    }
+    // 队列高水位（论文 §2.1）：多分片未拿全锁且队列堆积 → 拒绝入队，
+    // 把 CPU 让给队首推进 / SCA 消化队列
+    if (active_shard_count_ > 1 && !granted &&
+        queue.Size() >= Shard::kQueueHighWater) {
+      ReleaseLocks(shard, sd);
+      return ScheduleResult::kRejected;
+    }
   }
   // 入队：等待队首引理 / SCA 放行
   sd.queue_pos = queue.Push(intrusive_ptr_from_this());
   return ScheduleResult::kQueued;
 }
 
-void Transaction::ExecuteOnShard(Shard& shard) {
+void Transaction::ExecuteOnShard(Shard& shard, OpStatus sched) {
   const ShardId sid = shard.shard_id();
   PerShardData& sd = ShardDataAt(IndexInvolved(sid));
 
@@ -351,9 +382,12 @@ void Transaction::ExecuteOnShard(Shard& shard) {
   shard.Queue().Pop(sd.queue_pos);
   sd.queue_pos = TxQueue::kEnd;
 
-  InvokeCallback(shard);
+  InvokeCallback(shard, sched);
   sd.flags &= ~kUncontended;
   ReleaseLocks(shard, sd);
+
+  if (sched == OpStatus::RAFT_SCHED_FAIL) return;
+
   ResumeIfNeed();
 }
 
@@ -401,8 +435,8 @@ KeyLockContext Transaction::LockArgsOn(ShardId sid) const {
   return KeyLockContext{db_, sd.fps, LockMode()};
 }
 
-void Transaction::InvokeCallback(Shard& shard) {
-  coro_ctx_.cb(this, &shard);
+void Transaction::InvokeCallback(Shard& shard, OpStatus sched) {
+  coro_ctx_.cb(this, &shard, sched);
   coro_ctx_.FinishCallback();
 }
 
@@ -458,6 +492,7 @@ std::string Transaction::StateName() const {
   append(state_ & TxState::kScheduling, "scheduling");
   append(state_ & TxState::kDistributed, "distributed");
   append(state_ & TxState::kFinished, "finished");
+  append(state_ & TxState::kReplayed, "replayed");
   return name.empty() ? "none" : name;
 }
 

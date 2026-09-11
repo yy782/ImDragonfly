@@ -104,7 +104,9 @@ CoroTask StringFamily::Set(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, value, ctx](Transaction* tx, Shard* shard) -> OpResult<bool> {
+  auto cb = [key, value, ctx](Transaction* tx, Shard* shard,
+                              OpStatus sched) -> OpResult<bool> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& storage = shard->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -126,6 +128,10 @@ CoroTask StringFamily::Set(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (result.has_value() && result.value()) {
     rb->BuildOk();
+  } else if (!result.has_value() &&
+             result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    // 本节点非 leader，写没能进入 raft 日志：回错误而不是静默挂住。
+    rb->BuildError("not leader");
   } else if (!result.has_value() && result.error() == OpStatus::SYNTAX_ERROR) {
     rb->BuildError("syntax error");
   } else {
@@ -135,7 +141,12 @@ CoroTask StringFamily::Set(CommandContext* cmd_cntx, CmdArgList args) {
 }
 
 CoroTask StringFamily::MSet(CommandContext* cmd_cntx, CmdArgList args) {
-  auto cb = [&args](Transaction* tx, Shard* es) -> OpResult<void> {
+  std::vector<OpStatus> scheds(shard_pool->size(), OpStatus::OK);
+
+  auto cb = [&args, &scheds](Transaction* tx, Shard* es,
+                             OpStatus sched) -> OpResult<void> {
+    scheds[es->shard_id()] = sched;
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
     for (const auto& [key, keyId] : tx->GetSlice(es->shard_id())) {
@@ -147,7 +158,31 @@ CoroTask StringFamily::MSet(CommandContext* cmd_cntx, CmdArgList args) {
   };
 
   co_await cmd::SingleHopT(cb);
+
+  // 各分片收到的 sched 必须一致（调度失败是全局的：本节点非 leader，所有
+  // 涉及分片都进不了 raft 日志）。只统计被本事务涉及的分片 —— 未涉及的分片
+  // 保持初始 OK，不能参与比较。
+  OpStatus sched = OpStatus::OK;
+  bool seen = false;
+  cmd_cntx->tx()->ForEachInvolvedShard([&](ShardId sid) {
+    if (!seen) {
+      sched = scheds[sid];
+      seen = true;
+    } else if (scheds[sid] != sched) {
+      sched = OpStatus::MULTIPLE_ERROR;
+    }
+  });
+
   auto* rb = cmd_cntx->rb();
+  if (sched != OpStatus::OK) {
+    if (sched == OpStatus::RAFT_SCHED_FAIL) {
+      // 本节点非 leader，写没能进入 raft 日志：回错误而不是静默挂住。
+      rb->BuildError("not leader");
+    } else {
+      rb->BuildError("multiple errors");
+    }
+    co_return;
+  }
   rb->BuildSimpleString("OK");
   co_return;
 }
@@ -160,7 +195,8 @@ CoroTask StringFamily::MGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
   std::vector<std::vector<std::pair<unsigned, std::string>>> per_shard(
       shard_pool->size());
 
-  auto cb = [&per_shard](Transaction* tx, Shard* es) -> OpResult<void> {
+  auto cb = [&per_shard](Transaction* tx, Shard* es,
+                         OpStatus /*sched*/) -> OpResult<void> {
     auto& local = per_shard[es->shard_id()];
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
@@ -185,8 +221,8 @@ CoroTask StringFamily::MGet(CommandContext* cmd_cntx, CmdArgList /*args*/) {
 }
 
 CoroTask StringFamily::Get(CommandContext* cmd_cntx, CmdArgList args) {
-  auto cb = [key = args[1]](Transaction* tx,
-                            Shard* es) -> OpResult<std::string> {
+  auto cb = [key = args[1]](Transaction* tx, Shard* es,
+                            OpStatus /*sched*/) -> OpResult<std::string> {
     DCHECK_EQ(Shard::tlocal()->shard_id(), es->shard_id());
     auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
 
@@ -222,7 +258,9 @@ bool TryGetInt64(const PrimeValue& pv, int64_t* out) {
 
 CoroTask IncrByImpl(CommandContext* cmd_cntx, std::string_view key,
                     int64_t delta) {
-  auto cb = [key, delta](Transaction* tx, Shard* es) -> OpResult<int64_t> {
+  auto cb = [key, delta](Transaction* tx, Shard* es,
+                         OpStatus sched) -> OpResult<int64_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -262,6 +300,9 @@ CoroTask IncrByImpl(CommandContext* cmd_cntx, std::string_view key,
     rb->BuildInteger(result.value());
   } else {
     switch (result.error()) {
+      case OpStatus::RAFT_SCHED_FAIL:
+        rb->BuildError("not leader");
+        break;
       case OpStatus::INVALID_VALUE:
         rb->BuildError("value is not an integer or out of range");
         break;
@@ -318,7 +359,9 @@ CoroTask StringFamily::Append(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK_GE(args.size(), 3);
   std::string_view key = args[1], val = args[2];
 
-  auto cb = [key, val](Transaction* tx, Shard* es) -> OpResult<size_t> {
+  auto cb = [key, val](Transaction* tx, Shard* es,
+                       OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -348,6 +391,8 @@ CoroTask StringFamily::Append(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (result.has_value()) {
     rb->BuildInteger(result.value());
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONG_TYPE Operation against a key holding the wrong kind "
@@ -360,7 +405,8 @@ CoroTask StringFamily::Strlen(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK_GE(args.size(), 2);
   std::string_view key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* es) -> OpResult<size_t> {
+  auto cb = [key](Transaction* tx, Shard* es,
+                  OpStatus /*sched*/) -> OpResult<size_t> {
     auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
     if (!res) {
       return size_t{0};
@@ -377,7 +423,9 @@ CoroTask StringFamily::Setnx(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK_GE(args.size(), 3);
   std::string_view key = args[1], value = args[2];
 
-  auto cb = [key, value](Transaction* tx, Shard* es) -> OpResult<int> {
+  auto cb = [key, value](Transaction* tx, Shard* es,
+                         OpStatus sched) -> OpResult<int> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
     auto ent = shard.FindOrInsert(cntx, key);
@@ -393,6 +441,8 @@ CoroTask StringFamily::Setnx(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (result.has_value()) {
     rb->BuildInteger(result.value());
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONG_TYPE Operation against a key holding the wrong kind "
@@ -405,7 +455,9 @@ CoroTask StringFamily::Getset(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK_GE(args.size(), 3);
   std::string_view key = args[1], value = args[2];
 
-  auto cb = [key, value](Transaction* tx, Shard* es) -> OpResult<std::string> {
+  auto cb = [key, value](Transaction* tx, Shard* es,
+                         OpStatus sched) -> OpResult<std::string> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -433,6 +485,8 @@ CoroTask StringFamily::Getset(CommandContext* cmd_cntx, CmdArgList args) {
     rb->BuildBulkString(result.value());
   } else if (result.error() == OpStatus::KEY_NOTFOUND) {
     rb->BuildNullBulkString();
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONG_TYPE Operation against a key holding the wrong kind "
@@ -449,8 +503,8 @@ CoroTask StringFamily::Getrange(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, start, end](Transaction* tx,
-                              Shard* es) -> OpResult<std::string> {
+  auto cb = [key, start, end](Transaction* tx, Shard* es,
+                              OpStatus /*sched*/) -> OpResult<std::string> {
     auto res = es->GetShardStorage().Find(tx->GetDbContext(), key);
     if (!res) {
       return std::string{};
@@ -485,8 +539,9 @@ CoroTask StringFamily::Setrange(CommandContext* cmd_cntx, CmdArgList args) {
     co_return;
   }
 
-  auto cb = [key, offset, value](Transaction* tx,
-                                 Shard* es) -> OpResult<size_t> {
+  auto cb = [key, offset, value](Transaction* tx, Shard* es,
+                                 OpStatus sched) -> OpResult<size_t> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     if ((size_t)offset > kMaxStrLen) {
       return util::make_unexpected(OpStatus::OUT_OF_RANGE);
     }
@@ -520,6 +575,8 @@ CoroTask StringFamily::Setrange(CommandContext* cmd_cntx, CmdArgList args) {
     rb->BuildInteger(result.value());
   } else if (result.error() == OpStatus::OUT_OF_RANGE) {
     rb->BuildError("string exceeds maximum allowed size");
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildError(
         "WRONG_TYPE Operation against a key holding the wrong kind "
@@ -532,7 +589,9 @@ CoroTask StringFamily::Getdel(CommandContext* cmd_cntx, CmdArgList args) {
   DCHECK_GE(args.size(), 2);
   std::string_view key = args[1];
 
-  auto cb = [key](Transaction* tx, Shard* es) -> OpResult<std::string> {
+  auto cb = [key](Transaction* tx, Shard* es,
+                  OpStatus sched) -> OpResult<std::string> {
+    if (sched != OpStatus::OK) return util::make_unexpected(sched);
     auto& shard = es->GetShardStorage();
     const DbContext cntx = tx->GetDbContext();
 
@@ -552,6 +611,8 @@ CoroTask StringFamily::Getdel(CommandContext* cmd_cntx, CmdArgList args) {
   auto* rb = cmd_cntx->rb();
   if (result.has_value()) {
     rb->BuildBulkString(result.value());
+  } else if (result.error() == OpStatus::RAFT_SCHED_FAIL) {
+    rb->BuildError("not leader");
   } else {
     rb->BuildNullBulkString();
   }
