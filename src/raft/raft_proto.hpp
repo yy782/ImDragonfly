@@ -28,7 +28,9 @@ constexpr size_t kEntryHeaderSize = 28;
 struct AppendEntriesResp {
   uint64_t term = 0;
   bool success = false;
-  uint64_t conflict_index = 0;
+  uint64_t conflict_index = 0; 
+  // 当 follower 拒绝 leader 的日志复制时，告诉 leader「你的日志和我的在哪一个 index 上不一致，下次从这儿重试」
+  // ——本质是日志一致性回退的加速提示。
   uint64_t match_index = 0;
 };
 

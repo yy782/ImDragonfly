@@ -18,19 +18,11 @@ struct RaftLogEntry {
 
   // leader 定好的执行时刻（Transaction::TimeMs()）。必须进日志：
   // EXPIRE / SET PX / SETEX 若让 follower 用自己的时钟重放，会算出不同的
-  // 过期时刻 → 副本状态分叉。见 raft.md §7。
+  // 过期时刻 → 副本状态分叉。
   uint64_t start_ms = 0;
 
   std::string payload;  // RESP 编码的命令
 };
-
-// 把命令参数编码成一条 RESP 数组（*N\r\n$len\r\n arg \r\n ...）。
-// 在 **shard 线程**调用：main 单线程要扛全部 raft，别给它加序列化开销。
-std::string EncodeRespCommand(::dfly::CmdArgList args);
-
-// 从 std::string 列表编码一条 RESP 数组（raft 内部生成成员变更条目时用，
-// 那些参数不是来自客户端 io_uring 缓冲区的 Arg）。
-std::string EncodeRespCommandFromStrings(const std::vector<std::string>& args);
 
 // ---------------------------------------------------------------------------
 // 磁盘记录格式，

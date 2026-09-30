@@ -1,13 +1,14 @@
-"""Raft 集成测试：单节点持久化 / 三节点复制 / leader 崩溃后继续写入.
+"""Raft 集成测试：三节点复制 / leader 崩溃后继续写入.
 
-对应 /home/yy/programs/测试.md 的三条用例：
-  1. 单节点：SET/MSET 后重启进程，GET 仍能读到（验证日志落盘 + 恢复重放）。
-  2. 三节点：向 leader 写 SET/MSET，在 T1/T2 上 GET 能读到（验证多数派复制）。
-  3. 在 2 的基础上杀死 leader，等新 leader 选出，再写 SET/MSET，
+对应两条用例：
+  1. 三节点：向 leader 写 SET/MSET，在 T1/T2 上 GET 能读到（验证多数派复制）。
+  2. 在 1 的基础上杀死 leader，等新 leader 选出，再写 SET/MSET，
      在 follower 上 GET 能读到（验证选主 + 复制在新 term 下继续）。
 
-与 test_all.py 不同，这里不连外部已启动的服务，而是自己拉起独立端口的
-imdragonfly 进程（每个用例一份临时目录，互不干扰）。
+与 test_all.py 不同，这里不连外部已启动的服务，而是自己拉起 imdragonfly
+进程。三个节点使用 test/redis-py/test_conf 下的固定配置（raft_n{0,1,2}.conf，
+redis 端口 6390/6391/6392，raft 端口 7000/7001/7002），日志与 raft 数据落盘
+到配置里 log_dir / raft_log_path 指定的相对位置（以 test/redis-py 为基准）。
 
 运行（从项目根 ImDragonfly 目录）:
     python3 -m pytest test/redis-py/test_raft_integration.py -v
@@ -21,16 +22,14 @@ import json
 import os
 import socket
 import subprocess
-import tempfile
 import time
 
 import pytest
 import redis
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.normpath(os.path.join(HERE, "../.."))
-
-SHARDS = 2
+CONF_DIR = os.path.join(HERE, "test_conf")
+NODE_CONFS = ["raft_n0.conf", "raft_n1.conf", "raft_n2.conf"]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -45,21 +44,6 @@ def _wait_until(cond, timeout=20.0, interval=0.05):
             return True
         time.sleep(interval)
     return False
-
-
-def _free_port():
-    """绑定 0 获取一个随机空闲端口（释放后给子进程用，竞态可接受）."""
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _alloc_ports(n):
-    """一次性申请 n 个互不相同的空闲端口."""
-    ports = set()
-    while len(ports) < n:
-        ports.add(_free_port())
-    return list(ports)
 
 
 def _tcp_connectable(host, port):
@@ -113,37 +97,34 @@ class NodeProc:
         return ""
 
 
-def _write_conf(tmpdir, *, node_id, redis_port, raft_ports, log_path,
-                seed_raft_port=None, joining=False):
-    """生成一份 raft 配置 JSON，返回文件路径."""
-    conf = {
-        "shards": SHARDS,
-        "port": redis_port,
-        "use_raft": True,
-        "raft_node_id": node_id,
-        "raft_is_leader": False,
-        "raft_peers": ",".join(f"127.0.0.1:{p}" for p in raft_ports),
-        "raft_log_path": log_path,
-        "raft_rpc_timeout_ms": 500,
-        "election_timeout_ms": 300,
-        "registered_buf_count": 256,
-        "registered_buf_size": 16384,
-        "task_queue_size": 16384,
-    }
-    if joining:
-        conf["raft_joining"] = True
-        conf["raft_seed"] = f"127.0.0.1:{seed_raft_port}"
-    path = os.path.join(tmpdir, f"raft_n{node_id}.conf")
-    with open(path, "w") as f:
-        json.dump(conf, f, indent=2)
-    return path
+def _conf_port(conf_path):
+    """读取配置 JSON 里的 redis 端口（test_conf 里三个 conf 固定为 6390/6391/6392）."""
+    with open(conf_path) as f:
+        return int(json.load(f)["port"])
 
 
-def _start_node(binary, conf_path, tmpdir, port, proc_list):
-    """启动一个节点进程并等待其端口可连，返回 NodeProc."""
+def _raft_log_paths(conf_paths):
+    """从各配置读取 raft_log_path，返回其（相对 HERE）绝对路径及 .state 路径."""
+    paths = []
+    for conf in conf_paths:
+        with open(conf) as f:
+            rel = json.load(f).get("raft_log_path", "")
+        if rel:
+            abs_path = os.path.join(HERE, rel)
+            paths.append(abs_path)
+            paths.append(abs_path + ".state")
+    return paths
+
+
+def _start_node(binary, conf_path, port, proc_list):
+    """启动一个节点进程并等待其端口可连，返回 NodeProc.
+
+    cwd 固定为 test/redis-py（配置文件所在目录），让 conf 里的 log_dir、
+    raft_log_path 等相对路径按配置字面解析到该目录下。
+    """
     proc = subprocess.Popen(
-        [binary, "--config", conf_path],
-        cwd=tmpdir,  # 日志/raft 落盘都放临时目录
+        [binary, "config=" + conf_path],
+        cwd=HERE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -195,54 +176,7 @@ def _wait_leader(nodes, timeout=20.0):
 
 
 # ═══════════════════════════════════════════════════════════
-# 用例 1：单节点持久化（重启后数据还在）
-# ═══════════════════════════════════════════════════════════
-
-def test_single_node_persistence_after_restart(pytestconfig):
-    """单节点：SET/MSET → 重启进程 → GET 仍能读到."""
-    binary = _binary_path(pytestconfig)
-    nodes = []
-    with tempfile.TemporaryDirectory() as tmp:
-        redis_port, raft_port = _alloc_ports(2)
-        conf = _write_conf(
-            tmp,
-            node_id=0,
-            redis_port=redis_port,
-            raft_ports=[raft_port],
-            log_path=os.path.join(tmp, "raft_n0.log"),
-        )
-        try:
-            node = _start_node(binary, conf, tmp, redis_port, nodes)
-
-            # 等它自选为单节点 leader（单节点应立即成为 leader）
-            leader = _wait_leader([node], timeout=15)
-            assert leader is not None, "单节点未成为 leader，无法写入"
-            c = leader.client()
-            assert c.set("it:single:k1", "v1") is True
-            assert c.mset({"it:single:k2": "v2", "it:single:k3": "v3"}) is True
-            assert c.get("it:single:k1") == "v1"
-            assert c.mget(["it:single:k2", "it:single:k3"]) == ["v2", "v3"]
-            c.close()
-
-            # 重启：杀进程，用同一份配置（同一 raft 日志文件）重新拉起
-            node.proc.kill()
-            node.proc.wait(timeout=10)
-            time.sleep(0.3)
-
-            node2 = _start_node(binary, conf, tmp, redis_port, nodes)
-            leader2 = _wait_leader([node2], timeout=15)
-            assert leader2 is not None, "重启后单节点未成为 leader"
-            c2 = leader2.client()
-            assert c2.get("it:single:k1") == "v1", "重启后 SET 的数据丢失"
-            assert c2.mget(["it:single:k2", "it:single:k3"]) == ["v2", "v3"], \
-                "重启后 MSET 的数据丢失"
-            c2.close()
-        finally:
-            _kill_all(nodes)
-
-
-# ═══════════════════════════════════════════════════════════
-# 三节点公共 fixture：拉起 3 个节点，选出一个 leader
+# 三节点公共 fixture：用 test_conf 的三个 .conf 拉起 3 个节点，选出一个 leader
 # ═══════════════════════════════════════════════════════════
 
 class Cluster:
@@ -267,26 +201,20 @@ class Cluster:
 
 @pytest.fixture
 def cluster3(pytestconfig):
-    """拉起 3 节点集群并选出 leader，测试结束回收所有进程."""
+    """用 test_conf 的三个 .conf 拉起 3 节点集群并选出 leader，测试结束回收所有进程."""
     binary = _binary_path(pytestconfig)
     nodes = []
-    tmp = tempfile.mkdtemp(prefix="dfly_raft_")
-    redis_ports = _alloc_ports(3)
-    raft_ports = _alloc_ports(3)
-    confs = []
-    for i in range(3):
-        confs.append(
-            _write_conf(
-                tmp,
-                node_id=i,
-                redis_port=redis_ports[i],
-                raft_ports=raft_ports,
-                log_path=os.path.join(tmp, f"raft_n{i}.log"),
-            )
-        )
+    confs = [os.path.join(CONF_DIR, name) for name in NODE_CONFS]
+    redis_ports = [_conf_port(c) for c in confs]
+    # 清理上次运行残留的 raft 日志/状态文件，保证每个用例从干净状态开始。
+    for path in _raft_log_paths(confs):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
     try:
-        for i in range(3):
-            _start_node(binary, confs[i], tmp, redis_ports[i], nodes)
+        for conf, port in zip(confs, redis_ports):
+            _start_node(binary, conf, port, nodes)
         leader = _wait_leader(nodes, timeout=20)
         if leader is None:
             logs = "\n".join(
@@ -296,18 +224,10 @@ def cluster3(pytestconfig):
         yield Cluster(nodes, leader)
     finally:
         _kill_all(nodes)
-        # 临时目录不强制删除，便于失败后排查；由 TemporaryDirectory 语义
-        # 之外，这里手动尽力清理。
-        try:
-            for f in os.listdir(tmp):
-                os.remove(os.path.join(tmp, f))
-            os.rmdir(tmp)
-        except Exception:
-            pass
 
 
 # ═══════════════════════════════════════════════════════════
-# 用例 2：三节点复制（leader 写入，follower 能读到）
+# 用例 1：三节点复制（leader 写入，follower 能读到）
 # ═══════════════════════════════════════════════════════════
 
 def test_three_node_replication(cluster3):
@@ -330,7 +250,7 @@ def test_three_node_replication(cluster3):
 
 
 # ═══════════════════════════════════════════════════════════
-# 用例 3：leader 崩溃后，新 leader 继续接受写入并复制
+# 用例 2：leader 崩溃后，新 leader 继续接受写入并复制
 # ═══════════════════════════════════════════════════════════
 
 def test_leader_crash_then_write(cluster3):

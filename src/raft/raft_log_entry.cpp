@@ -6,47 +6,6 @@
 
 namespace dfly {
 
-std::string EncodeRespCommand(::dfly::CmdArgList args) {
-  size_t cap = 16;
-  for (const Arg a : args) cap += a.size() + 16;
-
-  std::string out;
-  out.reserve(cap);
-
-  out += '*';
-  out += std::to_string(args.size());
-  out += "\r\n";
-  for (const Arg a : args) {
-    out += '$';
-    out += std::to_string(a.size());
-    out += "\r\n";
-    out.append(a);
-    out += "\r\n";
-  }
-  return out;
-}
-
-// 同上，但从 std::string 列表编码（raft 内部生成成员变更条目时用）。
-std::string EncodeRespCommandFromStrings(const std::vector<std::string>& args) {
-  size_t cap = 16;
-  for (const auto& a : args) cap += a.size() + 16;
-
-  std::string out;
-  out.reserve(cap);
-
-  out += '*';
-  out += std::to_string(args.size());
-  out += "\r\n";
-  for (const auto& a : args) {
-    out += '$';
-    out += std::to_string(a.size());
-    out += "\r\n";
-    out += a;
-    out += "\r\n";
-  }
-  return out;
-}
-
 uint32_t RaftCrc32(uint64_t index, uint64_t term, uint64_t start_ms,
                    std::string_view payload) {
   uint64_t crc = ~uint64_t{0};

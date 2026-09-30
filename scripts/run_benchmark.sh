@@ -172,8 +172,8 @@ if [ ! -x "$IMDRAGONFLY_BIN" ]; then
 fi
 
 # ── 启动 ImDragonfly ──────────────────────────────────────
-echo "Starting ImDragonfly ($IMDRAGONFLY_BIN $THREADS)..."
-"$IMDRAGONFLY_BIN" "$THREADS" &
+echo "Starting ImDragonfly ($IMDRAGONFLY_BIN shards=$THREADS port=$PORT)..."
+"$IMDRAGONFLY_BIN" "shards=$THREADS" "port=$PORT" &
 IMDRAGONFLY_PID=$!
 
 cleanup() {

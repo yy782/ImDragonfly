@@ -20,22 +20,25 @@ RaftPeer::~RaftPeer() {
   DropConnection();
 }
 
-void RaftPeer::Start() {
-  if (connecting_) return;
-  ConnectLoop();
+cppcoro::AsyncTask RaftPeer::Start() {
+  if (connecting_) co_return;
+  co_await ConnectLoop();
+  co_await ReadLoop();
 }
 
 struct RaftPeer::ResponseAwaiter {
   RaftPeer* peer;
   uint64_t seq;
+  uint64_t timeout_ms;
   AppendEntriesResp result{};
-  Waiter w;
+  Waiter w{};
 
   bool await_ready() const noexcept { return false; }
   void await_suspend(std::coroutine_handle<> h) noexcept {
     w.h = h;
     w.out_append = &result;
     peer->waiters_[seq] = &w;
+    peer->TimeoutGuard(seq, timeout_ms);
   }
   AppendEntriesResp await_resume() noexcept { return result; }
 };
@@ -43,14 +46,16 @@ struct RaftPeer::ResponseAwaiter {
 struct RaftPeer::VoteAwaiter {
   RaftPeer* peer;
   uint64_t seq;
+  uint64_t timeout_ms;
   RequestVoteResp result{};
-  Waiter w;
+  Waiter w{};
 
   bool await_ready() const noexcept { return false; }
   void await_suspend(std::coroutine_handle<> h) noexcept {
     w.h = h;
     w.out_vote = &result;
     peer->waiters_[seq] = &w;
+    peer->TimeoutGuard(seq, timeout_ms);
   }
   RequestVoteResp await_resume() noexcept { return result; }
 };
@@ -58,14 +63,16 @@ struct RaftPeer::VoteAwaiter {
 struct RaftPeer::ReadIndexAwaiter {
   RaftPeer* peer;
   uint64_t seq;
+  uint64_t timeout_ms;
   ReadIndexResp result{};
-  Waiter w;
+  Waiter w{};
 
   bool await_ready() const noexcept { return false; }
   void await_suspend(std::coroutine_handle<> h) noexcept {
     w.h = h;
     w.out_read = &result;
     peer->waiters_[seq] = &w;
+    peer->TimeoutGuard(seq, timeout_ms);
   }
   ReadIndexResp await_resume() noexcept { return result; }
 };
@@ -98,8 +105,7 @@ cppcoro::task<AppendEntriesResp> RaftPeer::SendAppendEntries(
   if (!co_await SendFramed(RaftMsgType::kAppendEntries, seq, body))
     co_return fail;
 
-  ResponseAwaiter aw{this, seq};
-  TimeoutGuard(seq, timeout_ms);
+  ResponseAwaiter aw{this, seq, timeout_ms};
   co_return co_await aw;
 }
 
@@ -112,8 +118,7 @@ cppcoro::task<RequestVoteResp> RaftPeer::SendRequestVote(std::string_view body,
   if (!co_await SendFramed(RaftMsgType::kRequestVote, seq, body))
     co_return fail;
 
-  VoteAwaiter aw{this, seq};
-  TimeoutGuard(seq, timeout_ms);
+  VoteAwaiter aw{this, seq, timeout_ms};
   co_return co_await aw;
 }
 
@@ -127,8 +132,7 @@ cppcoro::task<ReadIndexResp> RaftPeer::SendReadIndex(uint64_t term,
   PutU64(&body, term);
   if (!co_await SendFramed(RaftMsgType::kReadIndex, seq, body)) co_return fail;
 
-  ReadIndexAwaiter aw{this, seq};
-  TimeoutGuard(seq, timeout_ms);
+  ReadIndexAwaiter aw{this, seq, timeout_ms};
   co_return co_await aw;
 }
 
@@ -150,15 +154,14 @@ void RaftPeer::FailWaiter(uint64_t seq) {
   if (w->h) w->h.resume();
 }
 
-cppcoro::AsyncTask RaftPeer::ConnectLoop() {
+cppcoro::task<> RaftPeer::ConnectLoop() {
   connecting_ = true;
   std::memset(&addr_, 0, sizeof(addr_));
   addr_.sin_family = AF_INET;
   addr_.sin_port = htons(port_);
   if (::inet_pton(AF_INET, host_.c_str(), &addr_.sin_addr) != 1) {
     LOG(ERROR) << "raft: bad peer address " << Describe();
-    connecting_ = false;
-    co_return;
+    exit(1);
   }
 
   while (!closing_) {
@@ -186,21 +189,25 @@ cppcoro::AsyncTask RaftPeer::ConnectLoop() {
     fd_ = fd;
     backoff_ms_ = 50;
     LOG(INFO) << "raft: connected to peer " << Describe();
-    co_await ReadLoop(fd);
+    break;
   }
   connecting_ = false;
   co_return;
 }
 
-cppcoro::task<> RaftPeer::ReadLoop(int fd) {
+cppcoro::task<> RaftPeer::ReadLoop() {
+  if (fd_ <= 0) {
+    LOG(ERROR) << "raft: bad fd " << fd_;
+    exit(1);
+  }
   recv_buf_.resize(kRecvChunk);
   recv_len_ = 0;
 
-  while (fd == fd_ && !closing_) {
+  while (!closing_) {
     if (recv_len_ == recv_buf_.size()) recv_buf_.resize(recv_buf_.size() * 2);
 
     const int n = co_await proactor_->AsyncRecv(
-        fd, recv_buf_.data() + recv_len_, recv_buf_.size() - recv_len_);
+        fd_, recv_buf_.data() + recv_len_, recv_buf_.size() - recv_len_);
     if (n <= 0) {
       LOG(WARNING) << "raft: peer " << Describe() << " read ended: " << n;
       break;
@@ -236,7 +243,7 @@ cppcoro::task<> RaftPeer::ReadLoop(int fd) {
     }
   }
 
-  if (fd == fd_) DropConnection();
+  DropConnection();
   co_return;
 }
 

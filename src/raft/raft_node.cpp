@@ -153,7 +153,6 @@ bool RaftNode::PersistState() {
   state_buf_.clear();
   PutU64(&state_buf_, term_);
   PutU32(&state_buf_, voted_for_);
-  PutU64(&state_buf_, commit_index_);
   PutU32(&state_buf_, RaftCrc32Raw(state_buf_));
 
   size_t done = 0;
@@ -165,6 +164,11 @@ bool RaftNode::PersistState() {
       return false;
     }
     done += static_cast<size_t>(n);
+  }
+
+  if (::ftruncate(state_fd_, static_cast<off_t>(state_buf_.size())) < 0) {
+    LOG(ERROR) << "raft: state ftruncate failed: " << std::strerror(errno);
+    return false;
   }
   if (::fdatasync(state_fd_) < 0) {
     LOG(ERROR) << "raft: state fdatasync failed: " << std::strerror(errno);
@@ -182,63 +186,50 @@ bool RaftNode::LoadState() {
     commit_index_ = 0;
     return true;
   }
-  if (n == 16) {
-    const uint64_t old_term = GetU64(buf);
-    const uint32_t old_voted = GetU32(buf + 8);
-    const uint32_t old_crc = GetU32(buf + 12);
-    if (RaftCrc32(old_term, old_voted, 0, {}) != old_crc) {
-      LOG(WARNING) << "raft: legacy state file CRC mismatch, resetting";
-      term_ = 0;
-      voted_for_ = kNoVote;
+
+  if (n >= 24) {
+    const uint64_t term = GetU64(buf);
+    const uint32_t voted = GetU32(buf + 8);
+    const uint32_t crc = GetU32(buf + 20);
+    if (RaftCrc32Raw(std::string_view(buf, 20)) == crc) {
+      term_ = term;
+      voted_for_ = voted;
       commit_index_ = 0;
+      LOG(INFO) << "raft: loaded state term=" << term;
       return true;
     }
-    term_ = old_term;
-    voted_for_ = old_voted;
-    commit_index_ = 0;
-    LOG(INFO) << "raft: loaded legacy state term=" << old_term;
-    return true;
+  } else if (n == 16) {
+    const uint64_t term = GetU64(buf);
+    const uint32_t voted = GetU32(buf + 8);
+    const uint32_t crc = GetU32(buf + 12);
+    if (RaftCrc32Raw(std::string_view(buf, 12)) == crc ||
+        RaftCrc32(term, voted, 0, {}) == crc) {
+      term_ = term;
+      voted_for_ = voted;
+      commit_index_ = 0;
+      LOG(INFO) << "raft: loaded state term=" << term;
+      return true;
+    }
   }
-  if (n < static_cast<ssize_t>(sizeof(buf))) {
-    LOG(WARNING) << "raft: state file short (" << n << " bytes), resetting";
-    term_ = 0;
-    voted_for_ = kNoVote;
-    commit_index_ = 0;
-    return true;
-  }
-  const uint64_t term = GetU64(buf);
-  const uint32_t voted = GetU32(buf + 8);
-  const uint64_t commit = GetU64(buf + 12);
-  const uint32_t crc = GetU32(buf + 20);
-  if (RaftCrc32Raw(std::string_view(buf, 20)) != crc) {
-    LOG(WARNING) << "raft: state file CRC mismatch, resetting";
-    term_ = 0;
-    voted_for_ = kNoVote;
-    commit_index_ = 0;
-    return true;
-  }
-  term_ = term;
-  voted_for_ = voted;
-  commit_index_ = commit;
-  LOG(INFO) << "raft: loaded state term=" << term
-            << " commit=" << commit_index_;
+
+  LOG(WARNING) << "raft: state file corrupt (" << n << " bytes), resetting";
+  term_ = 0;
+  voted_for_ = kNoVote;
+  commit_index_ = 0;
   return true;
 }
 
 bool RaftNode::StartTransport() {
-  if (cfg_.peers.size() <= 1 && !cfg_.joining) {
+
+  // 单节点捷径
+  if (cfg_.peers.size() <= 1) {
     role_.store(RaftRole::kLeader, std::memory_order_release);
     LOG(INFO) << "raft: single-node mode, self-elected leader";
     return true;
   }
-  if (!cfg_.joining && cfg_.node_id >= cfg_.peers.size()) {
+  if (cfg_.node_id >= cfg_.peers.size()) {
     LOG(ERROR) << "raft: node_id " << cfg_.node_id
                << " out of range (peers=" << cfg_.peers.size() << ")";
-    return false;
-  }
-
-  if (cfg_.node_id >= cfg_.peers.size()) {
-    LOG(ERROR) << "raft: joining node must also list itself in raft_peers";
     return false;
   }
   std::string own_host;
@@ -247,6 +238,8 @@ bool RaftNode::StartTransport() {
     LOG(ERROR) << "raft: bad own spec '" << cfg_.peers[cfg_.node_id] << "'";
     return false;
   }
+
+  // 建立监听
   listen_fd_ = RaftListenFd(own_port);
   if (listen_fd_ < 0) return false;
   inbound_ = std::make_unique<RaftInbound>(proactor_, this, listen_fd_);
@@ -254,47 +247,23 @@ bool RaftNode::StartTransport() {
   LOG(INFO) << "raft: listening on port " << own_port;
 
   members_.clear();
-  if (cfg_.joining) {
-    RaftMember self;
-    self.id = cfg_.node_id;
-    self.host = own_host;
-    self.port = own_port;
-    self.learner = true;
-    members_.push_back(self);
-  } else {
-    for (size_t i = 0; i < cfg_.peers.size(); ++i) {
-      std::string host;
-      uint16_t port = 0;
-      if (!SplitHostPort(cfg_.peers[i], &host, &port)) {
-        LOG(ERROR) << "raft: bad peer spec '" << cfg_.peers[i] << "'";
-        return false;
-      }
-      RaftMember m;
-      m.id = static_cast<uint32_t>(i);
-      m.host = host;
-      m.port = port;
-      m.learner = false;
-      members_.push_back(m);
+  for (size_t i = 0; i < cfg_.peers.size(); ++i) {
+    std::string host;
+    uint16_t port = 0;
+    if (!SplitHostPort(cfg_.peers[i], &host, &port)) {
+      LOG(ERROR) << "raft: bad peer spec '" << cfg_.peers[i] << "'";
+      return false;
     }
+    RaftMember m;
+    m.id = static_cast<uint32_t>(i);
+    m.host = host;
+    m.port = port;
+    members_.push_back(m);
   }
 
   SyncPeersToMembers();
 
-  if (cfg_.joining && !cfg_.seed.empty()) {
-    std::string shost;
-    uint16_t sport = 0;
-    if (!SplitHostPort(cfg_.seed, &shost, &sport)) {
-      LOG(ERROR) << "raft: bad seed spec '" << cfg_.seed << "'";
-      return false;
-    }
-    auto peer =
-        std::make_unique<RaftPeer>(proactor_, kSeedPeerId, shost, sport);
-    peer->Start();
-    LOG(INFO) << "raft: joining, dialing seed " << peer->Describe();
-    peers_.push_back(std::move(peer));
-  }
-
-  if (cfg_.is_leader && !cfg_.joining) {
+  if (cfg_.is_leader) {
     BecomeLeader();
   } else {
     role_.store(RaftRole::kFollower, std::memory_order_release);
@@ -303,32 +272,18 @@ bool RaftNode::StartTransport() {
 
   HeartbeatLoop();
   ElectionLoop();
+  StatsLoop();
   return true;
 }
 
 void RaftNode::SyncPeersToMembers() {
-  if (cfg_.joining && members_.size() > 1) {
-    for (auto it = peers_.begin(); it != peers_.end();) {
-      if ((*it)->id() == kSeedPeerId) {
-        it = peers_.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-
   for (const RaftMember& m : members_) {
     if (m.id == cfg_.node_id) continue;
-    RaftPeer* existing = FindPeer(m.id);
-    if (existing) {
-      existing->SetLearner(m.learner);
-      continue;
-    }
+    if (FindPeer(m.id)) continue;
     auto peer = std::make_unique<RaftPeer>(proactor_, m.id, m.host, m.port);
-    peer->SetLearner(m.learner);
     peer->Start();
     LOG(INFO) << "raft: dialing member " << peer->Describe() << " (id=" << m.id
-              << (m.learner ? ", learner" : "") << ")";
+              << ")";
     peers_.push_back(std::move(peer));
   }
   if (next_index_.size() != peers_.size()) {
@@ -338,156 +293,7 @@ void RaftNode::SyncPeersToMembers() {
 }
 
 size_t RaftNode::VoterCount() const {
-  size_t n = 1;
-  for (const RaftMember& m : members_) {
-    if (m.id == cfg_.node_id) continue;
-    if (!m.learner) ++n;
-  }
-  return n;
-}
-
-void RaftNode::ApplyAddMember(uint32_t id, const std::string& host,
-                              uint16_t port) {
-  for (RaftMember& m : members_) {
-    if (m.id == id) {
-      m.host = host;
-      m.port = port;
-      return;
-    }
-  }
-  RaftMember m;
-  m.id = id;
-  m.host = host;
-  m.port = port;
-  m.learner = true;
-  members_.push_back(m);
-  LOG(INFO) << "raft: member added id=" << id << " at " << m.Describe()
-            << " (learner)";
-
-  SyncPeersToMembers();
-}
-
-bool RaftNode::ProposeAddMember(const std::string& host, uint16_t port,
-                                uint32_t id, std::string* err) {
-  if (!is_leader()) {
-    if (err) *err = "NOTLEADER";
-    return false;
-  }
-  if (id == cfg_.node_id) {
-    if (err) *err = "ERR cannot add self";
-    return false;
-  }
-  for (const RaftMember& m : members_) {
-    if (m.id == id) {
-      if (err) *err = "ERR node id already present";
-      return false;
-    }
-    if (m.host == host && m.port == port) {
-      if (err) *err = "ERR address already present";
-      return false;
-    }
-  }
-  if (add_in_flight_) {
-    if (err) *err = "ERR another membership change in flight";
-    return false;
-  }
-  add_in_flight_ = true;
-  add_in_flight_id_ = id;
-  LOG(INFO) << "raft: proposing ADDNODE id=" << id << " " << host << ":"
-            << port;
-  std::string payload = EncodeRespCommandFromStrings(
-      {"RAFT", "ADDNODE", host, std::to_string(port), std::to_string(id)});
-  AppendConfigEntry(payload);
-  return true;
-}
-
-bool RaftNode::OnAddNodeCommand(const std::string& host, uint16_t port,
-                                uint32_t id, std::string* err) {
-  std::latch done(1);
-  bool ok = false;
-  std::string reason;
-  auto* main_q = &RedisServer::Instance().MainProactor()->GetTaskQueue();
-  const bool posted = main_q->TryAdd([&]() {
-    ok = ProposeAddMember(host, port, id, &reason);
-    done.count_down();
-  });
-  if (!posted) {
-    if (err) *err = "ERR main task queue overflow";
-    return false;
-  }
-  done.wait();
-  if (!ok && err) *err = reason;
-  return ok;
-}
-
-std::string RaftNode::DescribeMembers() const {
-  std::string out;
-  for (const RaftMember& m : members_) {
-    out += std::to_string(m.id);
-    out += ' ';
-    out += m.Describe();
-    out += m.id == cfg_.node_id ? " self" : "";
-    out += m.learner ? " learner" : " voter";
-    out += '\n';
-  }
-  return out;
-}
-
-void RaftNode::MaybePromoteLearners() {
-  if (!is_leader()) return;
-  if (!add_in_flight_) return;
-  RaftPeer* peer = FindPeer(add_in_flight_id_);
-  if (!peer || !peer->is_learner()) return;
-  if (!peer->connected()) return;
-  if (peer->match_index() < last_log_index_) return;
-
-  LOG(INFO) << "raft: learner id=" << add_in_flight_id_
-            << " caught up (match=" << peer->match_index()
-            << "), proposing PROMOTE";
-  add_in_flight_ = false;
-  const uint32_t id = add_in_flight_id_;
-  std::string payload =
-      EncodeRespCommandFromStrings({"RAFT", "PROMOTE", std::to_string(id)});
-  AppendConfigEntry(payload);
-}
-
-bool RaftNode::ApplyConfigEntry(const std::vector<std::string_view>& args) {
-  if (args.size() < 2) return false;
-  const std::string cmd = util::ToUpperIfNeeded(args[0]);
-  if (cmd != "RAFT") return false;
-  const std::string sub = util::ToUpperIfNeeded(args[1]);
-  if (sub != "ADDNODE" && sub != "PROMOTE") return false;
-
-  if (sub == "ADDNODE") {
-    if (args.size() < 5) {
-      LOG(ERROR) << "raft: malformed ADDNODE entry";
-      return true;
-    }
-    const std::string host(args[2]);
-    const uint16_t port =
-        static_cast<uint16_t>(std::stoi(std::string(args[3])));
-    const uint32_t id = static_cast<uint32_t>(std::stoul(std::string(args[4])));
-    ApplyAddMember(id, host, port);
-    return true;
-  }
-
-  if (args.size() < 3) {
-    LOG(ERROR) << "raft: malformed PROMOTE entry";
-    return true;
-  }
-  const uint32_t id = static_cast<uint32_t>(std::stoul(std::string(args[2])));
-  for (RaftMember& m : members_) {
-    if (m.id == id) {
-      if (m.learner) {
-        m.learner = false;
-        LOG(INFO) << "raft: member id=" << id << " is now a voter";
-      }
-      break;
-    }
-  }
-  if (RaftPeer* p = FindPeer(id)) p->SetLearner(false);
-  SyncPeersToMembers();
-  return true;
+  return members_.empty() ? 1 : members_.size();
 }
 
 uint64_t RaftNode::RandomizedElectionTimeout() {
@@ -538,7 +344,6 @@ cppcoro::AsyncTask RaftNode::ElectionLoop() {
     if (closing_) break;
     if (peers_.empty()) continue;
     if (role_.load(std::memory_order_relaxed) == RaftRole::kLeader) continue;
-    if (cfg_.joining && IsJoiningLearner()) continue;
 
     const uint64_t since = util::GetSteadyTimeMs() - last_heartbeat_ms_;
     if (since < deadline_ms) continue;
@@ -547,6 +352,24 @@ cppcoro::AsyncTask RaftNode::ElectionLoop() {
               << "deadline " << deadline_ms << "ms)";
     co_await RunElection();
     deadline_ms = RandomizedElectionTimeout();
+  }
+  co_return;
+}
+
+cppcoro::AsyncTask RaftNode::StatsLoop() {
+  while (!closing_) {
+    co_await proactor_->ArmPeriodicTimer(kStatsPollMs);
+    if (closing_) break;
+
+    const std::string leader =
+        (leader_id_ == kNoVote) ? "none" : std::to_string(leader_id_);
+    LOG(INFO) << "raft: stats role="
+              << RoleName(role_.load(std::memory_order_relaxed))
+              << " term=" << term_ << " leader_id=" << leader
+              << " commit_index=" << commit_index_
+              << " applied_index=" << applied_index_
+              << " last_log_index=" << last_log_index_
+              << " log_start_index=" << log_start_index_;
   }
   co_return;
 }
@@ -581,7 +404,6 @@ cppcoro::task<> RaftNode::RunElection() {
     }
     if (votes >= need) break;
     if (!peer->connected()) continue;
-    if (peer->is_learner()) continue;
 
     auto send_guard = co_await peer->LockSend();
     const RequestVoteResp resp =
@@ -623,11 +445,6 @@ RequestVoteResp RaftNode::HandleRequestVote(const char* body, uint32_t len) {
   StepDownIfStale(cand_term, "saw higher term in RequestVote");
 
   resp.term = term_;
-  if (IsJoiningLearner()) {
-    LOG(INFO) << "raft: reject vote for node " << cand_id
-              << " (still a joining learner)";
-    return resp;
-  }
   if (cand_term < term_) {
     LOG(INFO) << "raft: reject vote for node " << cand_id << " (term "
               << cand_term << " < " << term_ << ")";
@@ -674,17 +491,6 @@ void RaftNode::SubmitBatch(std::vector<RaftLogEntry>&& batch) {
 
   if (HasRaftStatus(kRaftDriving)) return;
   DriveLogs();
-}
-
-void RaftNode::AppendConfigEntry(const std::string& payload) {
-  if (!is_leader()) return;
-  RaftLogEntry e;
-  e.txid = 0;
-  e.start_ms = util::GetCurrentTimeMs();
-  e.payload = payload;
-  std::vector<RaftLogEntry> batch;
-  batch.push_back(std::move(e));
-  SubmitBatch(std::move(batch));
 }
 
 cppcoro::AsyncTask RaftNode::DriveLogs() {
@@ -784,7 +590,7 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
   const uint64_t my_term = term_;
 
-  for (int attempt = 0; attempt < 8; ++attempt) {
+  for (int attempt = 0; attempt < 8; ++attempt) { // 防止无限发
     if (!is_leader() || term_ != my_term) co_return false;
     if (!peer->connected()) co_return false;
 
@@ -798,7 +604,7 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
     const uint64_t prev_index = next - 1;
     uint32_t count = 0;
-    if (next <= last_log_index_)
+    if (next <= last_log_index_) // 算要发多少条
       count = static_cast<uint32_t>(std::min<uint64_t>(
           last_log_index_ - next + 1, cfg_.max_entries_per_rpc));
 
@@ -807,7 +613,7 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
     const AppendEntriesResp resp =
         co_await peer->SendAppendEntries(wire_buf_, cfg_.rpc_timeout_ms);
-    if (StepDownIfStale(resp.term, "saw higher term in AppendEntries resp"))
+    if (StepDownIfStale(resp.term, "saw higher term in AppendEntries resp")) // follower 回了更高 term → 自己退位，返回。
       co_return false;
     if (!is_leader() || term_ != my_term) co_return false;
 
@@ -845,7 +651,6 @@ void RaftNode::AdvanceCommitIndex() {
     matches.reserve(peers_.size() + 1);
     matches.push_back(last_log_index_);
     for (size_t i = 0; i < peers_.size(); ++i) {
-      if (peers_[i]->is_learner()) continue;
       matches.push_back(match_index_[i]);
     }
     std::sort(matches.begin(), matches.end(), std::greater<uint64_t>());
@@ -862,8 +667,6 @@ void RaftNode::AdvanceCommitIndex() {
   if (candidate <= commit_index_) return;
 
   commit_index_ = candidate;
-  if (!PersistState())
-    LOG(ERROR) << "raft: failed to persist commit watermark " << candidate;
   VLOG(1) << "raft: commit_index -> " << commit_index_;
 
   std::vector<TxId> ready;
@@ -871,9 +674,9 @@ void RaftNode::AdvanceCommitIndex() {
     LogSlot& slot = log_[i];
     if (slot.index > commit_index_) break;
     const TxId txid = log_txids_[i];
-    if (txid != 0) {
+    if (txid != 0) { // 这条是本 leader 自己发起的写命令，有客户端事务在等结果 → 收集 txid
       ready.push_back(txid);
-    } else if (slot.index > applied_index_) {
+    } else if (slot.index > applied_index_) { // txid == 0 （从别的 leader 复制来的、或重启恢复的日志）且还没重放过 
       ReplayEntry(slot);
     }
   }
@@ -1001,9 +804,7 @@ cppcoro::AsyncTask RaftNode::ReadIndexDrive() {
         }
         co_await proactor_->ArmPeriodicTimer(kCommitPollMs);
       }
-    }
-
-    if (!ok) {
+    } else {
       fail_batch();
       continue;
     }
@@ -1069,7 +870,6 @@ cppcoro::AsyncTask RaftNode::HeartbeatLoop() {
     }
     RenewLease(sent_ms, acks);
     AdvanceCommitIndex();
-    MaybePromoteLearners();
   }
   co_return;
 }
@@ -1224,7 +1024,6 @@ cppcoro::task<AppendEntriesResp> RaftNode::HandleAppendEntries(const char* body,
   const uint64_t new_commit = std::min(leader_commit, last_log_index_);
   if (new_commit > commit_index_) {
     commit_index_ = new_commit;
-    PersistState();
     ApplyCommitted();
   }
 
@@ -1254,6 +1053,8 @@ void RaftNode::ApplyCommitted() {
             << applied_index_;
 }
 
+
+// 日志落盘调用
 cppcoro::task<bool> RaftNode::WriteRawAndSync(const std::string& bytes,
                                               uint64_t offset) {
   size_t written = 0;
@@ -1288,6 +1089,8 @@ T GetLE(const char* p) {
 }  // namespace
 
 bool RaftNode::RecoverFromDisk() {
+
+  //看文件多大
   const off_t size = ::lseek(fd_, 0, SEEK_END);
   if (size < 0) {
     LOG(ERROR) << "raft: lseek failed: " << std::strerror(errno);
@@ -1299,6 +1102,7 @@ bool RaftNode::RecoverFromDisk() {
     return true;
   }
 
+  // 把整个文件读进内存
   std::string buf(static_cast<size_t>(size), '\0');
   {
     size_t done = 0;
@@ -1315,8 +1119,10 @@ bool RaftNode::RecoverFromDisk() {
     buf.resize(done);
   }
 
+
+  // 逐条解析 + 校验
   size_t pos = 0;
-  bool torn = false;
+  bool torn = false; // 尾部是否有残缺记录
 
   while (pos < buf.size()) {
     if (buf.size() - pos < kRaftRecordHeaderSize) {
@@ -1353,7 +1159,7 @@ bool RaftNode::RecoverFromDisk() {
 
     pos += kRaftRecordHeaderSize + len;
     last_log_index_ = index;
-    term_ = std::max(term_, term);
+    term_ = std::max(term_, term); // 防御性
   }
 
   if (torn) {
@@ -1387,8 +1193,6 @@ void RaftNode::ReplayEntry(const LogSlot& slot) {
     LOG(ERROR) << "raft: cannot parse replay payload at index " << slot.index;
     return;
   }
-
-  if (ApplyConfigEntry(args)) return;
 
   const std::string upper = util::ToUpperIfNeeded(args[0]);
   const std::string_view name = upper.empty() ? args[0] : upper;
@@ -1425,6 +1229,8 @@ void RaftNode::ReplayEntry(const LogSlot& slot) {
   };
 
   shard_pool->Post(0, replay);
+
+  LOG(INFO) << "main线程进入阻塞";
   done.wait();
 }
 

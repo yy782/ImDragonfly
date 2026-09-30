@@ -6,10 +6,7 @@
 按类别运行:
     python3 -m pytest test_all.py -v -m basic
     python3 -m pytest test_all.py -v -m expire
-    python3 -m pytest test_all.py -v -m list
     python3 -m pytest test_all.py -v -m hash
-    python3 -m pytest test_all.py -v -m set
-    python3 -m pytest test_all.py -v -m zset
     python3 -m pytest test_all.py -v -m transaction
     python3 -m pytest test_all.py -v -m concurrent
     python3 -m pytest test_all.py -v -m benchmark
@@ -242,81 +239,6 @@ def test_expiretime(clean_redis):
 
 
 # ═══════════════════════════════════════════════════════════
-# 列表命令
-# ═══════════════════════════════════════════════════════════
-
-@pytest.mark.list
-def test_lpush_and_llen(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key"
-    track(key)
-    assert r.lpush(key, "a", "b", "c") == 3
-    assert r.llen(key) == 3
-
-
-@pytest.mark.list
-def test_lrange_and_lindex(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key2"
-    track(key)
-    r.lpush(key, "a", "b", "c")
-    assert r.lrange(key, 0, -1) == ["c", "b", "a"]
-    assert r.lindex(key, 0) == "c"
-    assert r.lindex(key, -1) == "a"
-
-
-@pytest.mark.list
-def test_rpush(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key3"
-    track(key)
-    r.lpush(key, "a", "b", "c")
-    assert r.rpush(key, "d") == 4
-    assert r.lrange(key, 0, -1) == ["c", "b", "a", "d"]
-
-
-@pytest.mark.list
-def test_lset(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key4"
-    track(key)
-    r.lpush(key, "a", "b", "c")
-    assert r.lset(key, 1, "x") is True
-    assert r.lrange(key, 0, -1) == ["c", "x", "a"]
-
-
-@pytest.mark.list
-def test_lpop_rpop(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key5"
-    track(key)
-    r.lpush(key, "a", "b", "c")
-    assert r.lpop(key) == "c"
-    assert r.rpop(key) == "a"
-    assert r.llen(key) == 1
-
-
-@pytest.mark.list
-def test_lrem(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key6"
-    track(key)
-    r.rpush(key, "x", "a", "x")
-    assert r.lrem(key, 0, "x") == 2
-    assert r.llen(key) == 1
-
-
-@pytest.mark.list
-def test_linsert(clean_redis):
-    r, track = clean_redis
-    key = "test:list:key7"
-    track(key)
-    r.rpush(key, "a")
-    assert r.linsert(key, "AFTER", "a", "new") == 2
-    assert r.lrange(key, 0, -1) == ["a", "new"]
-
-
-# ═══════════════════════════════════════════════════════════
 # 哈希命令
 # ═══════════════════════════════════════════════════════════
 
@@ -350,83 +272,6 @@ def test_hdel(clean_redis):
     r.hset(key, "f1", "v1"); r.hset(key, "f2", "v2")
     assert r.hdel(key, "f1") == 1
     assert r.hlen(key) == 1
-
-
-# ═══════════════════════════════════════════════════════════
-# 集合命令
-# ═══════════════════════════════════════════════════════════
-
-@pytest.mark.set
-def test_sadd_and_scard(clean_redis):
-    r, track = clean_redis
-    key = "test:set:key"
-    track(key)
-    assert r.sadd(key, "a", "b", "c") == 3
-    assert r.sadd(key, "a") == 0
-    assert r.scard(key) == 3
-
-
-@pytest.mark.set
-def test_srem(clean_redis):
-    r, track = clean_redis
-    key = "test:set:key3"
-    track(key)
-    r.sadd(key, "a", "b", "c")
-    assert r.srem(key, "a", "b") == 2
-    assert r.scard(key) == 1
-
-
-# ═══════════════════════════════════════════════════════════
-# 有序集合命令
-# ═══════════════════════════════════════════════════════════
-
-@pytest.mark.zset
-def test_zadd_and_zcard(clean_redis):
-    r, track = clean_redis
-    key = "test:zset:key"
-    track(key)
-    assert r.execute_command("ZADD", key, 1, "a", 2, "b", 3, "c") == 3
-    assert r.execute_command("ZCARD", key) == 3
-
-
-@pytest.mark.zset
-def test_zscore(clean_redis):
-    r, track = clean_redis
-    key = "test:zset:key2"
-    track(key)
-    r.execute_command("ZADD", key, 1, "a", 2, "b")
-    assert r.execute_command("ZSCORE", key, "a") == 1.0
-
-
-@pytest.mark.zset
-def test_zrank_zrevrank(clean_redis):
-    r, track = clean_redis
-    key = "test:zset:key3"
-    track(key)
-    r.execute_command("ZADD", key, 1, "a", 2, "b", 3, "c")
-    assert r.execute_command("ZRANK", key, "a") == 0
-    assert r.execute_command("ZRANK", key, "c") == 2
-    assert r.execute_command("ZREVRANK", key, "a") == 2
-    assert r.execute_command("ZREVRANK", key, "c") == 0
-
-
-@pytest.mark.zset
-def test_zrange(clean_redis):
-    r, track = clean_redis
-    key = "test:zset:key4"
-    track(key)
-    r.execute_command("ZADD", key, 1, "a", 2, "b", 3, "c")
-    assert r.execute_command("ZRANGE", key, 0, 1) == ["a", "b"]
-
-
-@pytest.mark.zset
-def test_zrem(clean_redis):
-    r, track = clean_redis
-    key = "test:zset:key5"
-    track(key)
-    r.execute_command("ZADD", key, 1, "a", 2, "b", 3, "c")
-    assert r.execute_command("ZREM", key, "b") == 1
-    assert r.execute_command("ZCARD", key) == 2
 
 
 # ═══════════════════════════════════════════════════════════

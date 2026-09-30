@@ -16,13 +16,48 @@
 #include <thread>
 
 #include "io/fd_wrapper.hpp"
+#include "src/server/command_line.hpp"
 #include "src/server/redis_server.hpp"
 #include "src/util/json_config.hpp"
 #include "src/util/startup_log.hpp"
 
 using namespace dfly;
 
+namespace {
+
+// 递归创建目录（等价于 mkdir -p），支持 ./logs/imdragonfly2 这类多级路径。
+bool MakeDirs(const std::string& path) {
+  if (path.empty()) {
+    return true;
+  }
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (path[i] != '/') {
+      continue;
+    }
+    if (i == 0) {
+      continue;  // 绝对路径根目录 "/" 已存在
+    }
+    std::string prefix = path.substr(0, i);
+    if (prefix.empty() || prefix == ".") {
+      continue;
+    }
+    if (mkdir(prefix.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  }
+  if (mkdir(path.c_str(), 0755) != 0 && errno != EEXIST) {
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 // ASAN对协程有误报，注意一下
+
+
+
+
 
 int main(int argc, char* argv[]) {
   // 忽略 SIGPIPE：客户端在响应发出前断连时，往对端已关闭的 socket 写会
@@ -47,55 +82,48 @@ int main(int argc, char* argv[]) {
 #endif
   google::InitGoogleLogging(argv[0]);
 
-  int ret = mkdir("./logs", 0755);
-  if (ret != 0 && errno != EEXIST) {
-    LOG(ERROR) << "Failed to create logs directory: " << strerror(errno);
+  // 先解析命令行参数，以便用 log_dir 决定谷歌日志输出目录
+  std::string err;
+  if (!ParseCommandLine(argc, argv, &err)) {
+    LOG(ERROR) << err;
     google::ShutdownGoogleLogging();
     return 1;
   }
 
-  FLAGS_log_dir = "./logs";
-  FLAGS_logtostderr = false;
-  LOG(INFO) << "ImDragonfly server starting...";
-  int num = 4;
-  uint16_t port = 6379;
-  std::string config_path;
+  int num = shards;
+  uint16_t listen_port = redis_port;
+
+  // 指定了配置文件则加载，并让配置覆盖命令行参数（含 log_dir）
   util::JsonConfig config;
-
-  // 命令行参数：./imdragonfly [shards] [port] [--config <path>]
-  for (int i = 1; i < argc; ++i) {
-    std::string arg = argv[i];
-    if (arg == "--config") {
-      if (i + 1 < argc) {
-        config_path = argv[++i];
-      } else {
-        LOG(ERROR) << "--config 需要一个文件路径参数";
-        google::ShutdownGoogleLogging();
-        return 1;
-      }
-    } else if (i == 1) {
-      num = std::atoi(argv[1]);
-    } else if (i == 2) {
-      port = static_cast<uint16_t>(std::atoi(argv[2]));
-    }
-  }
-
-  // 指定了配置文件则加载，并让配置覆盖命令行参数
   const util::JsonConfig* cfg = nullptr;
   if (!config_path.empty()) {
-    std::string err;
     if (!config.LoadFromFile(config_path, &err)) {
       LOG(ERROR) << "加载配置文件失败: " << err;
       google::ShutdownGoogleLogging();
       return 1;
     }
+    log_dir = config.GetString("log_dir", log_dir);
     num = static_cast<int>(config.GetInt("shards", num));
-    port = static_cast<uint16_t>(config.GetInt("port", port));
+    listen_port = static_cast<uint16_t>(config.GetInt("port", listen_port));
     cfg = &config;
-    LOG(INFO) << "已加载配置文件: " << config_path;
   }
 
-  int listenFd = base::ListenFd(port);
+  // 创建日志目录（递归创建，支持 ./logs/imdragonfly2 这类多级路径）
+  if (!MakeDirs(log_dir)) {
+    LOG(ERROR) << "Failed to create logs directory: " << log_dir
+               << ": " << strerror(errno);
+    google::ShutdownGoogleLogging();
+    return 1;
+  }
+
+  FLAGS_log_dir = log_dir;
+  FLAGS_logtostderr = false;
+  if (cfg) {
+    LOG(INFO) << "已加载配置文件: " << config_path;
+  }
+  LOG(INFO) << "ImDragonfly server starting...";
+
+  int listenFd = base::ListenFd(listen_port);
   if (listenFd < 0) {
     LOG(ERROR) << "Failed to create listen socket";
     google::ShutdownGoogleLogging();

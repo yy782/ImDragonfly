@@ -18,7 +18,7 @@ services:
         soft: -1
         hard: -1
     # 如需自定义分片数量，请修改 imdragonfly.conf 中的 "shards" 字段。
-    # 注意：不要用 command 覆盖默认的 --config 启动方式，否则会退回内置默认参数
+    # 注意：不要用 command 覆盖默认的 config= 启动方式，否则会退回内置默认参数
     # 并默认开启 RDB，性能下降。
     restart: unless-stopped
     healthcheck:

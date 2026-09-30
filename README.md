@@ -130,7 +130,7 @@ memtier_benchmark -s 127.0.0.1 -p 6379 \
   --key-minimum=1 --key-maximum=10000000 --hide-histogram
 ```
 
-- ImDragonfly：`./build/imdragonfly --config ./imdragonfly.conf`（4 分片，配置参数：`use_defer_taskrun`、`use_single_issuer`、注册缓冲、`cqe_batch_size=500`）
+- ImDragonfly：`./build/imdragonfly config=./imdragonfly.conf`（4 分片，配置参数：`use_defer_taskrun`、`use_single_issuer`、注册缓冲、`cqe_batch_size=500`）
 
 | 指标 | 数值 |
 |------|------|
@@ -158,7 +158,7 @@ memtier_benchmark -s 127.0.0.1 -p 6379 \
 ```
 
 - Redis：`redis-server --io-threads 4 --io-threads-do-reads yes --save "" --appendonly no --stop-writes-on-bgsave-error no`
-- ImDragonfly：`./build/imdragonfly --config ./imdragonfly.conf`（4 分片，配置参数：`use_defer_taskrun`、`use_single_issuer`、注册缓冲、`cqe_batch_size=500`）
+- ImDragonfly：`./build/imdragonfly config=./imdragonfly.conf`（4 分片，配置参数：`use_defer_taskrun`、`use_single_issuer`、注册缓冲、`cqe_batch_size=500`）
 
 | 指标 | Redis 8.10.0 | ImDragonfly | 对比 |
 |------|-------------|-------------|------|
@@ -192,7 +192,7 @@ memtier_benchmark -s 127.0.0.1 -p 6379 \
 ```
 
 - Redis：`redis-server --io-threads 6 --io-threads-do-reads yes --save "" --appendonly no --stop-writes-on-bgsave-error no`
-- ImDragonfly：`./build/imdragonfly --config ./imdragonfly.conf`（需要指定6 shards）
+- ImDragonfly：`./build/imdragonfly config=./imdragonfly.conf`（需要指定6 shards）
 
 | 指标 | Redis 8.10.0 | ImDragonfly | 对比 |
 |------|-------------|-------------|------|
@@ -312,29 +312,31 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 
 # 运行（推荐：通过配置文件启动，详见下方「启动方式与命令行参数」）
-./imdragonfly --config ../imdragonfly.conf
+./imdragonfly config=../imdragonfly.conf
 ```
 
 ### 启动方式与命令行参数
 
 ```bash
-./imdragonfly [shards] [port] [--config <path>]
+./imdragonfly [key=value ...]
 ```
+
+命令行参数采用 `key=value` 形式，顺序无关，可写任意个：
 
 | 参数 | 说明 |
 |------|------|
-| `shards` | 分片数量（位置参数，默认 4） |
-| `port` | 监听端口（位置参数，默认 6379） |
-| `--config <path>` | 加载 JSON 配置文件，配置值会覆盖命令行参数 |
+| `shards=4` | 分片数量（默认 4） |
+| `port=6379` | 监听端口（默认 6379） |
+| `config=<path>` | 加载 JSON 配置文件，配置值会覆盖命令行参数 |
 
-**推荐通过 `--config` 启动**，加载仓库自带的 `imdragonfly.conf`（4 分片 + io_uring 优化参数）：
+**推荐通过 `config` 启动**，加载仓库自带的 `imdragonfly.conf`（4 分片 + io_uring 优化参数）：
 
 ```bash
 # 在 build 目录内运行
-./imdragonfly --config ../imdragonfly.conf
+./imdragonfly config=../imdragonfly.conf
 
 # 或在项目根目录运行
-./build/imdragonfly --config ./imdragonfly.conf
+./build/imdragonfly config=./imdragonfly.conf
 ```
 
 

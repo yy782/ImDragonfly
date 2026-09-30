@@ -92,10 +92,6 @@ class Shard {
  private:
   Shard(base::UringProactor* pb, mi_heap_t* heap);
 
-  // 轻量 SCA（选择性冲突分析，论文 §2.6）：仅队列堆积时激活，用写集/读集
-  // 位数组扫描出已就绪且无冲突的事务提前执行。
-  void MaybeDriveUnblocked();
-
   // raft 提交门闩：事务的日志必须先被 raft 提交，才允许 ExecuteOnShard。
   // 与 is_armed 是两道独立的门 —— is_armed 回答"调度器放行了吗"，
   // 这个回答"raft 提交了吗"。见 raft.md §5。

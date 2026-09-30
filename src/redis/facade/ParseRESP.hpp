@@ -3,6 +3,7 @@
 #include <cctype>
 #include <charconv>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,6 +129,27 @@ struct ParseRESP {
     return pr;
   }
 };
+
+
+inline std::string EncodeRespCommand(std::span<const std::string_view> args) {
+  size_t cap = 16;
+  for (const std::string_view a : args) cap += a.size() + 16;
+
+  std::string out;
+  out.reserve(cap);
+
+  out += '*';
+  out += std::to_string(args.size());
+  out += "\r\n";
+  for (const std::string_view a : args) {
+    out += '$';
+    out += std::to_string(a.size());
+    out += "\r\n";
+    out.append(a);
+    out += "\r\n";
+  }
+  return out;
+}
 
 inline std::string EncodeBulkString(std::string_view v) {
   std::string out;

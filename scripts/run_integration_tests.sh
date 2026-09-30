@@ -33,7 +33,7 @@ fi
 # ── 启动 ImDragonfly ──────────────────────────────────────
 mkdir -p "$LOG_DIR"
 echo "Starting ImDragonfly ($IMDRAGONFLY_BIN $THREADS $PORT)..."
-"$IMDRAGONFLY_BIN" "$THREADS" "$PORT" &
+"$IMDRAGONFLY_BIN" "shards=$THREADS" "port=$PORT" &
 IMDRAGONFLY_PID=$!
 
 cleanup() {

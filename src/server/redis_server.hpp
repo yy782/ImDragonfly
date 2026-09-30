@@ -18,7 +18,6 @@
 
 #include "command_layer/command_registry.hpp"
 #include "command_layer/generic_family.hpp"
-#include "command_layer/multi_family.hpp"
 #include "detail/conflig.hpp"
 #include "detail/conn_context.hpp"
 #include "io/fd_wrapper.hpp"
@@ -165,17 +164,11 @@ class RedisServer {
           static_cast<uint64_t>(config->GetInt("election_timeout_ms", 300));
       raft_max_entries_per_rpc_ =
           static_cast<uint32_t>(config->GetInt("raft_max_entries_per_rpc", 64));
-      raft_joining_ = config->GetBool("raft_joining", false);
-      raft_seed_ = config->GetString("raft_seed", "");
     }
     CIs = new CommandRegistry();
     RegisterStringFamily(CIs);
     RegisterGeneric(CIs);
-    // RegisterMulti(CIs);
-    RegisterListFamily(CIs);
     RegisterHashFamily(CIs);
-    RegisterSetFamily(CIs);
-    RegisterZSetFamily(CIs);
   }
 
   // 有配置文件则从文件读取，否则使用内置默认值。
@@ -278,8 +271,6 @@ class RedisServer {
       rcfg.rpc_timeout_ms = raft_rpc_timeout_ms_;
       rcfg.election_timeout_ms = raft_election_timeout_ms_;
       rcfg.max_entries_per_rpc = raft_max_entries_per_rpc_;
-      rcfg.joining = raft_joining_;
-      rcfg.seed = raft_seed_;
 
       util::StartupLog("Initializing raft (log=" + raft_log_path_ +
                        ", node_id=" + std::to_string(rcfg.node_id) +
@@ -394,9 +385,6 @@ class RedisServer {
   uint64_t raft_rpc_timeout_ms_ = 1000;
   uint64_t raft_election_timeout_ms_ = 300;
   uint32_t raft_max_entries_per_rpc_ = 64;
-  // 动态加节点：joining 节点以 learner 身份启动，向 raft_seed 拨号追日志。
-  bool raft_joining_ = false;
-  std::string raft_seed_;
 
   inline static RedisServer* instance_ = nullptr;
 };

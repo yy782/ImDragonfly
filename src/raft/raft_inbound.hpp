@@ -36,10 +36,6 @@ class RaftInbound {
   int listen_fd_;
 };
 
-// 建一个**不带 SO_REUSEPORT** 的监听 socket。
-// base::ListenFd() 设了 SO_REUSEPORT —— 那会让两个 raft 节点静默地共享
-// 同一端口、请求被内核随机分发（本轮测试就被这个坑污染过一次结论）。
-// raft 端口必须在被占用时明确报错。
 int RaftListenFd(uint16_t port);
 
 }  // namespace dfly

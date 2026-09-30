@@ -63,7 +63,7 @@ def imdragonfly(pytestconfig):
 
     port = _free_port()
     proc = subprocess.Popen(
-        [binary, SHARDS, str(port)],
+        [binary, f"shards={SHARDS}", f"port={port}"],
         cwd=PROJECT_ROOT,  # main.cpp 会在 cwd 下建 ./logs 目录
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

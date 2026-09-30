@@ -24,9 +24,6 @@ int RaftListenFd(uint16_t port) {
     return -1;
   }
 
-  // 只设 SO_REUSEADDR（允许重启时立刻复用 TIME_WAIT 的端口），
-  // **绝不设 SO_REUSEPORT** —— 否则两个 raft 节点会静默共享端口，
-  // 请求被内核随机分发，故障表现极难定位。
   int opt = 1;
   ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 

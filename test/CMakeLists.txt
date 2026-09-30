@@ -10,7 +10,6 @@ add_executable(unit_tests
     compact_obj_test.cpp
     parse_resp_test.cpp
     reply_builder_test.cpp
-    skiplist_test.cpp
     wait_queue_test.cpp
     transaction_test.cpp
     intrusive_ptr_test.cpp

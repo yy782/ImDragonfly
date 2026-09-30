@@ -242,17 +242,8 @@ class CompactObj {
   static void RobjFree(void* ptr, CompactObjType type) {
     if (!ptr) return;
     switch (type) {
-      case OBJ_LIST:
-        static_cast<ListObject*>(ptr)->~ListObject();
-        break;
       case OBJ_HASH:
         static_cast<HashObject*>(ptr)->~HashObject();
-        break;
-      case OBJ_SET:
-        static_cast<SetObject*>(ptr)->~SetObject();
-        break;
-      case OBJ_ZSET:
-        static_cast<ZSetObject*>(ptr)->~ZSetObject();
         break;
       default:
         LOG(WARNING) << "Unknown robj type: " << type;
@@ -267,18 +258,9 @@ class CompactObj {
     if (!a.ptr || !b.ptr) return a.ptr == b.ptr;
 
     switch (a.type) {
-      case OBJ_LIST:
-        return static_cast<const ListObject*>(a.ptr)->Data() ==
-               static_cast<const ListObject*>(b.ptr)->Data();
       case OBJ_HASH:
         return static_cast<const HashObject*>(a.ptr)->Data() ==
                static_cast<const HashObject*>(b.ptr)->Data();
-      case OBJ_SET:
-        return static_cast<const SetObject*>(a.ptr)->Data() ==
-               static_cast<const SetObject*>(b.ptr)->Data();
-      case OBJ_ZSET:
-        return static_cast<const ZSetObject*>(a.ptr)->Range(0, -1) ==
-               static_cast<const ZSetObject*>(b.ptr)->Range(0, -1);
       default:
         LOG(FATAL) << "Invalid robj type: " << a.type;
         return false;
@@ -345,10 +327,7 @@ struct CompactValue : public CompactObj {
     return v;
   }
 
-  static CompactValue MakeList() { return Make<ListObject, OBJ_LIST>(); }
   static CompactValue MakeHash() { return Make<HashObject, OBJ_HASH>(); }
-  static CompactValue MakeSet() { return Make<SetObject, OBJ_SET>(); }
-  static CompactValue MakeZSet() { return Make<ZSetObject, OBJ_ZSET>(); }
   template <typename ObjType, CompactObjType ObjTag>
   ObjType* GetObj() {
     if (tag_ != ROBJ_TAG || u_.robj_.type != ObjTag) return nullptr;
@@ -361,17 +340,8 @@ struct CompactValue : public CompactObj {
     return static_cast<const ObjType*>(u_.robj_.ptr);
   }
 
-  ListObject* GetList() { return GetObj<ListObject, OBJ_LIST>(); }
-  const ListObject* GetList() const { return GetObj<ListObject, OBJ_LIST>(); }
-
   HashObject* GetHash() { return GetObj<HashObject, OBJ_HASH>(); }
   const HashObject* GetHash() const { return GetObj<HashObject, OBJ_HASH>(); }
-
-  SetObject* GetSet() { return GetObj<SetObject, OBJ_SET>(); }
-  const SetObject* GetSet() const { return GetObj<SetObject, OBJ_SET>(); }
-
-  ZSetObject* GetZSet() { return GetObj<ZSetObject, OBJ_ZSET>(); }
-  const ZSetObject* GetZSet() const { return GetObj<ZSetObject, OBJ_ZSET>(); }
 };
 
 }  // namespace dfly

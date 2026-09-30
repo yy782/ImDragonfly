@@ -67,5 +67,5 @@ EXPOSE 6379
 
 # 启动服务，默认加载 imdragonfly.conf（4 分片 + io_uring 优化参数）
 ENTRYPOINT ["./imdragonfly"]
-CMD ["--config", "./imdragonfly.conf"]
+CMD ["config=./imdragonfly.conf"]
 ENV GLOG_logtostderr=1

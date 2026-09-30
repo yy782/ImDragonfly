@@ -29,13 +29,10 @@ class RaftPeer {
   bool connected() const { return fd_ >= 0; }
   std::string Describe() const { return host_ + ":" + std::to_string(port_); }
 
-  bool is_learner() const { return learner_; }
-  void SetLearner(bool v) { learner_ = v; }
-
   uint64_t match_index() const { return match_index_; }
   void SetMatchIndex(uint64_t v) { match_index_ = v; }
 
-  void Start();
+  cppcoro::AsyncTask Start();
 
   cppcoro::task<AppendEntriesResp> SendAppendEntries(std::string_view body,
                                                      uint64_t timeout_ms);
@@ -49,8 +46,8 @@ class RaftPeer {
   auto LockSend() { return send_mu_.scoped_lock_async(); }
 
  private:
-  cppcoro::AsyncTask ConnectLoop();
-  cppcoro::task<> ReadLoop(int fd);
+  cppcoro::task<> ConnectLoop();
+  cppcoro::task<> ReadLoop();
   cppcoro::AsyncTask TimeoutGuard(uint64_t seq, uint64_t ms);
 
   void DropConnection();
@@ -78,7 +75,6 @@ class RaftPeer {
   int fd_ = -1;
   bool connecting_ = false;
   bool closing_ = false;
-  bool learner_ = false;
   uint64_t match_index_ = 0;
   uint32_t backoff_ms_ = 50;
   static constexpr uint32_t kMaxBackoffMs = 2000;

@@ -47,8 +47,6 @@ struct RaftConfig {
   uint64_t rpc_timeout_ms = 1000;
   uint64_t election_timeout_ms = 300;
   uint32_t max_entries_per_rpc = 64;
-  bool joining = false;
-  std::string seed;
   size_t ClusterSize() const { return peers.empty() ? 1 : peers.size(); }
   size_t Quorum() const { return ClusterSize() / 2 + 1; }
 };
@@ -57,9 +55,6 @@ struct RaftMember {
   uint32_t id = 0;
   std::string host;
   uint16_t port = 0;
-  bool learner = true;
-
-  std::string Describe() const { return host + ":" + std::to_string(port); }
 };
 
 enum class RaftRole : uint8_t { kFollower, kCandidate, kLeader };
@@ -122,33 +117,12 @@ class RaftNode {
   uint64_t commit_index() const { return commit_index_; }
   const RaftConfig& config() const { return cfg_; }
 
-  bool ProposeAddMember(const std::string& host, uint16_t port, uint32_t id,
-                        std::string* err);
-  // 「RAFT ADDNODE」命令 handler 在 shard 线程提交后调用：投递到 main 上
-  // 执行校验 + 把新节点登记为 learner。同步等待结果。返回 false 并把原因
-  // 写入 *err 时，命令层回 -ERR。
-  bool OnAddNodeCommand(const std::string& host, uint16_t port, uint32_t id,
-                        std::string* err);
-  std::string DescribeMembers() const;
-
  private:
-  void ApplyAddMember(uint32_t id, const std::string& host, uint16_t port);
-
   size_t VoterCount() const;
 
   size_t Quorum() const { return VoterCount() / 2 + 1; }
 
   void SyncPeersToMembers();
-
-  void MaybePromoteLearners();
-  void AppendConfigEntry(const std::string& payload);
-  bool IsJoiningLearner() const {
-    if (!cfg_.joining) return false;
-    for (const RaftMember& m : members_) {
-      if (m.id == cfg_.node_id) return m.learner;
-    }
-    return true;  // 成员表里还没有自己 → 仍是学习者
-  }
 
   uint64_t LastLogIndex() const { return last_log_index_; }
   uint64_t LastLogTerm() const;
@@ -171,12 +145,12 @@ class RaftNode {
 
   bool RecoverFromDisk();
   void ReplayEntry(const LogSlot& slot);
-  bool ApplyConfigEntry(const std::vector<std::string_view>& args);
 
   void ApplyCommitted();
 
   cppcoro::AsyncTask HeartbeatLoop();
   cppcoro::AsyncTask ElectionLoop();
+  cppcoro::AsyncTask StatsLoop();
   cppcoro::task<> RunElection();
   // 一轮心跳的成功 ack 数（不含自己）达到多数派后续租。
   // sent_ms = 本轮心跳**发出**的时刻（用发送时刻而非收 ack 时刻，
@@ -221,7 +195,7 @@ class RaftNode {
   std::vector<TxId> log_txids_;
   uint64_t log_start_index_ = 1;  // log_.front().index
   uint64_t last_log_index_ = 0;   // 0 = 空日志
-  uint64_t commit_index_ = 0;     // 已知被多数派持久化的最大 index
+  uint64_t commit_index_ = 0;     // 已知被多数派提交的最大 index（易失，不持久化）
   uint64_t applied_index_ = 0;    // 已应用到状态机的最大 index
 
   std::vector<uint64_t> next_index_;
@@ -229,7 +203,6 @@ class RaftNode {
 
   std::atomic<RaftRole> role_{RaftRole::kFollower};
   static constexpr uint32_t kNoVote = static_cast<uint32_t>(-1);
-  static constexpr uint32_t kSeedPeerId = static_cast<uint32_t>(-2);
   uint32_t voted_for_ = kNoVote;
   uint32_t leader_id_ = kNoVote;
   uint64_t last_heartbeat_ms_ = 0;
@@ -239,8 +212,6 @@ class RaftNode {
 
   std::vector<RaftMember> members_;
   std::vector<std::unique_ptr<RaftPeer>> peers_;
-  bool add_in_flight_ = false;
-  uint32_t add_in_flight_id_ = 0;
   std::unique_ptr<RaftInbound> inbound_;
   int listen_fd_ = -1;
   bool closing_ = false;
@@ -248,6 +219,7 @@ class RaftNode {
   static constexpr uint64_t kElectionPollMs = 30;
   static constexpr uint64_t kCommitPollMs = 5;
   static constexpr uint64_t kCommitTimeoutMs = 3000;
+  static constexpr uint64_t kStatsPollMs = 5000;
 
   std::vector<RaftLogEntry> pending_;
 
