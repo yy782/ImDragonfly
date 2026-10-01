@@ -55,6 +55,10 @@ bool MakeDirs(const std::string& path) {
 
 // ASAN对协程有误报，注意一下
 
+
+// TODO 实现Multi-Raft，让无共享框架的每个线程跑一个raft实例， 约束:禁止多分片命令，比如 MSET, MGET , 
+
+
 int main(int argc, char* argv[]) {
   // 忽略 SIGPIPE：客户端在响应发出前断连时，往对端已关闭的 socket 写会
   // 触发 SIGPIPE，默认动作是**终止整个进程** —— 一个断连的客户端就能把
