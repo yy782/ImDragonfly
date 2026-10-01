@@ -89,8 +89,6 @@ static void PostFollowerReadToMain(TxId txid) {
   const bool ok =
       main_q->TryAdd([txid]() { raft_node->RequestFollowerRead(txid); });
   if (!ok) {
-    // 与 FlushLogToMain 同样的不可恢复状态：main 卡死时读也无法被确认，
-    // 队列容量 16384 远大于正常在读事务数。
     LOG(FATAL) << "raft: main task queue overflow while posting follower read";
   }
 }

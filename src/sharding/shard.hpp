@@ -56,12 +56,12 @@ class Shard {
   ShardStorage& GetShardStorage() { return storage_; }
   const ShardStorage& GetShardStorage() const { return storage_; }
 
-  // 队列高水位阈值（VVL 论文 §2.1）：多分片事务未拿全锁且队列达到此值时
+  // 多分片事务未拿全锁且队列达到此值时
   // 放弃入队，把 CPU 让给队首推进 / SCA 消化队列。
   static constexpr size_t kQueueHighWater = 8;
 
   // 把一条待提交的事务日志攒进本分片的缓冲。只在 shard 线程调用。
-  // 只读事务不入日志（raft.md §9），由本函数内部判断后直接返回。
+  // 只读事务不入日志，由本函数内部判断后直接返回。
   // 返回 false = 本节点非 leader，客户端写进不了 raft 日志（永远等不到
   // 提交），调用方应把 OpStatus::RAFT_SCHED_FAIL 交给回调而非入队等待。
   bool PushLogIfNeed(Transaction* tx);
@@ -74,7 +74,7 @@ class Shard {
   // 攒到这个条数就提前刷给 main，不等定时器。
   static constexpr size_t kLogHighWater = 8;
 
-  // 定时刷日志给 main 的周期。注意已知代价（raft.md §10）：squasher 内
+  // 定时刷日志给 main 的周期。注意已知代价：squasher 内
   // 同一分片的命令是串行 co_await 的，单连接下攒不满 kLogHighWater，
   // 每条写命令最坏要等一个周期 —— 所以这个值直接决定单连接写延迟上限。
   // 降到 2ms 的代价是每分片每 2ms 一个定时器 CQE（空载时的固定开销），
@@ -83,7 +83,6 @@ class Shard {
 
   // 启动 raft 日志刷新定时器。必须在 thread_local shard_ 已赋值、
   // 且 shard_pool / RedisServer 已就绪之后调用 —— 不能放在构造函数里
-  // （构造期间 shard_ 还是 nullptr，见 raft.md §12.7）。
   void StartRaftLogTimer();
 
   // 把当前攒的日志立刻交给 main（在 shard 线程上取走，避免数据竞争）。
@@ -92,13 +91,8 @@ class Shard {
  private:
   Shard(base::UringProactor* pb, mi_heap_t* heap);
 
-  // raft 提交门闩：事务的日志必须先被 raft 提交，才允许 ExecuteOnShard。
-  // 与 is_armed 是两道独立的门 —— is_armed 回答"调度器放行了吗"，
-  // 这个回答"raft 提交了吗"。见 raft.md §5。
-  // 非 const：只读事务在尚未确认时会把确认请求投递给 main（有副作用）。
   bool IsRaftReady(Transaction* tx);
 
-  // 事务的写（raft 已提交）/ 读（ReadIndex 已确认）是否就绪。
   bool WriteTxReady(TxId txid) const {
     return InRanges(write_ready_ranges_, txid);
   }
@@ -132,7 +126,6 @@ class Shard {
 
   // 本分片攒着还没交给 main 的日志条目。**shard 线程独占** ——
   // 取走时必须在 shard 线程上 move 出来再投给 main，
-  // 不能让 main 线程直接碰它（raft.md §12.5）。
   std::vector<RaftLogEntry> log_;
   bool raft_timer_started_ = false;
 
