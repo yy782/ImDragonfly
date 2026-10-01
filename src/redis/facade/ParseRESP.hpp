@@ -130,7 +130,6 @@ struct ParseRESP {
   }
 };
 
-
 inline std::string EncodeRespCommand(std::span<const std::string_view> args) {
   size_t cap = 16;
   for (const std::string_view a : args) cap += a.size() + 16;

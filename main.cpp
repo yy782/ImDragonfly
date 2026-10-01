@@ -55,10 +55,6 @@ bool MakeDirs(const std::string& path) {
 
 // ASAN对协程有误报，注意一下
 
-
-
-
-
 int main(int argc, char* argv[]) {
   // 忽略 SIGPIPE：客户端在响应发出前断连时，往对端已关闭的 socket 写会
   // 触发 SIGPIPE，默认动作是**终止整个进程** —— 一个断连的客户端就能把
@@ -110,8 +106,8 @@ int main(int argc, char* argv[]) {
 
   // 创建日志目录（递归创建，支持 ./logs/imdragonfly2 这类多级路径）
   if (!MakeDirs(log_dir)) {
-    LOG(ERROR) << "Failed to create logs directory: " << log_dir
-               << ": " << strerror(errno);
+    LOG(ERROR) << "Failed to create logs directory: " << log_dir << ": "
+               << strerror(errno);
     google::ShutdownGoogleLogging();
     return 1;
   }

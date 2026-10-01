@@ -195,8 +195,8 @@ class RaftNode {
   std::vector<TxId> log_txids_;
   uint64_t log_start_index_ = 1;  // log_.front().index
   uint64_t last_log_index_ = 0;   // 0 = 空日志
-  uint64_t commit_index_ = 0;     // 已知被多数派提交的最大 index（易失，不持久化）
-  uint64_t applied_index_ = 0;    // 已应用到状态机的最大 index
+  uint64_t commit_index_ = 0;  // 已知被多数派提交的最大 index（易失，不持久化）
+  uint64_t applied_index_ = 0;  // 已应用到状态机的最大 index
 
   std::vector<uint64_t> next_index_;
   std::vector<uint64_t> match_index_;

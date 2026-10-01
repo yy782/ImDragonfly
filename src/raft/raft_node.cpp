@@ -220,7 +220,6 @@ bool RaftNode::LoadState() {
 }
 
 bool RaftNode::StartTransport() {
-
   // 单节点捷径
   if (cfg_.peers.size() <= 1) {
     role_.store(RaftRole::kLeader, std::memory_order_release);
@@ -590,7 +589,7 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
   const uint64_t my_term = term_;
 
-  for (int attempt = 0; attempt < 8; ++attempt) { // 防止无限发
+  for (int attempt = 0; attempt < 8; ++attempt) {  // 防止无限发
     if (!is_leader() || term_ != my_term) co_return false;
     if (!peer->connected()) co_return false;
 
@@ -604,7 +603,7 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
     const uint64_t prev_index = next - 1;
     uint32_t count = 0;
-    if (next <= last_log_index_) // 算要发多少条
+    if (next <= last_log_index_)  // 算要发多少条
       count = static_cast<uint32_t>(std::min<uint64_t>(
           last_log_index_ - next + 1, cfg_.max_entries_per_rpc));
 
@@ -613,7 +612,10 @@ cppcoro::task<bool> RaftNode::ReplicateToPeer(size_t peer_idx) {
 
     const AppendEntriesResp resp =
         co_await peer->SendAppendEntries(wire_buf_, cfg_.rpc_timeout_ms);
-    if (StepDownIfStale(resp.term, "saw higher term in AppendEntries resp")) // follower 回了更高 term → 自己退位，返回。
+    if (StepDownIfStale(
+            resp.term,
+            "saw higher term in AppendEntries resp"))  // follower 回了更高 term
+                                                       // → 自己退位，返回。
       co_return false;
     if (!is_leader() || term_ != my_term) co_return false;
 
@@ -674,9 +676,12 @@ void RaftNode::AdvanceCommitIndex() {
     LogSlot& slot = log_[i];
     if (slot.index > commit_index_) break;
     const TxId txid = log_txids_[i];
-    if (txid != 0) { // 这条是本 leader 自己发起的写命令，有客户端事务在等结果 → 收集 txid
+    if (txid != 0) {  // 这条是本 leader 自己发起的写命令，有客户端事务在等结果
+                      // → 收集 txid
       ready.push_back(txid);
-    } else if (slot.index > applied_index_) { // txid == 0 （从别的 leader 复制来的、或重启恢复的日志）且还没重放过 
+    } else if (slot.index >
+               applied_index_) {  // txid == 0 （从别的 leader
+                                  // 复制来的、或重启恢复的日志）且还没重放过
       ReplayEntry(slot);
     }
   }
@@ -1053,7 +1058,6 @@ void RaftNode::ApplyCommitted() {
             << applied_index_;
 }
 
-
 // 日志落盘调用
 cppcoro::task<bool> RaftNode::WriteRawAndSync(const std::string& bytes,
                                               uint64_t offset) {
@@ -1089,8 +1093,7 @@ T GetLE(const char* p) {
 }  // namespace
 
 bool RaftNode::RecoverFromDisk() {
-
-  //看文件多大
+  // 看文件多大
   const off_t size = ::lseek(fd_, 0, SEEK_END);
   if (size < 0) {
     LOG(ERROR) << "raft: lseek failed: " << std::strerror(errno);
@@ -1119,10 +1122,9 @@ bool RaftNode::RecoverFromDisk() {
     buf.resize(done);
   }
 
-
   // 逐条解析 + 校验
   size_t pos = 0;
-  bool torn = false; // 尾部是否有残缺记录
+  bool torn = false;  // 尾部是否有残缺记录
 
   while (pos < buf.size()) {
     if (buf.size() - pos < kRaftRecordHeaderSize) {
@@ -1159,7 +1161,7 @@ bool RaftNode::RecoverFromDisk() {
 
     pos += kRaftRecordHeaderSize + len;
     last_log_index_ = index;
-    term_ = std::max(term_, term); // 防御性
+    term_ = std::max(term_, term);  // 防御性
   }
 
   if (torn) {

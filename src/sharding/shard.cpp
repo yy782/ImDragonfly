@@ -80,8 +80,6 @@ void Shard::DriveQueue(Transaction* tx) {
     //  = tx->txid();的判断的话 committed_txid_要加上std::max比较的逻辑
     tx->ExecuteOnShard(*this);
   }
-
-
 }
 
 static void PostFollowerReadToMain(TxId txid) {
@@ -119,7 +117,6 @@ bool Shard::IsRaftReady(Transaction* tx) {
   }
   return WriteTxReady(tx->txid());
 }
-
 
 bool Shard::PushLogIfNeed(Transaction* tx) {
   if (!use_raft) return true;

@@ -71,8 +71,8 @@ class expected {
   }
 
   expected(expected&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value&&
-          std::is_nothrow_move_constructible<E>::value)
+      std::is_nothrow_move_constructible<T>::value &&
+      std::is_nothrow_move_constructible<E>::value)
       : has_value_(other.has_value_) {
     if (has_value_) {
       new (&storage_.value) T(std::move(other.storage_.value));
@@ -97,8 +97,8 @@ class expected {
   }
 
   expected& operator=(expected&& other) noexcept(
-      std::is_nothrow_move_constructible<T>::value&&
-          std::is_nothrow_move_constructible<E>::value) {
+      std::is_nothrow_move_constructible<T>::value &&
+      std::is_nothrow_move_constructible<E>::value) {
     if (this != &other) {
       destroy();
       has_value_ = other.has_value_;

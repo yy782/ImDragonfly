@@ -5,14 +5,14 @@
 namespace dfly {
 
 std::unordered_map<std::string, CommandHandler> g_command_handlers = {
-    {"port", [](const std::string& v) {
+    {"port",
+     [](const std::string& v) {
        redis_port = static_cast<uint16_t>(std::atoi(v.c_str()));
      }},
-    {"shards", [](const std::string& v) {
-       shards = std::atoi(v.c_str());
-     }},
+    {"shards", [](const std::string& v) { shards = std::atoi(v.c_str()); }},
     {"config", [](const std::string& v) { config_path = v; }},
-    {"use_raft", [](const std::string& v) {
+    {"use_raft",
+     [](const std::string& v) {
        use_raft = (v == "1" || v == "true" || v == "True" || v == "TRUE");
      }},
     {"log_dir", [](const std::string& v) { log_dir = v; }},
